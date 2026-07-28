@@ -72,7 +72,8 @@ void ILibProcessPipe_Pipe_SetBrokenPipeHandler(ILibProcessPipe_Pipe targetPipe, 
 
 ILibProcessPipe_Manager ILibProcessPipe_Manager_Create(void *chain);
 int ILibProcessPipe_Process_IsDetached(ILibProcessPipe_Process p);
-ILibProcessPipe_Process ILibProcessPipe_Manager_SpawnProcessEx4(ILibProcessPipe_Manager pipeManager, char* target, char* const* parameters, ILibProcessPipe_SpawnTypes spawnType, void *sessionId, void *envvars, int extraMemorySize);
+ILibProcessPipe_Process ILibProcessPipe_Manager_SpawnProcessEx5(ILibProcessPipe_Manager pipeManager, char* target, char* const* parameters, ILibProcessPipe_SpawnTypes spawnType, void *sessionId, void *envvars, int extraMemorySize, char* cwd);
+#define ILibProcessPipe_Manager_SpawnProcessEx4(pipeManager, target, parameters, spawnType, sessionId, envvars, extraMemorySize) ILibProcessPipe_Manager_SpawnProcessEx5(pipeManager, target, parameters, spawnType, sessionId, envvars, extraMemorySize, NULL)
 #define ILibProcessPipe_Manager_SpawnProcess(pipeManager, target, parameters) ILibProcessPipe_Manager_SpawnProcessEx2(pipeManager, target, parameters, ILibProcessPipe_SpawnTypes_DEFAULT, 0)
 #define ILibProcessPipe_Manager_SpawnProcessEx(pipeManager, target, parameters, spawnType) ILibProcessPipe_Manager_SpawnProcessEx2(pipeManager, target, parameters, spawnType, 0)
 #define ILibProcessPipe_Manager_SpawnProcessEx2(pipeManager, target, parameters, spawnType, extraMemorySize) ILibProcessPipe_Manager_SpawnProcessEx3(pipeManager, target, parameters, spawnType, NULL, extraMemorySize)

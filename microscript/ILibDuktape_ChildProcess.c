@@ -28,6 +28,8 @@ limitations under the License.
 
 #ifdef WIN32
 #include <process.h>
+#else
+#include <sys/stat.h>
 #endif
 
 #define ILibDuktape_ChildProcess_Process	"\xFF_ChildProcess_Process"
@@ -49,6 +51,7 @@ typedef struct ILibDuktape_ChildProcess_SubProcess
 	ILibDuktape_WritableStream *stdIn;
 	
 	int exitCode;
+	int timeoutSet;
 }ILibDuktape_ChildProcess_SubProcess;
 
 void ILibDuktape_ChildProcess_DeleteBackReferences(duk_context *ctx, duk_idx_t i, char *name)
@@ -61,6 +64,23 @@ void ILibDuktape_ChildProcess_DeleteBackReferences(duk_context *ctx, duk_idx_t i
 	}
 }
 
+// Cancel the execFile() 'timeout' timer, if one was set
+void ILibDuktape_ChildProcess_CancelTimeout(ILibDuktape_ChildProcess_SubProcess *p)
+{
+	if (p != NULL && p->timeoutSet != 0)
+	{
+		p->timeoutSet = 0;
+		ILibLifeTime_Remove(ILibGetBaseTimer(p->chain), p);
+	}
+}
+// execFile() 'timeout' handler: kill the child 
+void ILibDuktape_ChildProcess_TimeoutSink(void *obj)
+{
+	ILibDuktape_ChildProcess_SubProcess *p = (ILibDuktape_ChildProcess_SubProcess*)obj;
+	if (!ILibMemory_CanaryOK(p)) { return; }	// already freed
+	p->timeoutSet = 0;
+	if (p->childProcess != NULL) { ILibProcessPipe_Process_SoftKill(p->childProcess); }
+}
 void ILibDuktape_ChildProcess_SubProcess_StdOut_OnPause(ILibDuktape_readableStream *sender, void *user)
 {
 	ILibDuktape_ChildProcess_SubProcess *p = (ILibDuktape_ChildProcess_SubProcess*)user;
@@ -140,6 +160,7 @@ void ILibDuktape_ChildProcess_SubProcess_ExitHandler(ILibProcessPipe_Process sen
 	ILibDuktape_ChildProcess_SubProcess *p = (ILibDuktape_ChildProcess_SubProcess*)user;
 	if (!ILibMemory_CanaryOK(p)) { return; }
 
+	ILibDuktape_ChildProcess_CancelTimeout(p);
 	p->exitCode = exitCode;
 	p->childProcess = NULL;
 	duk_push_heapptr(p->ctx, p->subProcess);																// [childProcess]
@@ -270,8 +291,9 @@ duk_ret_t ILibDuktape_ChildProcess_waitExit(duk_context *ctx)
 }
 duk_ret_t ILibDuktape_ChildProcess_SpawnedProcess_Finalizer(duk_context *ctx)
 {
-#ifdef WIN32
 	ILibDuktape_ChildProcess_SubProcess *retVal = (ILibDuktape_ChildProcess_SubProcess*)Duktape_GetBufferProperty(ctx, 0, ILibDuktape_ChildProcess_MemBuf);
+	ILibDuktape_ChildProcess_CancelTimeout(retVal);
+#ifdef WIN32
 	ILibProcessPipe_Process_RemoveHandlers(retVal->childProcess);
 #endif
 	duk_get_prop_string(ctx, 0, "kill");	// [kill]
@@ -491,6 +513,8 @@ duk_ret_t ILibDuktape_ChildProcess_execFile(duk_context *ctx)
 	ILibProcessPipe_SpawnTypes spawnType = ILibProcessPipe_SpawnTypes_DEFAULT;
 	int uid = -1;
 	char **envargs = NULL;
+	int timeout = 0;
+	char *cwd = NULL;
 
 	if (nargs > 32) { return(ILibDuktape_Error(ctx, "Too many parameters")); }
 
@@ -525,6 +549,8 @@ duk_ret_t ILibDuktape_ChildProcess_execFile(duk_context *ctx)
 			if (uid >= 0 && spawnType == ILibProcessPipe_SpawnTypes_USER) { spawnType = ILibProcessPipe_SpawnTypes_SPECIFIED_USER; }
 #endif
 			if (Duktape_GetBooleanProperty(ctx, i, "detached", 0) != 0) { spawnType |= ILibProcessPipe_SpawnTypes_POSIX_DETACHED; }
+			timeout = Duktape_GetIntPropertyValue(ctx, i, "timeout", 0);
+			cwd = Duktape_GetStringPropertyValue(ctx, i, "cwd", NULL);
 			if (duk_has_prop_string(ctx, i, "env"))
 			{
 				int ecount = 0;
@@ -582,16 +608,42 @@ duk_ret_t ILibDuktape_ChildProcess_execFile(duk_context *ctx)
 	}
 #endif
 	
+	// Check if cwd exists
+	if (cwd != NULL)
+	{
 #ifdef WIN32
-	p = ILibProcessPipe_Manager_SpawnProcessEx4(manager, target, args, spawnType, (void*)(ILibPtrCAST)(uint64_t)(uid < 0 ? 0 : uid), envargs, 0);
+		WCHAR wpath[4096];
+		WIN32_FILE_ATTRIBUTE_DATA cwdAttr;
+		if (GetFileAttributesExW((LPCWSTR)ILibUTF8ToWideEx(cwd, -1, wpath, (int)sizeof(wpath) / 2), GetFileExInfoStandard, &cwdAttr) == 0 ||
+			(cwdAttr.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != FILE_ATTRIBUTE_DIRECTORY)
+		{
+			return(ILibDuktape_Error(ctx, "child_process.execFile(): invalid cwd [%s]", cwd));
+		}
 #else
-	p = ILibProcessPipe_Manager_SpawnProcessEx4(manager, target, args, spawnType, (void*)(ILibPtrCAST)(uint64_t)uid, envargs, 0);
+		struct stat cwdStat;
+		if (stat(cwd, &cwdStat) != 0 || !S_ISDIR(cwdStat.st_mode))
+		{
+			return(ILibDuktape_Error(ctx, "child_process.execFile(): invalid cwd [%s]", cwd));
+		}
+#endif
+	}
+
+#ifdef WIN32
+	p = ILibProcessPipe_Manager_SpawnProcessEx5(manager, target, args, spawnType, (void*)(ILibPtrCAST)(uint64_t)(uid < 0 ? 0 : uid), envargs, 0, cwd);
+#else
+	p = ILibProcessPipe_Manager_SpawnProcessEx5(manager, target, args, spawnType, (void*)(ILibPtrCAST)(uint64_t)uid, envargs, 0, cwd);
 #endif
 	if (p == NULL)
 	{
 		return(ILibDuktape_Error(ctx, "child_process.execFile(): Could not exec [%s]", target));
 	}
-	ILibDuktape_ChildProcess_SpawnedProcess_PUSH(ctx, p, callback);
+	ILibDuktape_ChildProcess_SubProcess *sp = ILibDuktape_ChildProcess_SpawnedProcess_PUSH(ctx, p, callback);
+	if (timeout > 0 && sp != NULL && ILibProcessPipe_Process_IsDetached(p) == 0)
+	{
+		// set timeout timer
+		sp->timeoutSet = 1;
+		ILibLifeTime_AddEx3(ILibGetBaseTimer(Duktape_GetChain(ctx)), sp, timeout, ILibDuktape_ChildProcess_TimeoutSink, NULL, NULL);
+	}
 	if (g_displayFinalizerMessages)
 	{
 		printf("++++ childProcess.subProcess (pid: %u, %s) [%p]\n", ILibProcessPipe_Process_GetPID(p), target, duk_get_heapptr(ctx, -1));
@@ -755,9 +807,9 @@ public:
 	\param file \<String\> Required. The name or path of the executable file to run
 	\param args \<String[]\> Optional. List of string arguments
 	\param options <Object> Optional. \n
-	cwd \<String\> Current working directory\n
+	cwd \<String\> Current working directory. Validated before spawning; throws if it is not an existing directory\n
 	env <Object> Environment key-value pairs\n
-	timeout <number> <b>Default</b>: 0\n
+	timeout <number> <b>Default</b>: 0. If greater than 0, the child process is forcibly terminated (SIGKILL / TerminateProcess) after this many milliseconds\n
 	\returns \<ChildProcess\>
 	*/
 	static ChildProcess execFile(file[, args][, options][, callback]);
