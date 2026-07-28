@@ -226,6 +226,7 @@ duk_ret_t ILibDuktape_ChildProcess_Kill(duk_context *ctx)
 	{
 		if (p->childProcess != NULL)
 		{
+			ILibDuktape_ChildProcess_CancelTimeout(p);
 			if (duk_ctx_shutting_down(ctx) == 0)
 			{
 				ILibProcessPipe_Process_SoftKill(p->childProcess);
