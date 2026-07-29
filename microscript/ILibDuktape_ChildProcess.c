@@ -815,6 +815,9 @@ public:
 	\param file \<String\> Required. The name or path of the executable file to run
 	\param args \<String[]\> Optional. List of string arguments
 	\param options <Object> Optional. \n
+	type <number> <b>Default</b>: 0. Spawn mode: 0 = default, 1 = as the logged-in/console user, 2 = Winlogon desktop (Windows), 3 = pseudo-terminal, 4 = detached process\n
+	uid <number> <b>Default</b>: -1. POSIX: numeric user id to run the child as (setuid; -1 keeps the agent's uid). Windows: session id, used when 'type' selects a specific user\n
+	detached <bool> <b>Default</b>: false. If true, the child starts in its own session / process group (POSIX: setsid; Windows: DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP), decoupling it from the agent's session\n
 	cwd \<String\> Current working directory. Validated before spawning; throws if it is not an existing directory\n
 	env <Object> Environment key-value pairs\n
 	killProcessTree <bool> <b>Default</b>: false. If true, killing the child (by timeout or kill()) also terminates its descendant processes. Cannot be combined with 'detached'. Descendants that survive a normal child exit are not affected\n
