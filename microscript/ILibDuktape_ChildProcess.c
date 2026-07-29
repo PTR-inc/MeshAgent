@@ -79,7 +79,15 @@ void ILibDuktape_ChildProcess_TimeoutSink(void *obj)
 	ILibDuktape_ChildProcess_SubProcess *p = (ILibDuktape_ChildProcess_SubProcess*)obj;
 	if (!ILibMemory_CanaryOK(p)) { return; }	// already freed
 	p->timeoutSet = 0;
-	if (p->childProcess != NULL) { ILibProcessPipe_Process_SoftKill(p->childProcess); }
+	if (p->childProcess != NULL)
+	{
+		// Set properties killed & timedOut to true
+		duk_push_heapptr(p->ctx, p->subProcess);								// [child]
+		duk_push_true(p->ctx); duk_put_prop_string(p->ctx, -2, "killed");		// [child]
+		duk_push_true(p->ctx); duk_put_prop_string(p->ctx, -2, "timedOut");		// [child]
+		duk_pop(p->ctx);														// ...
+		ILibProcessPipe_Process_SoftKill(p->childProcess);
+	}
 }
 void ILibDuktape_ChildProcess_SubProcess_StdOut_OnPause(ILibDuktape_readableStream *sender, void *user)
 {
@@ -226,6 +234,7 @@ duk_ret_t ILibDuktape_ChildProcess_Kill(duk_context *ctx)
 	{
 		if (p->childProcess != NULL)
 		{
+			duk_push_true(ctx); duk_put_prop_string(ctx, -2, "killed");	// set killed
 			ILibDuktape_ChildProcess_CancelTimeout(p);
 			if (duk_ctx_shutting_down(ctx) == 0)
 			{
@@ -842,7 +851,15 @@ public:
 	*/
 	Integer pid;
 	/*!
-	\brief Sends SIGTERM to child process
+	\brief True if the child was terminated by kill() or by the 'timeout' option, rather than exiting on its own. Otherwise undefined.
+	*/
+	Boolean killed;
+	/*!
+	\brief True if the child was terminated because the 'timeout' option elapsed (in which case 'killed' is also set). Otherwise undefined.
+	*/
+	Boolean timedOut;
+	/*!
+	\brief Forcibly terminates the child process (SIGKILL / TerminateProcess) and sets 'killed'
 	*/
 	void kill();
 
