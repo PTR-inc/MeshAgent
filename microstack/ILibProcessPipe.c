@@ -218,8 +218,10 @@ typedef struct ILibProcessPipe_Process_Object
 	HANDLE hProcess;
 	int hProcess_needAdd;
 	int disabled;
+	HANDLE hJob;
 #endif
 	void *chain;
+	int killSubtree;
 }ILibProcessPipe_Process_Object;
 
 typedef struct ILibProcessPipe_WriteData
@@ -543,6 +545,7 @@ void ILibProcessPipe_Process_Destroy(ILibProcessPipe_Process_Object *p)
 	if (p->metadata != NULL) { ILibMemory_Free(p->metadata); }
 #ifdef WIN32
 	if (p->hProcess != NULL) { CloseHandle(p->hProcess); }
+	if (p->hJob != NULL) { CloseHandle(p->hJob); }
 #endif
 	ILibMemory_Free(p);
 }
@@ -577,10 +580,12 @@ void ILibProcessPipe_Process_SoftKill(ILibProcessPipe_Process p)
 	if (!ILibMemory_CanaryOK(p)) { return; }
 
 #ifdef WIN32
-	TerminateProcess(j->hProcess, 1067);
+	if (j->killSubtree != 0 && j->hJob != NULL) { TerminateJobObject(j->hJob, 1067); }	// kill tree
+	else { TerminateProcess(j->hProcess, 1067); }	// kill child only
 #else
 	int code;
-	kill((pid_t)j->PID, SIGKILL);
+	if (j->killSubtree != 0) { kill(-(pid_t)j->PID, SIGKILL); }	// kill tree through -pgid
+	kill((pid_t)j->PID, SIGKILL);								// kill child
 	waitpid((pid_t)j->PID, &code, 0);
 #endif
 }
@@ -600,6 +605,8 @@ ILibProcessPipe_Process ILibProcessPipe_Manager_SpawnProcessEx5(ILibProcessPipe_
 	ILibProcessPipe_Process_Object* retVal = NULL;
 	int needSetSid = ((spawnType & ILibProcessPipe_SpawnTypes_POSIX_DETACHED) == ILibProcessPipe_SpawnTypes_POSIX_DETACHED);
 	if (needSetSid != 0) { spawnType ^= ILibProcessPipe_SpawnTypes_POSIX_DETACHED; }
+	int killSubtree = ((spawnType & ILibProcessPipe_SpawnTypes_KILL_SUBTREE) == ILibProcessPipe_SpawnTypes_KILL_SUBTREE);
+	if (killSubtree != 0) { spawnType ^= ILibProcessPipe_SpawnTypes_KILL_SUBTREE; }
 
 #ifdef WIN32
 	STARTUPINFOW info = { 0 };
@@ -658,6 +665,7 @@ ILibProcessPipe_Process ILibProcessPipe_Manager_SpawnProcessEx5(ILibProcessPipe_
 #endif
 
 	retVal = (ILibProcessPipe_Process_Object*)ILibMemory_SmartAllocate(sizeof(ILibProcessPipe_Process_Object));
+	retVal->killSubtree = killSubtree;
 	if (spawnType != ILibProcessPipe_SpawnTypes_DETACHED)
 	{
 		retVal->stdErr = ILibProcessPipe_CreatePipe(pipeManager, 4096, NULL, extraMemorySize);
@@ -716,8 +724,12 @@ ILibProcessPipe_Process ILibProcessPipe_Manager_SpawnProcessEx5(ILibProcessPipe_
 	// Optional working directory for the child (CreateProcess lpCurrentDirectory)
 	WCHAR *wcwd = (cwd != NULL) ? ILibUTF8ToWideEx(cwd, -1, tmp3, (int)sizeof(tmp3) / 2) : NULL;
 
-	if (((spawnType == ILibProcessPipe_SpawnTypes_DEFAULT || spawnType == ILibProcessPipe_SpawnTypes_DETACHED) && !CreateProcessW(ILibUTF8ToWideEx(target, -1, tmp1, (int)sizeof(tmp1)/2), ILibUTF8ToWideEx(parms, -1, tmp2, (int)sizeof(tmp2)/2), NULL, NULL, spawnType == ILibProcessPipe_SpawnTypes_DETACHED ? FALSE: TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | (needSetSid !=0? (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP) : 0x00), envvars, wcwd, &info, &processInfo)) ||
-		(spawnType != ILibProcessPipe_SpawnTypes_DEFAULT && !CreateProcessAsUserW(userToken, ILibUTF8ToWideEx(target, -1, tmp1, (int)sizeof(tmp1)/2), ILibUTF8ToWideEx(parms, -1, tmp2, (int)sizeof(tmp2)/2), NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | (needSetSid != 0 ? (DETACHED_PROCESS| CREATE_NEW_PROCESS_GROUP) : 0x00), envvars, wcwd, &info, &processInfo)))
+	// detached, own process group 
+	// killSubTree, Start suspended and put it in a job first before it can spawn children.
+	DWORD extraCreateFlags = (needSetSid != 0 ? (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP) : 0) | (killSubtree != 0 ? CREATE_SUSPENDED : 0);
+
+	if (((spawnType == ILibProcessPipe_SpawnTypes_DEFAULT || spawnType == ILibProcessPipe_SpawnTypes_DETACHED) && !CreateProcessW(ILibUTF8ToWideEx(target, -1, tmp1, (int)sizeof(tmp1)/2), ILibUTF8ToWideEx(parms, -1, tmp2, (int)sizeof(tmp2)/2), NULL, NULL, spawnType == ILibProcessPipe_SpawnTypes_DETACHED ? FALSE: TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | extraCreateFlags, envvars, wcwd, &info, &processInfo)) ||
+		(spawnType != ILibProcessPipe_SpawnTypes_DEFAULT && !CreateProcessAsUserW(userToken, ILibUTF8ToWideEx(target, -1, tmp1, (int)sizeof(tmp1)/2), ILibUTF8ToWideEx(parms, -1, tmp2, (int)sizeof(tmp2)/2), NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | extraCreateFlags, envvars, wcwd, &info, &processInfo)))
 	{
 		int ll = GetLastError();
 		if (spawnType != ILibProcessPipe_SpawnTypes_DETACHED)
@@ -743,6 +755,20 @@ ILibProcessPipe_Process ILibProcessPipe_Manager_SpawnProcessEx5(ILibProcessPipe_
 		CloseHandle(retVal->stdIn->mPipe_ReadEnd);		retVal->stdIn->mPipe_ReadEnd = NULL;
 	}
 	retVal->hProcess = processInfo.hProcess;
+	if (killSubtree != 0)
+	{
+		// put child in job to be able to terminate the tree and resume
+		retVal->hJob = CreateJobObjectW(NULL, NULL);
+		if (retVal->hJob != NULL)
+		{
+			if (AssignProcessToJobObject(retVal->hJob, processInfo.hProcess) == 0)
+			{
+				CloseHandle(retVal->hJob); retVal->hJob = NULL; retVal->killSubtree = 0;
+			}
+		}
+		else { retVal->killSubtree = 0; }
+		if (processInfo.hThread != NULL) { ResumeThread(processInfo.hThread); }
+	}
 	if (processInfo.hThread != NULL) CloseHandle(processInfo.hThread);
 	retVal->PID = processInfo.dwProcessId;
 	
@@ -930,6 +956,10 @@ ILibProcessPipe_Process ILibProcessPipe_Manager_SpawnProcessEx5(ILibProcessPipe_
 		{
 			ignore_result(setsid());
 		}
+		else if (killSubtree != 0)
+		{
+			ignore_result(setpgid(0, 0));	// own process group, so kill(-pgid) reaches the subtree
+		}
 
 		// Optional working directory for the child. Fail if not exists
 		if (cwd != NULL && chdir(cwd) != 0) { _exit(1); }
@@ -945,6 +975,8 @@ ILibProcessPipe_Process ILibProcessPipe_Manager_SpawnProcessEx5(ILibProcessPipe_
 		_exit(1);
 	}
 	if (set != NULL) { ILibVForkPrepareSignals_Parent_Finished(set); }
+	// Also set the child's process group here to prevent setpgid race
+	if (killSubtree != 0 && needSetSid == 0) { ignore_result(setpgid(pid, pid)); }
 	if (spawnType != ILibProcessPipe_SpawnTypes_TERM && spawnType != ILibProcessPipe_SpawnTypes_DETACHED)
 	{
 		close(retVal->stdIn->mPipe_ReadEnd); retVal->stdIn->mPipe_ReadEnd = -1;

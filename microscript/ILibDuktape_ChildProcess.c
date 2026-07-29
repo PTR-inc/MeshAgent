@@ -550,6 +550,7 @@ duk_ret_t ILibDuktape_ChildProcess_execFile(duk_context *ctx)
 			if (uid >= 0 && spawnType == ILibProcessPipe_SpawnTypes_USER) { spawnType = ILibProcessPipe_SpawnTypes_SPECIFIED_USER; }
 #endif
 			if (Duktape_GetBooleanProperty(ctx, i, "detached", 0) != 0) { spawnType |= ILibProcessPipe_SpawnTypes_POSIX_DETACHED; }
+			if (Duktape_GetBooleanProperty(ctx, i, "killProcessTree", 0) != 0) { spawnType |= ILibProcessPipe_SpawnTypes_KILL_SUBTREE; }
 			timeout = Duktape_GetIntPropertyValue(ctx, i, "timeout", 0);
 			cwd = Duktape_GetStringPropertyValue(ctx, i, "cwd", NULL);
 			if (duk_has_prop_string(ctx, i, "env"))
@@ -609,6 +610,12 @@ duk_ret_t ILibDuktape_ChildProcess_execFile(duk_context *ctx)
 	}
 #endif
 	
+	// if both 'detached' and 'killprocesstree' are true, reject. 
+	if ((spawnType & ILibProcessPipe_SpawnTypes_POSIX_DETACHED) != 0 && (spawnType & ILibProcessPipe_SpawnTypes_KILL_SUBTREE) != 0)
+	{
+		return(ILibDuktape_Error(ctx, "child_process.execFile(): 'killProcessTree' cannot be combined with 'detached'"));
+	}
+
 	// Check if cwd exists
 	if (cwd != NULL)
 	{
@@ -810,6 +817,7 @@ public:
 	\param options <Object> Optional. \n
 	cwd \<String\> Current working directory. Validated before spawning; throws if it is not an existing directory\n
 	env <Object> Environment key-value pairs\n
+	killProcessTree <bool> <b>Default</b>: false. If true, killing the child (by timeout or kill()) also terminates its descendant processes. Cannot be combined with 'detached'. Descendants that survive a normal child exit are not affected\n
 	timeout <number> <b>Default</b>: 0. If greater than 0, the child process is forcibly terminated (SIGKILL / TerminateProcess) after this many milliseconds\n
 	\returns \<ChildProcess\>
 	*/

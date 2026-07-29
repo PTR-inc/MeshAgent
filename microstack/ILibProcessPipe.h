@@ -41,7 +41,8 @@ typedef enum ILibProcessPipe_SpawnTypes
 	ILibProcessPipe_SpawnTypes_TERM			= 3,
 	ILibProcessPipe_SpawnTypes_DETACHED		= 4,
 	ILibProcessPipe_SpawnTypes_SPECIFIED_USER = 5,
-	ILibProcessPipe_SpawnTypes_POSIX_DETACHED = 0x8000
+	ILibProcessPipe_SpawnTypes_POSIX_DETACHED = 0x8000,
+	ILibProcessPipe_SpawnTypes_KILL_SUBTREE   = 0x4000
 }ILibProcessPipe_SpawnTypes;
 
 #ifdef WIN32
