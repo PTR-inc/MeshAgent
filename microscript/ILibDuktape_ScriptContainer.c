@@ -2672,7 +2672,10 @@ duk_ret_t ILibDuktape_Polyfills_promise_wait_impl_res(duk_context *ctx)
 
 	duk_dup(ctx, 0);							// [func][obj][resolvedValue]
 	duk_put_prop_string(ctx, -2, "return");		// [func][obj]
-	ILibChain_EndContinue(duk_ctx_chain(ctx));
+	duk_get_prop_string(ctx, -1, "\xFF_WaitSerial");	// [func][obj][serial]
+	// Only end the frame belonging to this wait(); stale/absent serials are no-ops
+	if (duk_is_number(ctx, -1)) { ILibChain_EndContinue_BySerial(duk_ctx_chain(ctx), (uint64_t)duk_get_number(ctx, -1)); }
+	duk_pop(ctx);								// [func][obj]
 	return(0);
 }
 duk_ret_t ILibDuktape_Polyfills_promise_wait_impl_rej(duk_context *ctx)
@@ -2683,7 +2686,10 @@ duk_ret_t ILibDuktape_Polyfills_promise_wait_impl_rej(duk_context *ctx)
 
 	duk_dup(ctx, 0);							// [func][obj][rejectedValue]
 	duk_put_prop_string(ctx, -2, "error");		// [func][obj]
-	ILibChain_EndContinue(duk_ctx_chain(ctx));
+	duk_get_prop_string(ctx, -1, "\xFF_WaitSerial");	// [func][obj][serial]
+	// Only end the frame belonging to this wait(); stale/absent serials are no-ops
+	if (duk_is_number(ctx, -1)) { ILibChain_EndContinue_BySerial(duk_ctx_chain(ctx), (uint64_t)duk_get_number(ctx, -1)); }
+	duk_pop(ctx);								// [func][obj]
 	return(0);
 }
 duk_ret_t ILibDuktape_Polyfills_promise_wait_impl(duk_context *ctx)
@@ -2704,16 +2710,21 @@ duk_ret_t ILibDuktape_Polyfills_promise_wait_impl(duk_context *ctx)
 
 	if (!duk_has_prop_string(ctx, -2, "settled"))
 	{
+		// Token for the frame our ILibChain_Continue() call will create; the settle sinks end exactly that frame
+		duk_push_number(ctx, (duk_double_t)ILibChain_PeekNextContinuationSerial(duk_ctx_chain(ctx)));	// [obj][retpromise][serial]
+		duk_put_prop_string(ctx, -3, "\xFF_WaitSerial");												// [obj][retpromise]
 #ifdef WIN32
 		continueResult = ILibChain_Continue(duk_ctx_chain(ctx), NULL, 0, timeout, NULL);
 #else
 		continueResult = ILibChain_Continue(duk_ctx_chain(ctx), NULL, 0, timeout);
 #endif
+		// Clear the token so a settle after timeout cannot end an unrelated frame
+		duk_del_prop_string(ctx, -2, "\xFF_WaitSerial");
 
 		switch (continueResult)
 		{
 		case ILibChain_Continue_Result_ERROR_INVALID_STATE:
-			ret = ILibDuktape_Error(ctx, "wait() already in progress");
+			ret = ILibDuktape_Error(ctx, "wait() nesting depth limit reached");
 			break;
 		case ILibChain_Continue_Result_ERROR_CHAIN_EXITING:
 			ret = ILibDuktape_Error(ctx, "wait() aborted because thread is exiting");

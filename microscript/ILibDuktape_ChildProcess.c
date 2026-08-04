@@ -154,10 +154,14 @@ void ILibDuktape_ChildProcess_SubProcess_ExitHandler(ILibProcessPipe_Process sen
 	}
 #endif
 
-	if (Duktape_GetIntPropertyValue(p->ctx, -1, "\xFF_WaitExit", 0) != 0)
+	duk_get_prop_string(p->ctx, -1, "\xFF_WaitExit");	// [childProcess][serial]
+	if (duk_is_number(p->ctx, -1))
 	{
-		ILibChain_EndContinue(Duktape_GetChain(p->ctx));
+		// End the specific continuation frame waiting on this child; stale serials are no-ops
+		ILibChain_EndContinue_BySerial(Duktape_GetChain(p->ctx), (uint64_t)duk_get_number(p->ctx, -1));
 	}
+	duk_pop(p->ctx);									// [childProcess]
+	duk_del_prop_string(p->ctx, -1, "\xFF_WaitExit");
 
 	duk_get_prop_string(p->ctx, -1, "emit");		// [childProcess][emit]
 	duk_swap_top(p->ctx, -2);						// [emit][this]
@@ -236,11 +240,9 @@ duk_ret_t ILibDuktape_ChildProcess_waitExit(duk_context *ctx)
 		return(ILibDuktape_Error(ctx, "Cannot waitExit() because JS Engine is exiting"));
 	}
 
-	if (ILibChain_GetContinuationState(chain) != ILibChain_ContinuationState_CONTINUE)
-	{
-		duk_push_int(ctx, 1);								// [spawnedProcess][flag]
-		duk_put_prop_string(ctx, -2, "\xFF_WaitExit");		// [spawnedProcess]
-	}
+	// Token for the frame our ILibChain_Continue() call will create; the exit handler ends exactly that frame
+	duk_push_number(ctx, (duk_double_t)ILibChain_PeekNextContinuationSerial(chain));	// [spawnedProcess][serial]
+	duk_put_prop_string(ctx, -2, "\xFF_WaitExit");										// [spawnedProcess]
 
 	void *mods[] = { ILibGetBaseTimer(Duktape_GetChain(ctx)), Duktape_GetPointerProperty(ctx, -1, ILibDuktape_ChildProcess_Manager), ILibDuktape_Process_GetSignalListener(ctx) };
 #ifdef WIN32
@@ -251,10 +253,12 @@ duk_ret_t ILibDuktape_ChildProcess_waitExit(duk_context *ctx)
 #else
 	continueResult = ILibChain_Continue(chain, (ILibChain_Link**)mods, 3, timeout);
 #endif
+	// Clear the token so a later exit of a timed-out child cannot end an unrelated frame
+	duk_del_prop_string(ctx, -1, "\xFF_WaitExit");
 	switch (continueResult)
 	{
 		case ILibChain_Continue_Result_ERROR_INVALID_STATE:
-			ret = ILibDuktape_Error(ctx, "waitExit() already in progress");
+			ret = ILibDuktape_Error(ctx, "waitExit() nesting depth limit reached");
 			break;
 		case ILibChain_Continue_Result_ERROR_CHAIN_EXITING:
 			ret = ILibDuktape_Error(ctx, "waitExit() aborted because thread is exiting");

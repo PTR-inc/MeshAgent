@@ -1140,6 +1140,9 @@ int ILibIsRunningOnChainThread(void* chain);
 	ILibExportMethod ILibChain_Continue_Result ILibChain_Continue(void *chain, ILibChain_Link **modules, int moduleCount, int maxTimeout);
 #endif
 	ILibExportMethod void ILibChain_EndContinue(void *chain);
+	// Serial-token API for nested continuations
+	ILibExportMethod void ILibChain_EndContinue_BySerial(void *chain, uint64_t serial);
+	ILibExportMethod uint64_t ILibChain_PeekNextContinuationSerial(void *chain);
 	ILibChain_ContinuationStates ILibChain_GetContinuationState(void *chain);
 	#define ILibChain_FreeLink(link) ((ILibChain_Link*)link)->RESERVED = 0xFFFFFFFF;free(link);
 	#define ILibChain_IsLinkAlive(link) (((ILibChain_Link*)link)->RESERVED == ILibMemory_Canary)

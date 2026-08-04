@@ -955,6 +955,19 @@ typedef struct ILibChain_WaitHandleInfo
 }ILibChain_WaitHandleInfo;
 #endif
 
+// One frame per active ILibChain_Continue() call, forming a LIFO stack.
+// Max depth of 16 to not exhaust 1M stack on windows
+#ifndef ILibChain_MaxContinuationDepth
+#define ILibChain_MaxContinuationDepth 16
+#endif
+typedef struct ILibChain_ContinuationFrame
+{
+	struct ILibChain_ContinuationFrame *previous;
+	uint64_t serial;
+	int depth;
+	int ended;
+}ILibChain_ContinuationFrame;
+
 typedef struct ILibBaseChain
 {
 	int TerminateFlag;
@@ -995,7 +1008,8 @@ typedef struct ILibBaseChain
 	ILibLinkedList Links;
 	ILibLinkedList LinksPendingDelete;
 	ILibHashtable ChainStash;
-	ILibChain_ContinuationStates continuationState;
+	ILibChain_ContinuationFrame *continuationTop;
+	uint64_t continuationSerial;
 	unsigned int PreSelectCount;
 	unsigned int PostSelectCount;
 	void *WatchDogThread;
@@ -2439,7 +2453,22 @@ void ILibChain_SetupWindowsWaitObject(HANDLE* waitList, int *waitListCount, stru
 
 ILibChain_ContinuationStates ILibChain_GetContinuationState(void *chain)
 {
-	return(((ILibBaseChain*)chain)->continuationState);
+	// Emulated from the frame stack so legacy callers keep working
+	ILibChain_ContinuationFrame *top = ((ILibBaseChain*)chain)->continuationTop;
+	if (top == NULL) { return(ILibChain_ContinuationState_INACTIVE); }
+	return(top->ended == 0 ? ILibChain_ContinuationState_CONTINUE : ILibChain_ContinuationState_END_CONTINUE);
+}
+ILibExportMethod uint64_t ILibChain_PeekNextContinuationSerial(void *chain)
+{
+	// Chain is single threaded, so the next ILibChain_Continue() call is guaranteed to get this serial
+	return(((ILibBaseChain*)chain)->continuationSerial + 1);
+}
+ILibExportMethod void ILibChain_EndContinue_BySerial(void *chain, uint64_t serial)
+{
+	// Serials are never reused, so a stale serial matches no live frame and is safely ignored
+	ILibChain_ContinuationFrame *f = ((ILibBaseChain*)chain)->continuationTop;
+	while (f != NULL && f->serial != serial) { f = f->previous; }
+	if (f != NULL) { f->ended = 1; ILibForceUnBlockChain(chain); }
 }
 #ifdef WIN32
 ILibExportMethod ILibChain_Continue_Result ILibChain_Continue(void *Chain, ILibChain_Link **modules, int moduleCount, int maxTimeout, HANDLE **handles)
@@ -2463,8 +2492,14 @@ ILibExportMethod ILibChain_Continue_Result ILibChain_Continue(void *Chain, ILibC
 	ILibLinkedListNode tmpNode;
 	memset(&tmpNode, 0, sizeof(tmpNode));
 
-	if (root->continuationState != ILibChain_ContinuationState_INACTIVE && root->continuationState != ILibChain_ContinuationState_END_CONTINUE) { return(ILibChain_Continue_Result_ERROR_INVALID_STATE); }
-	root->continuationState = ILibChain_ContinuationState_CONTINUE;
+	// Nesting is allowed; the depth cap only guards against runaway recursive waits blowing the C stack
+	if (root->continuationTop != NULL && root->continuationTop->depth >= ILibChain_MaxContinuationDepth) { return(ILibChain_Continue_Result_ERROR_INVALID_STATE); }
+	ILibChain_ContinuationFrame frame;
+	frame.previous = root->continuationTop;
+	frame.serial = ++root->continuationSerial;
+	frame.depth = frame.previous != NULL ? frame.previous->depth + 1 : 1;
+	frame.ended = 0;
+	root->continuationTop = &frame;
 	currentNode = root->node;
 
 	gettimeofday(&startTime, NULL);
@@ -2475,14 +2510,14 @@ ILibExportMethod ILibChain_Continue_Result ILibChain_Continue(void *Chain, ILibC
 	ILibChain_WaitHandleInfo* currentInfo = chain->currentInfo;
 #endif
 
-	while (root->TerminateFlag == 0 && root->continuationState == ILibChain_ContinuationState_CONTINUE)
+	while (root->TerminateFlag == 0 && frame.ended == 0)
 	{
 		if (maxTimeout > 0)
 		{
 			gettimeofday(&tv, NULL);
 			if (tv.tv_sec > (startTime.tv_sec + maxTimeout / 1000))
 			{
-				root->continuationState = ILibChain_ContinuationState_END_CONTINUE;
+				frame.ended = 1;
 				ret = ILibChain_Continue_Result_TIMEOUT;
 				break;
 			}
@@ -2575,7 +2610,7 @@ ILibExportMethod ILibChain_Continue_Result ILibChain_Continue(void *Chain, ILibC
 		ILibChain_SetupWindowsWaitObject(chain->WaitHandles, &x, &tv, &(chain->currentWaitTimeout), &readset, &writeset, &errorset, chain->auxSelectHandles, handles);
 		if (x == 0 && (maxTimeout < 0 && chain->currentWaitTimeout == UPNP_MAX_WAIT))
 		{
-			root->continuationState = ILibChain_ContinuationState_END_CONTINUE;
+			frame.ended = 1;
 			ret = ILibChain_Continue_Result_ERROR_EMPTY_SET;
 			slct = -1;
 		}
@@ -2651,6 +2686,7 @@ ILibExportMethod ILibChain_Continue_Result ILibChain_Continue(void *Chain, ILibC
 	}
 
 	ILibRemoteLogging_printf(ILibChainGetLogger(chain), ILibRemoteLogging_Modules_Microstack_Generic, ILibRemoteLogging_Flags_VerbosityLevel_1, "ContinueChain...Ending...");
+	root->continuationTop = frame.previous;
 	root->node = currentNode;
 #ifdef WIN32
 	root->currentHandle = currentHandle;
@@ -2661,7 +2697,9 @@ ILibExportMethod ILibChain_Continue_Result ILibChain_Continue(void *Chain, ILibC
 
 ILibExportMethod void ILibChain_EndContinue(void *chain)
 {
-	((ILibBaseChain*)chain)->continuationState = ILibChain_ContinuationState_END_CONTINUE;
+	// Legacy entry point: ends the innermost continuation frame only
+	ILibChain_ContinuationFrame *top = ((ILibBaseChain*)chain)->continuationTop;
+	if (top != NULL) { top->ended = 1; }
 	ILibForceUnBlockChain(chain);
 }
 
@@ -4108,8 +4146,6 @@ ILibExportMethod void ILibStartChain(void *Chain)
 		FD_ZERO(&writeset);
 		tv.tv_sec = UPNP_MAX_WAIT;
 		tv.tv_usec = 0;
-
-		if (chain->continuationState == ILibChain_ContinuationState_END_CONTINUE) { chain->continuationState = ILibChain_ContinuationState_INACTIVE; }
 
 		//
 		// Iterate through all the PreSelect function pointers in the chain
