@@ -803,6 +803,17 @@ public:
 	void kill();
 
 	/*!
+	\brief Blocks until the child process exits, while continuing to dispatch event loop activity (timers, streams, other children)\n
+	Returns immediately if the child has already exited. Calls may be nested up to 16 deep: an event handler that runs
+	while one waitExit() is blocked may itself call waitExit() on another child; nested waits unwind in LIFO order.\n
+	<b>Note:</b> On timeout the child is <b>not</b> killed; the caller decides whether to kill(), retry, or wait again
+	\param timeout <number> Optional. Maximum milliseconds to wait. <b>Default</b>: 120000 (2 minutes). Pass -1 or 0 to wait forever
+	\exception Error Thrown when the timeout expires while the child is still running ("waitExit() timed out after Nms, child (pid=P) still running")
+	\exception Error Thrown when the nesting depth cap is exceeded ("waitExit() nesting depth limit reached")
+	*/
+	void waitExit([timeout]);
+
+	/*!
 	\brief StdOut ReadableStream
 	*/
 	ReadableStream stdout;
