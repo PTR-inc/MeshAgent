@@ -32,6 +32,8 @@ limitations under the License.
 
 #define ILibDuktape_ChildProcess_Process	"\xFF_ChildProcess_Process"
 #define ILibDuktape_ChildProcess_MemBuf		"\xFF_ChildProcess_MemBuf"
+// Applied when waitExit() is called without a timeout; expiry throws.
+#define ILibDuktape_ChildProcess_DefaultWaitExitTimeout	120000
 extern int g_displayFinalizerMessages;
 
 typedef struct ILibDuktape_ChildProcess_SubProcess
@@ -224,8 +226,11 @@ duk_ret_t ILibDuktape_ChildProcess_Kill(duk_context *ctx)
 duk_ret_t ILibDuktape_ChildProcess_waitExit(duk_context *ctx)
 {
 	ILibChain_Continue_Result continueResult;
+	ILibDuktape_ChildProcess_SubProcess *sp;
 	int ret = 0;
-	int timeout = duk_is_number(ctx, 0) ? duk_require_int(ctx, 0) : -1;
+	// No timeout argument => default timeout that throws on expiry; explicit -1 or 0 => wait forever
+	int timeoutSpecified = duk_is_number(ctx, 0);
+	int timeout = timeoutSpecified ? duk_require_int(ctx, 0) : ILibDuktape_ChildProcess_DefaultWaitExitTimeout;
 	void *chain = Duktape_GetChain(ctx);
 	if (ILibIsChainBeingDestroyed(chain))
 	{
@@ -234,6 +239,10 @@ duk_ret_t ILibDuktape_ChildProcess_waitExit(duk_context *ctx)
 
 	duk_push_this(ctx);									// [spawnedProcess]
 	//char *_target = Duktape_GetStringPropertyValue(ctx, -1, "_target", NULL);
+
+	// Child already exited (exit handler clears childProcess), so there is nothing to wait for
+	sp = (ILibDuktape_ChildProcess_SubProcess*)Duktape_GetBufferProperty(ctx, -1, ILibDuktape_ChildProcess_MemBuf);
+	if (sp == NULL || sp->childProcess == NULL) { return(0); }
 
 	if (!ILibChain_IsLinkAlive(Duktape_GetPointerProperty(ctx, -1, ILibDuktape_ChildProcess_Manager)))
 	{
@@ -265,6 +274,13 @@ duk_ret_t ILibDuktape_ChildProcess_waitExit(duk_context *ctx)
 			break;
 		case ILibChain_Continue_Result_ERROR_EMPTY_SET:
 			ret = ILibDuktape_Error(ctx, "waitExit() cannot wait on empty set");
+			break;
+		case ILibChain_Continue_Result_TIMEOUT:
+			// timed out, throw, but first check if childprocess didn't finish in the meantime
+			if (sp->childProcess != NULL)
+			{
+				ret = ILibDuktape_Error(ctx, "waitExit() timed out after %dms, child (pid=%d) still running", timeout, Duktape_GetIntPropertyValue(ctx, -1, "pid", 0));
+			}
 			break;
 		default:
 			ret = 0;
