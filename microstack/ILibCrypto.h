@@ -35,6 +35,8 @@ size_t __fastcall util_hexToBuf(char *hexString, size_t hexStringLength, char* o
 void  __fastcall util_sha256(char* data, size_t datalen, char* result);
 void  __fastcall util_sha384(char* data, size_t datalen, char* result);
 int   __fastcall util_sha384file(char* filename, char* result);
+int GenerateSHA384FileHash(char *filePath, char *fileHash);
+extern char exeMeshPolicyGuid[16];
 
 // File and data methods
 size_t __fastcall util_writefile(char* filename, char* data, int datalen);

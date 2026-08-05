@@ -17,6 +17,7 @@ limitations under the License.
 #if defined(WIN32) && !defined(_WIN32_WCE)
 #define _CRTDBG_MAP_ALLOC
 #include <crtdbg.h>
+#include <winsock2.h>	// ntohs/ntohl
 #endif
 
 
@@ -148,6 +149,136 @@ error:
 	if (buf != NULL) free(buf);
 	if (pFile != NULL) fclose(pFile);
 	return -1;
+}
+
+char exeMeshPolicyGuid[16] = { 0xB9, 0x96, 0x01, 0x58, 0x80, 0x54, 0x4A, 0x19, 0xB7, 0xF7, 0xE9, 0xBE, 0x44, 0x91, 0x4C, 0x19 };
+
+int GenerateSHA384FileHash(char *filePath, char *fileHash)
+{
+	FILE *tmpFile = NULL;
+	unsigned int endIndex = 0;
+	unsigned int bytesLeft = 0;
+	size_t bytesRead;
+	unsigned int checkSumIndex = 0;
+	unsigned int tableIndex = 0;
+
+#ifdef WIN32
+	int retVal = 1;
+	_wfopen_s(&tmpFile, ILibUTF8ToWide(filePath, -1), L"rb");
+#else
+	tmpFile = fopen(filePath, "rb");
+#endif
+	if (tmpFile == NULL) { return(1); }
+
+#ifdef WIN32
+	// We need to check if this is a signed binary
+	// Read the PE Headers, to determine where to look for the Embedded JS
+	char *optHeader = NULL;
+	unsigned int NTHeaderIndex = 0;
+	fseek(tmpFile, 0, SEEK_SET);
+	ignore_result(fread(ILibScratchPad, 1, 2, tmpFile));
+	if (ntohs(((uint16_t*)ILibScratchPad)[0]) == 19802) // 5A4D
+	{
+		fseek(tmpFile, 60, SEEK_SET);
+		ignore_result(fread((void*)&NTHeaderIndex, 1, 4, tmpFile));
+		fseek(tmpFile, NTHeaderIndex, SEEK_SET);					// NT HEADER
+		checkSumIndex = NTHeaderIndex + 24 + 64;
+
+		ignore_result(fread(ILibScratchPad, 1, 24, tmpFile));
+		if (((unsigned int*)ILibScratchPad)[0] == 17744)
+		{
+			// PE Image
+			optHeader = ILibMemory_AllocateA(((unsigned short*)ILibScratchPad)[10]);
+			ignore_result(fread(optHeader, 1, ILibMemory_AllocateA_Size(optHeader), tmpFile));
+			if (ILibMemory_AllocateA_Size(optHeader) > 4)
+			{
+				switch (((unsigned short*)optHeader)[0])
+				{
+				case 0x10B:
+					if (ILibMemory_AllocateA_Size(optHeader) >= 132)
+					{
+						if (((unsigned int*)(optHeader + 128))[0] != 0)
+						{
+							endIndex = ((unsigned int*)(optHeader + 128))[0];
+						}
+						tableIndex = NTHeaderIndex + 24 + 128;
+						retVal = 0;
+					}
+					break;
+				case 0x20B:
+					if (ILibMemory_AllocateA_Size(optHeader) >= 148)
+					{
+						if (((unsigned int*)(optHeader + 144))[0] != 0)
+						{
+							endIndex = ((unsigned int*)(optHeader + 144))[0];
+						}
+						tableIndex = NTHeaderIndex + 24 + 144;
+						retVal = 0;
+					}
+					break;
+				default:
+					break;
+				}
+			}
+		}
+		if (retVal != 0)
+		{
+			fclose(tmpFile);
+			return(1);
+		}
+	}
+#endif
+
+	if (endIndex == 0)
+	{
+		// We just need to check for Embedded MSH file
+		int mshLen = 0;
+		fseek(tmpFile, -16, SEEK_END);
+		ignore_result(fread(ILibScratchPad, 1, 16, tmpFile));
+		if (memcmp(ILibScratchPad, exeMeshPolicyGuid, 16) == 0)
+		{
+			fseek(tmpFile, -20, SEEK_CUR);
+			ignore_result(fread((void*)&mshLen, 1, 4, tmpFile));
+			mshLen = ntohl(mshLen);
+			endIndex = (unsigned int)ftell(tmpFile) - 4 - mshLen;
+		}
+		else
+		{
+			endIndex = (unsigned int)ftell(tmpFile);
+		}
+	}
+
+	SHA512_CTX ctx;
+	SHA384_Init(&ctx);
+	bytesLeft = endIndex;
+	fseek(tmpFile, 0, SEEK_SET);
+	if (checkSumIndex != 0)
+	{
+		bytesRead = fread(ILibScratchPad, 1, checkSumIndex + 4, tmpFile);
+		((unsigned int*)(ILibScratchPad + checkSumIndex))[0] = 0;
+		SHA384_Update(&ctx, ILibScratchPad, bytesRead);
+		if (endIndex > 0) { bytesLeft -= (unsigned int)bytesRead; }
+
+		bytesRead = fread(ILibScratchPad, 1, tableIndex + 8 - (checkSumIndex + 4), tmpFile);
+		((unsigned int*)(ILibScratchPad + bytesRead - 8))[0] = 0;
+		((unsigned int*)(ILibScratchPad + bytesRead - 8))[1] = 0;
+		SHA384_Update(&ctx, ILibScratchPad, bytesRead);
+		if (endIndex > 0) { bytesLeft -= (unsigned int)bytesRead; }
+	}
+
+	while ((bytesRead = fread(ILibScratchPad, 1, endIndex == 0 ? sizeof(ILibScratchPad) : (bytesLeft > sizeof(ILibScratchPad) ? sizeof(ILibScratchPad) : bytesLeft), tmpFile)) > 0)
+	{
+		SHA384_Update(&ctx, ILibScratchPad, bytesRead);
+		if (endIndex > 0)
+		{
+			bytesLeft -= (unsigned int)bytesRead;
+			if (bytesLeft == 0) { break; }
+		}
+	}
+	SHA384_Final((unsigned char*)fileHash, &ctx);
+	fclose(tmpFile);
+
+	return(0);
 }
 
 // Frees a block of memory returned from this module.

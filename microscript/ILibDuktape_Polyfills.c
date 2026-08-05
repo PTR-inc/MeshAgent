@@ -94,7 +94,6 @@ typedef struct ILibDuktape_DescriptorEvents_WindowsWaitHandle
 
 int g_displayStreamPipeMessages = 0;
 int g_displayFinalizerMessages = 0;
-extern int GenerateSHA384FileHash(char *filePath, char *fileHash);
 
 duk_ret_t ILibDuktape_Pollyfills_Buffer_slice(duk_context *ctx)
 {

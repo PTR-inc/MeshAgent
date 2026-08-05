@@ -1586,6 +1586,7 @@ int ILibIsRunningOnChainThread(void* chain);
 	extern char* g_ILibCrashID;
 	extern char* g_ILibCrashID_HASH;
 	extern char* g_ILibCrashDump_path;
+	void ILibSetCrashIdentifier(char *exePath);
 
 #if defined(WIN32)
 	typedef struct ILib_DumpEnabledContext

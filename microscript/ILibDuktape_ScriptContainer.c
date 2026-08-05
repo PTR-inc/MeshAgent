@@ -180,9 +180,6 @@ char exeJavaScriptGuid[] = "B996015880544A19B7F7E9BE44914C18";
 
 extern void ILibDuktape_MemoryStream_Init(duk_context *ctx);
 extern void ILibDuktape_NetworkMonitor_Init(duk_context *ctx);
-extern int GenerateSHA384FileHash(char *filePath, char *fileHash);
-char g_AgentCrashID[280];
-char g_AgentCrashID_HASH[17] = { 0 };
 
 typedef enum SCRIPT_ENGINE_COMMAND
 {
@@ -294,60 +291,13 @@ void ILibDuktape_ScriptContainer_Slave_OnBrokenPipe(ILibProcessPipe_Pipe sender)
 	}
 }
 
-void ILibDuktape_ScriptContainer_SetCrashIdentifier(char *exePath)
-{
-	int i;
-	FILE *tmpFile;
-
-#ifdef WIN32
-	if (ILibString_EndsWith(exePath, -1, ".exe", 4) == 0)
-	{
-		i = sprintf_s(g_AgentCrashID, sizeof(g_AgentCrashID), "%s_", exePath);
-		sprintf_s(ILibScratchPad, sizeof(ILibScratchPad), "%s.exe", exePath);
-		_wfopen_s(&tmpFile, ILibUTF8ToWide(ILibScratchPad, -1), L"rb");
-	}
-	else
-	{
-		i = ILibString_LastIndexOf(exePath, -1, "\\", 1);
-		if (i > 0)
-		{
-			i = sprintf_s(g_AgentCrashID, sizeof(g_AgentCrashID), "%s", exePath + i + 1);
-			g_AgentCrashID[i - 4] = '_';
-			i -= 3;
-		}
-		else
-		{
-			i = sprintf_s(g_AgentCrashID, sizeof(g_AgentCrashID), "%s", exePath);
-			g_AgentCrashID[i - 4] = '_';
-			i -= 3;
-		}
-	}
-#else
-	i = sprintf_s(g_AgentCrashID, sizeof(g_AgentCrashID), "%s_", exePath);
-#endif
-
-	char hashValue[1 + UTIL_SHA384_HASHSIZE];
-	if (GenerateSHA384FileHash(exePath, hashValue) == 0)
-	{
-		util_tohex(hashValue, UTIL_SHA384_HASHSIZE, g_AgentCrashID + i);
-
-#ifdef WIN32
-		memcpy_s(g_AgentCrashID + i + 16, 5, ".exe", 5);
-#else
-		g_AgentCrashID[i + 16] = 0;
-#endif
-		g_ILibCrashID = g_AgentCrashID;
-		g_ILibCrashID_HASH = g_AgentCrashID_HASH;
-		memcpy_s(g_AgentCrashID_HASH, sizeof(g_AgentCrashID_HASH), g_AgentCrashID + i, sizeof(g_AgentCrashID_HASH) - 1);
-	}
-}
 void ILibDuktape_ScriptContainer_CheckEmbeddedEx(char *exePath, char **script, int *scriptLen)
 {
 	FILE *tmpFile;
 	char *integratedJavaScript = NULL;
 	int integratedJavaScriptLen = 0;
 
-	ILibDuktape_ScriptContainer_SetCrashIdentifier(exePath);
+	ILibSetCrashIdentifier(exePath);
 
 #ifdef WIN32
 	_wfopen_s(&tmpFile, ILibUTF8ToWide(exePath, -1), L"rb");

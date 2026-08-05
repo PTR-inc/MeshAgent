@@ -2669,6 +2669,54 @@ char* g_ILibCrashID = NULL;
 char* g_ILibCrashID_HASH = NULL;
 char* g_ILibCrashDump_path = NULL;
 
+char g_ILibCrashIDBuffer[280];
+char g_ILibCrashIDBuffer_HASH[17] = { 0 };
+
+void ILibSetCrashIdentifier(char *exePath)
+{
+	int i;
+
+#ifdef WIN32
+	if (ILibString_EndsWith(exePath, -1, ".exe", 4) == 0)
+	{
+		i = sprintf_s(g_ILibCrashIDBuffer, sizeof(g_ILibCrashIDBuffer), "%s_", exePath);
+	}
+	else
+	{
+		i = ILibString_LastIndexOf(exePath, -1, "\\", 1);
+		if (i > 0)
+		{
+			i = sprintf_s(g_ILibCrashIDBuffer, sizeof(g_ILibCrashIDBuffer), "%s", exePath + i + 1);
+			g_ILibCrashIDBuffer[i - 4] = '_';
+			i -= 3;
+		}
+		else
+		{
+			i = sprintf_s(g_ILibCrashIDBuffer, sizeof(g_ILibCrashIDBuffer), "%s", exePath);
+			g_ILibCrashIDBuffer[i - 4] = '_';
+			i -= 3;
+		}
+	}
+#else
+	i = sprintf_s(g_ILibCrashIDBuffer, sizeof(g_ILibCrashIDBuffer), "%s_", exePath);
+#endif
+
+	char hashValue[1 + UTIL_SHA384_HASHSIZE];
+	if (GenerateSHA384FileHash(exePath, hashValue) == 0)
+	{
+		util_tohex(hashValue, UTIL_SHA384_HASHSIZE, g_ILibCrashIDBuffer + i);
+
+#ifdef WIN32
+		memcpy_s(g_ILibCrashIDBuffer + i + 16, 5, ".exe", 5);
+#else
+		g_ILibCrashIDBuffer[i + 16] = 0;
+#endif
+		g_ILibCrashID = g_ILibCrashIDBuffer;
+		g_ILibCrashID_HASH = g_ILibCrashIDBuffer_HASH;
+		memcpy_s(g_ILibCrashIDBuffer_HASH, sizeof(g_ILibCrashIDBuffer_HASH), g_ILibCrashIDBuffer + i, sizeof(g_ILibCrashIDBuffer_HASH) - 1);
+	}
+}
+
 #if defined(WIN32)
 int ILib_WindowsExceptionFilterEx(DWORD exceptionCode, void *exceptionInfo, ILib_DumpEnabledContext *exceptionContext)
 {
