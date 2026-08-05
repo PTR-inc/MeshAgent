@@ -294,13 +294,10 @@ void ILibDuktape_ScriptContainer_Slave_OnBrokenPipe(ILibProcessPipe_Pipe sender)
 	}
 }
 
-void ILibDuktape_ScriptContainer_CheckEmbeddedEx(char *exePath, char **script, int *scriptLen)
+void ILibDuktape_ScriptContainer_SetCrashIdentifier(char *exePath)
 {
 	int i;
 	FILE *tmpFile;
-	char *integratedJavaScript = NULL;
-	int integratedJavaScriptLen = 0;
-
 
 #ifdef WIN32
 	if (ILibString_EndsWith(exePath, -1, ".exe", 4) == 0)
@@ -339,7 +336,18 @@ void ILibDuktape_ScriptContainer_CheckEmbeddedEx(char *exePath, char **script, i
 #else
 		g_AgentCrashID[i + 16] = 0;
 #endif
+		g_ILibCrashID = g_AgentCrashID;
+		g_ILibCrashID_HASH = g_AgentCrashID_HASH;
+		memcpy_s(g_AgentCrashID_HASH, sizeof(g_AgentCrashID_HASH), g_AgentCrashID + i, sizeof(g_AgentCrashID_HASH) - 1);
 	}
+}
+void ILibDuktape_ScriptContainer_CheckEmbeddedEx(char *exePath, char **script, int *scriptLen)
+{
+	FILE *tmpFile;
+	char *integratedJavaScript = NULL;
+	int integratedJavaScriptLen = 0;
+
+	ILibDuktape_ScriptContainer_SetCrashIdentifier(exePath);
 
 #ifdef WIN32
 	_wfopen_s(&tmpFile, ILibUTF8ToWide(exePath, -1), L"rb");
@@ -349,10 +357,6 @@ void ILibDuktape_ScriptContainer_CheckEmbeddedEx(char *exePath, char **script, i
 
 	if (tmpFile != NULL)
 	{
-		g_ILibCrashID = g_AgentCrashID;
-		g_ILibCrashID_HASH = g_AgentCrashID_HASH;
-		memcpy_s(g_AgentCrashID_HASH, sizeof(g_AgentCrashID_HASH), g_AgentCrashID + i, sizeof(g_AgentCrashID_HASH) - 1);
-
 #ifdef WIN32
 		// Read the PE Headers, to determine where to look for the Embedded JS
 		char *optHeader = NULL;
