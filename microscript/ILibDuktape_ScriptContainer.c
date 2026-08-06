@@ -34,6 +34,9 @@ limitations under the License.
 #elif !defined(_FREEBSD)
 	#include <netpacket/packet.h>
 #endif
+#ifdef _FREEBSD
+	#include <sys/sysctl.h>
+#endif
 #include <sys/utsname.h>
 #endif
 
@@ -454,21 +457,21 @@ void ILibDuktape_ScriptContainer_CheckEmbedded(char **script, int *scriptLen)
 	
 #elif defined(NACL)
 #elif defined(_FREEBSD)
+#ifdef _OPENBSD
 	int x = readlink("/proc/curproc/file", exePath, sizeof(exePath));
 	if (x < 0 || x >= sizeof(exePath))
 	{
-#ifdef _OPENBSD
-		strcpy_s(exePath, sizeof(exePath), __agentExecPath);		
-#else
-		printf("\nYou'll need to mount procfs, which isn't mounted by default on FreeBSD.\n");
-		printf("Add the following line to /etc/fstab\n");
-		printf("   proc	/proc	procfs	rw	0	0\n\n");
-		printf("If you don't reboot after, then you can manually mount with the command:\n");
-		printf("   mount -t procfs proc /proc\n\n");
-		ILIBCRITICALEXIT(246);
-#endif
+		strcpy_s(exePath, sizeof(exePath), __agentExecPath);
 	}
-	exePath[x] = 0;
+	else
+	{
+		exePath[x] = 0;
+	}
+#else
+	int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
+	size_t len = sizeof(exePath);
+	if (sysctl(mib, 4, exePath, &len, NULL, 0) != 0 || len == 0) ILIBCRITICALEXIT(246);
+#endif
 #else
 	int x = readlink("/proc/self/exe", exePath, sizeof(exePath));
 	if (x < 0 || x >= sizeof(exePath)) ILIBCRITICALEXIT(246);
