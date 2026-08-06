@@ -36,7 +36,7 @@ limitations under the License.
 MeshAgentHostContainer *agentHost = NULL;
 #ifdef _OPENBSD
 #include <stdlib.h>
-char __agentExecPath[1024] = { 0 };
+char __agentExecPath[_MAX_PATH] = { 0 };
 #endif
 
 #if defined(__APPLE__)
@@ -93,7 +93,11 @@ int main(int argc, char **argv)
 #endif
 {
 #ifdef _OPENBSD
-	realpath(argv[0], __agentExecPath);
+	if ((realpath(argv[0], __agentExecPath) == NULL)) {
+		printf("Unable to get the executable path\n");
+		printf("Check if the agent is started with a valid path\n\n");
+		ILIBCRITICALEXIT(246);
+	};
 #endif
 
 	// Check if .JS file is integrated with executable

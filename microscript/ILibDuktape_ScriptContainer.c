@@ -456,28 +456,28 @@ void ILibDuktape_ScriptContainer_CheckEmbedded(char **script, int *scriptLen)
 	if (_NSGetExecutablePath(exePath, &len) != 0) ILIBCRITICALEXIT(247);
 	
 #elif defined(NACL)
-#elif defined(_FREEBSD)
-#ifdef _OPENBSD
-	int x = readlink("/proc/curproc/file", exePath, sizeof(exePath));
-	if (x < 0 || x >= sizeof(exePath))
-	{
-		strcpy_s(exePath, sizeof(exePath), __agentExecPath);
-	}
-	else
-	{
-		exePath[x] = 0;
-	}
 #else
-	int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
-	size_t len = sizeof(exePath);
-	if (sysctl(mib, 4, exePath, &len, NULL, 0) != 0 || len == 0) ILIBCRITICALEXIT(246);
+	int len;
+	#ifdef _FREEBSD
+		#ifdef _OPENBSD
+			len = (int)strlcpy(exePath, __agentExecPath, sizeof(exePath));
+		#else
+			int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
+			size_t l = sizeof(exePath);
+			if (sysctl(mib, 4, exePath, &l, NULL, 0) != 0) l = 0;
+			len = (int)l - 1;
+		#endif
+	#else
+		len = readlink("/proc/self/exe", exePath, sizeof(exePath));
+	#endif
+		if (len < 0 || len >= sizeof(exePath))
+		{
+			printf("Unable to get the executable path\n");
+			printf("Check if the agent is started with a valid path\n\n");
+			ILIBCRITICALEXIT(246);
+		}
+		exePath[len] = 0;
 #endif
-#else
-	int x = readlink("/proc/self/exe", exePath, sizeof(exePath));
-	if (x < 0 || x >= sizeof(exePath)) ILIBCRITICALEXIT(246);
-	exePath[x] = 0;
-#endif
-
 	ILibDuktape_ScriptContainer_CheckEmbeddedEx(exePath, script, scriptLen);
 }
 

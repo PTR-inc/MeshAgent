@@ -6124,7 +6124,7 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 #else
 	#ifdef _FREEBSD
 		#ifdef _OPENBSD
-			x = sprintf_s(exePath, 1024, "%s", __agentExecPath);
+			x = (int)strlcpy(exePath, __agentExecPath, 1024);
 		#else
 			int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
 			size_t len = 1024;
@@ -6134,7 +6134,12 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 	#else
 		x = readlink("/proc/self/exe", exePath, 1024);
 	#endif
-		if (x < 0 || x >= 1024) ILIBCRITICALEXIT(246);
+		if (x < 0 || x >= 1024)
+		{
+			printf("Unable to get the executable path\n");
+			printf("Check if the agent is started with a valid path\n\n");
+			ILIBCRITICALEXIT(246);
+		}
 		exePath[x] = 0;
 #endif
 	}
