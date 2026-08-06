@@ -48,6 +48,10 @@ limitations under the License.
 #include <sys/wait.h>
 #endif
 
+#ifdef _FREEBSD
+#include <sys/sysctl.h>
+#endif
+
 #ifdef _OPENBSD
 extern char __agentExecPath[];
 #endif
@@ -6122,7 +6126,10 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 		#ifdef _OPENBSD
 			x = sprintf_s(exePath, 1024, "%s", __agentExecPath);
 		#else
-			x = readlink("/proc/curproc/file", exePath, 1024);
+			int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
+			size_t len = 1024;
+			if (sysctl(mib, 4, exePath, &len, NULL, 0) != 0 || len == 0) ILIBCRITICALEXIT(246);
+			x = (int)len - 1;
 		#endif
 	#else
 		x = readlink("/proc/self/exe", exePath, 1024);
