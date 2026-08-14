@@ -43,6 +43,8 @@ limitations under the License.
 		#ifndef _NOILIBSTACKDEBUG
 			#include <execinfo.h>
 			#include <inttypes.h>
+			#include <link.h>
+			#include <dlfcn.h>
 		#endif
 	#endif
 #endif 
@@ -2796,21 +2798,32 @@ void ILib_WindowsExceptionDebugEx(ILib_DumpEnabledContext *dumpEnabledExceptionC
 #elif defined(_POSIX) && !defined(__APPLE__)
 #ifndef _NOILIBSTACKDEBUG
 char ILib_POSIX_CrashParamBuffer[5 * sizeof(void*)];
+
+// discover the main executable's randomized load base address, for PIE+ASLR support. Returns 0 for non-PIE
+static void *ILib_POSIX_LoadBase = NULL;
+static int ILib_POSIX_GetLoadBase(struct dl_phdr_info *info, size_t size, void *data)
+{
+	UNREFERENCED_PARAMETER(size);
+	UNREFERENCED_PARAMETER(data);
+	ILib_POSIX_LoadBase = (void*)info->dlpi_addr;
+	return(1);
+}
+
+// dli_fbase of the exe, so a stack entries can be recognized as belonging to agent instead of a shared library
+static void *ILib_POSIX_SelfFBase = NULL;
+
 void ILib_POSIX_CrashHandler(int code)
 {
 	struct rlimit r;
 	char msgBuffer[16384];
 	int msgLen = 0;
 	void *buffer[100];
-	char **strings;
-	int sz, i, c;
-	char *ptr;
+	int sz, i;
 
 	signal(SIGSEGV, SIG_IGN);
 	signal(SIGUSR1, SIG_IGN);
 
 	sz = backtrace(buffer, 100);
-	strings = backtrace_symbols(buffer, sz);
 
 	if (code == SIGSEGV || code == SIGABRT)
 	{
@@ -2828,59 +2841,27 @@ void ILib_POSIX_CrashHandler(int code)
 		msgLen += 30;
 	}
 
+	// Logs base= offset (0 if non-PIE)
+	msgLen += sprintf_s(msgBuffer + msgLen, sizeof(msgBuffer) - msgLen, "base=0x%" PRIxPTR "\n", (uintptr_t)ILib_POSIX_LoadBase);
+
+	// Entryformat: module(+0xFILEOFFSET) [0xRUNTIMEADDR]
+	// use addr2line against DEBUG_ version of the meshagent 
+	// ! backtrace_symbols() is deliberately not used: output differs per platform
 	for (i = 1; i < sz; ++i)
 	{
-		pid_t pid;
-		int fd[2];
-		size_t symlen = strnlen_s(strings[i], sizeof(msgBuffer));
+		Dl_info di;
 
-		memcpy_s(msgBuffer + msgLen, sizeof(msgBuffer) - msgLen, strings[i], symlen);
-		msgLen += symlen;
-		msgBuffer[msgLen] = '\n';
-		msgLen += 1;
-
-
-		ptr = strings[i];
-		for (c = 0; c < (int)symlen; ++c)
+		if ((int)(sizeof(msgBuffer) - msgLen) < 512) { break; }
+		// check if from agent or other module
+		if (dladdr(buffer[i], &di) != 0 && di.dli_fname != NULL && di.dli_fbase != NULL)
 		{
-			if ((strings[i])[c] == '[') { ptr = strings[i] + c + 1; }
-			if ((strings[i])[c] == ']') { (strings[i])[c] = 0; }
-			if ((strings[i])[c] == 0) { break; }
+			uintptr_t bias = (di.dli_fbase == ILib_POSIX_SelfFBase) ? (uintptr_t)ILib_POSIX_LoadBase : (uintptr_t)di.dli_fbase;
+			msgLen += sprintf_s(msgBuffer + msgLen, sizeof(msgBuffer) - msgLen, "%s(+0x%" PRIxPTR ") [%p]\n",
+				di.dli_fname, (uintptr_t)buffer[i] - bias, buffer[i]);
 		}
-
-		if (pipe(fd) == 0)
+		else
 		{
-			sigset_t set;
-			ILibVForkPrepareSignals_Parent_Init(&set);
-
-			pid = vfork();
-			if (pid == 0)
-			{
-				ILibVForkPrepareSignals_Child();
-
-				dup2(fd[1], STDOUT_FILENO);
-				close(fd[1]);
-
-				((char**)ILib_POSIX_CrashParamBuffer)[1] = ptr;
-				execv("/usr/bin/addr2line", (char**)ILib_POSIX_CrashParamBuffer);
-				if (write(STDOUT_FILENO, "??:0", 4)) {}
-				_exit(0);
-			}
-			ILibVForkPrepareSignals_Parent_Finished(&set);
-			if (pid > 0)
-			{
-				char tmp[8192];
-				int len;
-				len = read(fd[0], tmp, 8192);
-				if (len > 0 && tmp[0] != '?')
-				{
-					memcpy_s(msgBuffer + msgLen, sizeof(msgBuffer) - msgLen, "=> ", 3);
-					msgLen += 3;
-					memcpy_s(msgBuffer + msgLen, sizeof(msgBuffer) - msgLen, tmp, len);
-					msgLen += len;
-				}
-				close(fd[0]);
-			}
+			msgLen += sprintf_s(msgBuffer + msgLen, sizeof(msgBuffer) - msgLen, "?(+0x0) [%p]\n", buffer[i]);
 		}
 	}
 	msgBuffer[msgLen] = 0;
@@ -2904,12 +2885,15 @@ void ILib_POSIX_CrashHandler(int code)
 char* ILib_POSIX_InstallCrashHandler(char *exename)
 {
 	char *retVal = NULL;
+	Dl_info self;
 	if ((retVal = realpath(exename, NULL)) != NULL)
 	{
 		((char**)ILib_POSIX_CrashParamBuffer)[0] = "addr2line";
 		((char**)ILib_POSIX_CrashParamBuffer)[2] = "-e";
 		((char**)ILib_POSIX_CrashParamBuffer)[3] = retVal;
 		((char**)ILib_POSIX_CrashParamBuffer)[4] = NULL;
+		dl_iterate_phdr(ILib_POSIX_GetLoadBase, NULL);
+		if (dladdr((void*)(ILibPtrCAST)&ILibCreateChain, &self) != 0) { ILib_POSIX_SelfFBase = self.dli_fbase; }
 		signal(SIGSEGV, ILib_POSIX_CrashHandler);
 	}
 	return retVal;
@@ -2919,7 +2903,12 @@ char* ILib_POSIX_InstallCrashHandler(char *exename)
 
 void ILibChain_DebugDelta(char *buffer, int bufferLen, uint64_t delta)
 {
-	ILibChain_DebugOffset(buffer, bufferLen, (uint64_t)(ILibPtrCAST)&ILibCreateChain - delta);
+	uint64_t base = 0;
+#if defined(_POSIX) && !defined(__APPLE__) && !defined(_NOILIBSTACKDEBUG)
+	dl_iterate_phdr(ILib_POSIX_GetLoadBase, NULL);
+	base = (uint64_t)(ILibPtrCAST)ILib_POSIX_LoadBase;
+#endif
+	ILibChain_DebugOffset(buffer, bufferLen, (uint64_t)(ILibPtrCAST)&ILibCreateChain - base - delta);
 }
 
 void ILibChain_DebugOffset(char *buffer, int bufferLen, uint64_t addrOffset)
