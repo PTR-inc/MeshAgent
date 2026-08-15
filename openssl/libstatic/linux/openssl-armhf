@@ -9,5 +9,5 @@ sed 's/ -O3 / -Os /g' Makefile > t
 rm Makefile
 mv t Makefile
 make
-cp *.a ../openssl-static/armhf
+cp *.a ../linux/armhf
 cd ..

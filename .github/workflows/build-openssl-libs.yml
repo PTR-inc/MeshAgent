@@ -1,0 +1,167 @@
+name: Build OpenSSL static libs
+run-name: Build bundled libcrypto.a/libssl.a archives
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "OpenSSL release version"
+        required: true
+        default: "1.1.1w"
+      sha256:
+        description: "sha256 of openssl-<version>.tar.gz"
+        required: true
+        default: "cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8"
+
+env:
+  OSSL_FLAGS: >-
+    no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic
+    no-threads no-hw no-err no-dso no-shared -no-asm no-rc5 no-idea no-md4
+    no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-dso no-bf no-cast no-md2
+    no-mdc2
+
+jobs:
+  linux-native:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install multilib toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib
+      - name: Download and verify source
+        run: |
+          curl -sSL -o ossl.tar.gz \
+            https://github.com/openssl/openssl/releases/download/OpenSSL_$(echo "${{ inputs.version }}" | tr . _)/openssl-${{ inputs.version }}.tar.gz
+          echo "${{ inputs.sha256 }}  ossl.tar.gz" | sha256sum -c -
+      - name: Build x86-64 (-O3) and x86 (-O3)
+        run: |
+          for arch in x86-64 x86; do
+            case $arch in
+              x86-64) tgt=linux-x86_64 ;;
+              x86)    tgt=linux-x86 ;;
+            esac
+            rm -rf src && mkdir src && tar xzf ossl.tar.gz -C src --strip-components=1
+            ( cd src && ./Configure $tgt ${{ env.OSSL_FLAGS }} && make -j"$(nproc)" )
+            mkdir -p out/openssl/libstatic/linux/$arch
+            cp src/libcrypto.a src/libssl.a out/openssl/libstatic/linux/$arch/
+          done
+      - name: Verify version stamped into archives
+        run: |
+          for f in $(find out -name libcrypto.a); do
+            v=$(strings "$f" | grep -oE 'OpenSSL 1\.[0-9]\.[0-9][a-z]?' | sort -u)
+            echo "$f -> $v"
+            test "$v" = "OpenSSL ${{ inputs.version }}"
+          done
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: openssl-linux-native
+          path: out/
+
+  linux-cross:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { dir: aarch64,            target: linux-aarch64,   cc: aarch64-linux-gnu-gcc, pkg: gcc-aarch64-linux-gnu }
+          - { dir: arm64,              target: linux-generic64, cc: aarch64-linux-gnu-gcc, pkg: gcc-aarch64-linux-gnu }
+          - { dir: aarch64-cortex-a53, target: linux-aarch64,   cc: aarch64-linux-gnu-gcc, pkg: gcc-aarch64-linux-gnu, cflags: "-mcpu=cortex-a53" }
+          - { dir: armhf,              target: linux-armv4,     cc: arm-linux-gnueabihf-gcc, pkg: gcc-arm-linux-gnueabihf }
+          - { dir: arm-linaro,         target: linux-generic32, cc: arm-linux-gnueabihf-gcc, pkg: gcc-arm-linux-gnueabihf }
+          - { dir: arm,                target: linux-generic32, cc: arm-linux-gnueabi-gcc, pkg: gcc-arm-linux-gnueabi }
+          - { dir: mips,               target: linux-generic32, cc: mips-linux-gnu-gcc, pkg: gcc-mips-linux-gnu }
+          - { dir: mipsel,             target: linux-mipsel,    cc: mipsel-linux-gnu-gcc, pkg: gcc-mipsel-linux-gnu }
+          - { dir: riscv64,            target: linux64-riscv64, cc: riscv64-linux-gnu-gcc, pkg: gcc-riscv64-linux-gnu }
+    steps:
+      - name: Install cross toolchain
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.pkg }}
+      - name: Download and verify source
+        run: |
+          curl -sSL -o ossl.tar.gz \
+            https://github.com/openssl/openssl/releases/download/OpenSSL_$(echo "${{ inputs.version }}" | tr . _)/openssl-${{ inputs.version }}.tar.gz
+          echo "${{ inputs.sha256 }}  ossl.tar.gz" | sha256sum -c -
+          mkdir src && tar xzf ossl.tar.gz -C src --strip-components=1
+      - name: Build ${{ matrix.dir }} (-Os, embedded targets are flash constrained)
+        run: |
+          cd src
+          CC="${{ matrix.cc }} ${{ matrix.cflags }}" ./Configure ${{ matrix.target }} ${{ env.OSSL_FLAGS }}
+          sed -i 's/ -O3 / -Os /g' Makefile
+          make -j"$(nproc)"
+      - name: Verify version and target architecture
+        run: |
+          cd src
+          v=$(strings libcrypto.a | grep -oE 'OpenSSL 1\.[0-9]\.[0-9][a-z]?' | sort -u)
+          echo "version: $v"
+          test "$v" = "OpenSSL ${{ inputs.version }}"
+          # Guard against Configure silently falling back to the host compiler.
+          obj=$(ar t libcrypto.a | grep -m1 '\.o$')
+          mkdir -p /tmp/probe && cd /tmp/probe && ar x "$GITHUB_WORKSPACE/src/libcrypto.a" "$obj"
+          file "$obj"
+          if file "$obj" | grep -q 'x86-64'; then
+            echo "ERROR: ${{ matrix.dir }} archive contains host x86-64 objects" >&2
+            exit 1
+          fi
+      - name: Stage repo layout
+        run: |
+          mkdir -p out/openssl/libstatic/linux/${{ matrix.dir }}
+          cp src/libcrypto.a src/libssl.a out/openssl/libstatic/linux/${{ matrix.dir }}/
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: openssl-linux-${{ matrix.dir }}
+          path: out/
+
+  linux-musl:
+    runs-on: ubuntu-24.04
+    container: alpine:3.20
+    steps:
+      - name: Install build deps
+        run: apk add --no-cache build-base perl curl file
+      - name: Download and verify source
+        run: |
+          curl -sSL -o ossl.tar.gz \
+            https://github.com/openssl/openssl/releases/download/OpenSSL_$(echo "${{ inputs.version }}" | tr . _)/openssl-${{ inputs.version }}.tar.gz
+          echo "${{ inputs.sha256 }}  ossl.tar.gz" | sha256sum -c -
+          mkdir src && tar xzf ossl.tar.gz -C src --strip-components=1
+      - name: Build alpine-x86-64 (musl)
+        run: |
+          cd src
+          ./Configure linux-x86_64 ${{ env.OSSL_FLAGS }}
+          make -j"$(nproc)"
+          strings libcrypto.a | grep -oE 'OpenSSL 1\.[0-9]\.[0-9][a-z]?' | sort -u
+      - name: Stage repo layout
+        run: |
+          mkdir -p out/openssl/libstatic/linux/alpine-x86-64
+          cp src/libcrypto.a src/libssl.a out/openssl/libstatic/linux/alpine-x86-64/
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: openssl-linux-alpine
+          path: out/
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - name: Download and verify source
+        run: |
+          curl -sSL -o ossl.tar.gz \
+            https://github.com/openssl/openssl/releases/download/OpenSSL_$(echo "${{ inputs.version }}" | tr . _)/openssl-${{ inputs.version }}.tar.gz
+          echo "${{ inputs.sha256 }}  ossl.tar.gz" | shasum -a 256 -c -
+      - name: Build osx-x86-64 and osx-arm-64
+        run: |
+          for arch in osx-x86-64 osx-arm-64; do
+            case $arch in
+              osx-x86-64) tgt=darwin64-x86_64-cc ;;
+              osx-arm-64) tgt=darwin64-arm64-cc ;;
+            esac
+            rm -rf src && mkdir src && tar xzf ossl.tar.gz -C src --strip-components=1
+            ( cd src && ./Configure $tgt ${{ env.OSSL_FLAGS }} && make -j"$(sysctl -n hw.ncpu)" )
+            mkdir -p out/openssl/libstatic/macos/$arch
+            cp src/libcrypto.a src/libssl.a out/openssl/libstatic/macos/$arch/
+          done
+      - name: Verify version
+        run: |
+          for f in $(find out -name libcrypto.a); do
+            v=$(strings "$f" | grep -oE 'OpenSSL 1\.[0-9]\.[0-9][a-z]?' | sort -u)
+            echo "$f -> $v"
+            test "$v" = "OpenSSL ${{ inputs.version }}"
+          done
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: openssl-macos
+          path: out/

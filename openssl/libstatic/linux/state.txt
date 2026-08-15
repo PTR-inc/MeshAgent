@@ -1,3 +1,76 @@
-openssl-1.1.1g.tar.gz in use on everything here.
+OpenSSL static library state
+============================
 
-armhf2 - openssl-1.1.1c - This is a build of OpenSSL made on a Raspberry Pi 1 with a old 2015-02-02 build of Raspian 7.
+Target version: openssl-1.1.1w (11 Sep 2023) - the last public 1.1.1 release.
+  sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+  Use ./fetch-openssl to download and verify the source tarball.
+
+NOTE: 1.1.1 is end-of-life (11 Sep 2023) and receives no further public fixes.
+1.1.1w is an interim step to close the CVEs published while 1.1.1 was still
+supported. Migration to 3.5 LTS is tracked separately.
+
+Configure flags are identical for every target (only the -O level and the
+Configure target name differ); see the per-arch openssl-* scripts.
+
+
+Actual version per architecture
+-------------------------------
+Verified by inspecting the version string in each committed libcrypto.a
+(`strings libcrypto.a | grep "OpenSSL 1."`). Keep this table honest: a stale
+claim here is worse than none. The previous contents of this file claimed
+"1.1.1g in use on everything", which had not been true for years.
+
+  UPDATED to 1.1.1w:
+    x86-64                    built natively, verified by linking meshagent_x86-64
+
+  Still on older releases (need rebuilding):
+    x86                       1.1.1s
+    aarch64                   1.1.1s
+    aarch64-cortex-a53        1.1.1s
+    armhf                     1.1.1s
+    linux-armada370-hf        1.1.1s
+    mips24kc                  1.1.1s
+    mipsel24kc                1.1.1s
+    openwrt_x86_64            1.1.1s
+    ../macos/osx-x86-64       1.1.1s
+    ../macos/osx-arm-64       1.1.1s
+    ../bsd/freebsd_x86-64     1.1.1s
+    ../bsd/openbsd_x86-64     1.1.1s
+    alpine-x86-64             1.1.1l
+    arm                       1.1.1i
+    arm-linaro                1.1.1i
+    arm64                     1.1.1i
+    mips                      1.1.1i
+    mipsel                    1.1.1i
+    pogo                      1.1.1i
+    poky                      1.1.1i
+    poky64                    1.1.1i
+    arm2                      1.1.1g
+    armhf2                    1.1.1c   built on a Raspberry Pi 1 with Raspbian 7
+                                       (2015-02-02); toolchain not reproducible.
+
+  Unknown provenance - REBUILD FROM A RELEASE TARBALL:
+    riscv64                   "1.1.1x-dev  xx XXX xxxx"
+                              Built from an OpenSSL git checkout, not a release.
+                              The exact commit is unrecoverable from the binary.
+
+Anything at or below 1.1.1m is missing the fix for CVE-2022-0778 (infinite loop
+in BN_mod_sqrt when parsing a crafted certificate), which the agent can reach
+pre-authentication while parsing a server certificate. Prioritise those.
+
+
+Rebuilding
+----------
+CI: .github/workflows/build-openssl-libs.yml (workflow_dispatch) builds the
+targets reachable from GitHub runners and uploads them staged in this repo's
+directory layout. It does NOT cover: arm2, armhf2, arm-linaro, pogo, poky,
+poky64, linux-armada370-hf (vendor/Yocto toolchains), or the BSD targets.
+Those still need a machine with the matching toolchain.
+
+Manual: ./fetch-openssl, then run the matching openssl-<arch> script from
+inside the extracted source directory.
+
+GOTCHA: the makefile links the agent from $(OBJECTS) only - the static
+libraries are not listed as prerequisites. Dropping in a new libcrypto.a will
+NOT trigger a relink. Always `make clean` after updating these archives, or you
+will silently keep testing the old OpenSSL.
