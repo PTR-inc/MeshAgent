@@ -8604,47 +8604,20 @@ int ILibHashtable_DefaultBucketizer(int value)
 }
 int ILibHashtable_DefaultHashFunc(void* Key1, char* Key2, int Key2Len)
 {
-	char tmp[4];
+	// FNV-1a over all pointer/key bytes; in-memory only, never persisted, so safe to change
+	unsigned int h = 2166136261u;
 	int i;
-	int retVal = 0;
-	union{int i; void* p;}u;
 
-	u.p = Key1;
-	if(Key1!=NULL) {retVal ^= u.i;}
+	if (Key1 != NULL)
+	{
+		uintptr_t k = (uintptr_t)Key1;
+		for (i = 0; i < (int)sizeof(k); ++i) { h = (h ^ (unsigned char)(k >> (8 * i))) * 16777619u; }
+	}
 	if (Key2 != NULL)
 	{
-		if (Key2Len < 5)
-		{
-			((int*)tmp)[0] = 0;
-			for (i = 0; i < Key2Len; ++i)
-			{
-				tmp[i] = Key2[i];
-			}
-			retVal ^= ((int*)tmp)[0];
-		}
-		
-		if (Key2Len > 4)
-		{
-			((int*)tmp)[0] = 0;
-			for (i = 0; i < 4; ++i)
-			{
-				tmp[i] = Key2[Key2Len - 1 - i];
-			}
-			retVal ^= ((int*)tmp)[0];
-			
-			if (Key2Len > 12)
-			{
-				int x = Key2Len / 2;
-				((int*)tmp)[0] = 0;
-				for (i = 0; i < 4; ++i)
-				{
-					tmp[i] = Key2[i + x];
-				}
-				retVal ^= ((int*)tmp)[0];
-			}
-		}
+		for (i = 0; i < Key2Len; ++i) { h = (h ^ (unsigned char)Key2[i]) * 16777619u; }
 	}
-	return(retVal & 0x7FFFFFFF);
+	return((int)(h & 0x7FFFFFFF));
 }
 //! Create an Advanced Hashtable using the default Hashing Function, and default SparseArray/Bucketizer
 /*!
