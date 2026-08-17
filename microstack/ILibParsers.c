@@ -8859,7 +8859,9 @@ ILibHashtable_Node* ILibHashtable_GetEx(ILibHashtable table, void *Key1, char* K
 void* ILibHashtable_Put(ILibHashtable table, void *Key1, char* Key2, int Key2Len, void* Data)
 {	
 	ILibHashtable_Node *node = ILibHashtable_GetEx(table, Key1, Key2, Key2Len, ILibHashtable_Flags_ADD);
-	void *retVal = node->Data;
+	void *retVal;
+	if (node == NULL) { return(NULL); }
+	retVal = node->Data;
 	node->Data = Data;
 	return retVal;
 }
