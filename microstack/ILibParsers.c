@@ -2599,6 +2599,9 @@ ILibExportMethod ILibChain_Continue_Result ILibChain_Continue(void *Chain, ILibC
 			}
 		}
 
+		// check if this frame ended during preselect dispatch to prevent stall, since the wake-up went to the inner wait's select.
+		if (frame.ended != 0) { continue; }
+
 		//
 		// The actual Select Statement
 		//
