@@ -8797,7 +8797,7 @@ ILibHashtable_Node* ILibHashtable_GetEx(ILibHashtable table, void *Key1, char* K
 		ILibHashtable_Node *prev = NULL;
 		while(node!=NULL)
 		{
-			if(node->Key1 == Key1 && node->Key2Len == Key2Len && memcmp(node->Key2, Key2, Key2Len)==0)
+			if(node->Key1 == Key1 && node->Key2Len == Key2Len && (Key2Len == 0 || memcmp(node->Key2, Key2, Key2Len)==0))
 			{
 				break;
 			}
