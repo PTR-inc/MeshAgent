@@ -8712,12 +8712,13 @@ void ILibHashtable_EnumerateSink(ILibSparseArray sender, int index, void *value,
 
 	if (value != NULL)
 	{
-		ILibHashtable_Node *node = (ILibHashtable_Node*)value;
+		ILibHashtable_Node *tmp, *node = (ILibHashtable_Node*)value;
 		ILibHashtable_OnDestroy onEnumerate = state->onClear;
 		while (node != NULL)
 		{
+			tmp = node->next;
 			if (onEnumerate != NULL) { onEnumerate(state->source, node->Key1, node->Key2, node->Key2Len, node->Data, state->user); }
-			node = node->next;
+			node = tmp;
 		}
 	}
 }
