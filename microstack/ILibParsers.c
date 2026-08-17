@@ -8846,12 +8846,20 @@ ILibHashtable_Node* ILibHashtable_GetEx(ILibHashtable table, void *Key1, char* K
 		{
 			// There was a match! Update the value and return the old value
 			retVal = node;
-			if((flags & ILibHashtable_Flags_REMOVE) == ILibHashtable_Flags_REMOVE) 
+			if((flags & ILibHashtable_Flags_REMOVE) == ILibHashtable_Flags_REMOVE)
 			{
 				if(node->prev == NULL)
 				{
-					// This is the first entry, so we'll have to remove the entry from the SparseArray
-					ILibSparseArray_Remove(root->table, hash);
+					// chain head: repoint slot at next node, drop if none
+					if(node->next != NULL)
+					{
+						node->next->prev = NULL;
+						ILibSparseArray_Add(root->table, hash, node->next);
+					}
+					else
+					{
+						ILibSparseArray_Remove(root->table, hash);
+					}
 				}
 				else
 				{
