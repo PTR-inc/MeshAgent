@@ -1,13 +1,14 @@
+#!/bin/sh
 #
-# Copy and run this in the OpenSSL directory for Intel x86 64bit compatible OpenSSL stack
+# Copy and run this in the OpenSSL directory for Intel x86 32bit compatible OpenSSL stack
 #
+# asm IS enabled here, like x86-64: x86 OpenSSL asm gates itself on runtime
+# CPUID (OPENSSL_ia32cap_P), so it's safe on any x86/x86-64 host
 cd ../openssl
 make clean
-./Configure linux-x86 no-zlib no-zlib-dynamic no-threads no-hw no-err no-dso no-shared -no-asm no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-dso no-bf no-cast no-md2 no-mdc2
+./Configure linux-x86 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-ocsp no-cms -m32
 make depend
-sed 's/ -O3 / -O3 -m32 /g' Makefile > t
-rm Makefile
-mv t Makefile
-make -j 8
+make -j "$(nproc)"
+mkdir -p ../linux/x86
 cp *.a ../linux/x86
 cd ..

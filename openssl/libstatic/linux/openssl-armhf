@@ -1,13 +1,20 @@
+#!/bin/sh
 #
 # Copy and run this in the OpenSSL directory for ARM compatible OpenSSL stack
 #
+# -no-asm: asm here produced WRONG crypto results under qemu-arm (non-
+# deterministic SHA384/512, bad RSA self-verify) - do not re-enable without
+# root-causing first.
+#
+# export CC=: ARMv6+VFPv2 hardfloat baseline; without this the script would
+# silently build with the host's native gcc instead.
+export CC="arm-linux-gnueabihf-gcc -march=armv6 -marm -mfpu=vfp -mfloat-abi=hard"
+
 cd ../openssl
 make clean
-./Configure linux-armv4 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-threads no-hw no-err no-dso no-shared -no-asm no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-dso no-bf no-cast no-md2 no-mdc2
+./Configure linux-armv4 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared -no-asm no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-ocsp no-cms -Os
 make depend
-sed 's/ -O3 / -Os /g' Makefile > t
-rm Makefile
-mv t Makefile
-make
-cp *.a ../openssl-static/armhf
+make -j "$(nproc)"
+mkdir -p ../linux/armhf
+cp *.a ../linux/armhf
 cd ..

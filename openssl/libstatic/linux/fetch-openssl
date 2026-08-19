@@ -1,0 +1,33 @@
+#!/bin/sh
+#
+# Download and verify the OpenSSL source tarball the openssl-<arch> scripts
+# expect. Run this from this directory; it extracts to ../openssl so that the
+# per-arch scripts ("cd ../openssl") find it.
+#
+VERSION=1.1.1w
+SHA256=cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+
+set -e
+
+TARBALL=openssl-$VERSION.tar.gz
+URL=https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/$TARBALL
+
+if [ ! -f "$TARBALL" ]; then
+	echo "Downloading $TARBALL ..."
+	curl -sSL -o "$TARBALL" "$URL"
+fi
+
+echo "Verifying sha256 ..."
+echo "$SHA256  $TARBALL" | sha256sum -c - || {
+	echo "CHECKSUM MISMATCH - refusing to continue. Delete $TARBALL and retry." >&2
+	exit 1
+}
+
+rm -rf ../openssl
+mkdir -p ../openssl
+tar xzf "$TARBALL" -C ..
+mv "../openssl-$VERSION"/* ../openssl/
+rmdir "../openssl-$VERSION"
+
+echo "OpenSSL $VERSION extracted to ../openssl"
+echo "Now run the matching ./openssl-<arch> script."

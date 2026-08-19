@@ -1,5 +1,5 @@
+#!/bin/sh
 ./openssl-arm
-./openssl-arm2
 ./openssl-armhf
 ./openssl-mips
 ./openssl-mipsel

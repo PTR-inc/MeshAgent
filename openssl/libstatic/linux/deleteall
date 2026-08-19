@@ -1,10 +1,10 @@
-rm ./arm/*
-rm ./arm2/*
-rm ./armhf/*
-rm ./mips/*
-rm ./mipsel/*
-rm ./pogo/*
-rm ./poky/*
-rm ./poky64/*
-rm ./x86-64/*
-rm ./x86/*
+#!/bin/sh
+rm -f ./arm/*
+rm -f ./armhf/*
+rm -f ./mips/*
+rm -f ./mipsel/*
+rm -f ./pogo/*
+rm -f ./poky/*
+rm -f ./poky64/*
+rm -f ./x86-64/*
+rm -f ./x86/*

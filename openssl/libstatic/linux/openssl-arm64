@@ -1,16 +1,22 @@
+#!/bin/sh
 #
-# Copy and run this in the OpenSSL directory for ARM compatible OpenSSL stack
+# Copy and run this in the OpenSSL directory for ARM 64bit compatible OpenSSL stack
 #
-#export PATH=/home/default/Public/ToolChains/LinuxArm/bin/:$PATH
-#export CC=/home/default/Public/ToolChains/LinuxArm/bin/arm-none-linux-gnueabi-gcc
+# WSL Debian3: aarch64-linux-gnu-gcc is an installed apt cross-compiler
+# (gcc-aarch64-linux-gnu, glibc).
+#
+# asm enabled: AArch64 OpenSSL asm (crypto/armcap.c) does runtime capability
+# detection via getauxval(AT_HWCAP) before using any ARMv8 crypto-extension instruction
+#
+# -Os REMOVED 2026-08-18: this target (ARCHID=26, "Official Linux ARM 64bit")
+# is a general-purpose glibc ARM64 build, not an IoT/router/restricted-space
+export CC=aarch64-linux-gnu-gcc
 
 cd ../openssl
 make clean
-./Configure linux-generic64 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-threads no-hw no-err no-dso no-shared -no-asm no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-dso no-bf no-cast no-md2 no-mdc2
+./Configure linux-aarch64 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-ocsp no-cms enable-ec_nistp_64_gcc_128
 make depend
-sed 's/ -O3 / -Os /g' Makefile > t
-rm Makefile
-mv t Makefile
-make -j 4
+make -j "$(nproc)"
+mkdir -p ../linux/arm64
 cp *.a ../linux/arm64
 cd ..

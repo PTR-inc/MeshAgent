@@ -1,18 +1,16 @@
+#!/bin/sh
 #
 # Copy and run this in the OpenSSL directory for x86 Galileo compatible OpenSSL stack
 #
-export PATH=/opt/poky/1.6.1/sysroots/x86_64-pokysdk-linux/usr/bin/x86_64-poky-linux/:$PATH
-export CC="/opt/poky/1.6.1/sysroots/x86_64-pokysdk-linux/usr/bin/x86_64-poky-linux/x86_64-poky-linux-gcc --sysroot=/opt/poky/1.6.1/sysroots/core2-64-poky-linux"
-
-# --sysroot=/home/default/Public/Galileo/arduino-1.5.3/hardware/tools/sysroots/i586-poky-linux-uclibc
+# WSL Debian3 substitute: the original Poky 1.6.1 sysroot toolchain
+# (x86_64-poky-linux-gcc) is plain glibc x86-64, same as this host - no
+# cross-compiler needed, unlike openssl-poky's uclibc Galileo target.
 
 cd ../openssl
 make clean
-./Configure linux-generic64 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-threads no-hw no-err no-dso no-shared -no-asm no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-dso no-bf no-cast no-md2 no-mdc2
+./Configure linux-generic64 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared -no-asm no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-ocsp no-cms enable-ec_nistp_64_gcc_128 -Os
 make depend
-sed 's/ -O3 / -Os /g' Makefile > t
-rm Makefile
-mv t Makefile
-make -j 8
+make -j "$(nproc)"
+mkdir -p ../linux/poky64
 cp *.a ../linux/poky64
 cd ..

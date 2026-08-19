@@ -341,3 +341,13 @@ microscript/ILibDuktape_Commit.h
 # compiled builds: meshagent_<arch>, DEBUG_meshagent_<arch>
 /meshagent_*
 /DEBUG_meshagent_*
+
+# content-hash stamps
+*.a.stamp
+
+# openssl workspace
+/openssl/libstatic/linux/*.tar.gz
+/openssl/libstatic/openssl/
+/openssl/libstatic/build/work/
+/openssl/libstatic/build/downloads/
+/openssl/libstatic/build/*.tar.gz

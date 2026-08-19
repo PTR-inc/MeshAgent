@@ -1,0 +1,237 @@
+OpenSSL static library state
+============================
+
+Target version: openssl-1.1.1w (11 Sep 2023) - the last public 1.1.1 release.
+  sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+  Use ./linux/fetch-openssl to download and verify the source tarball.
+
+NOTE: 1.1.1 is end-of-life (11 Sep 2023) and receives no further public fixes.
+1.1.1w is an interim step to close the CVEs published while 1.1.1 was still
+supported. Migration to 3.5 LTS is tracked separately.
+
+Two build paths exist for these archives:
+  1. The `openssl/libstatic/linux/openssl-<arch>` scripts in this directory -
+     portable, no external dependency, but only cover the toolchains an apt
+     Debian/Ubuntu box has natively (glibc cross-compilers + native gcc/gcc -m32).
+  2. `openssl/libstatic/build/` (env.sh/targets.sh/build.sh/verify.sh,
+     git-tracked). Covers everything path 1 does plus musl/uClibc OpenWrt
+     SDKs, bootlin toolchains, BSD clang cross-sysroots, osxcross macOS
+     cross-builds, and dd-wrt-archive toolchains. Toolchain/sysroot/download
+     data stays outside the repo, at `$BUILDROOT` (default `/opt/buildroot`).
+     `provision-buildroot.sh` (repo root - it also wires two toolchains the
+     makefile needs to cross-compile the agent itself) fetches and extracts
+     everything with a public URL into `$BUILDROOT`, including dd-wrt's
+     toolchain archive now (checksum-verified where a checksum is published;
+     dd-wrt and the OpenWrt SDKs don't publish one); only osxcross remains
+     bring-your-own. `targets.sh` is the authoritative flag/T_OBJS list for
+     path-2 targets.
+
+Configure flags are otherwise identical for every target (only the -O level
+and the Configure target name differ). asm is enabled (no `-no-asm`) wherever
+OpenSSL has a per-arch Configure target with genuine runtime capability-gated
+asm:
+  - x86/x86-64 family (CPUID -> OPENSSL_ia32cap_P): x86-64, x86, alpine-x86-64,
+    openwrt_x86_64, freebsd, openbsd.
+  - AArch64 (getauxval(AT_HWCAP) -> crypto/armcap.c): arm64, aarch64,
+    aarch64-cortex-a53.
+  - 32-bit ARM (linux-armv4 Configure: armhf, armhf2, linux-armada370-hf) is
+    DELIBERATELY LEFT AT -no-asm: asm here produced WRONG crypto results
+    under qemu-arm (non-deterministic SHA-384/512 hashes, RSA.verify()
+    rejecting its own fresh signature). Reverting to -no-asm did not fix it -
+    the bug is unrelated to asm, unresolved, HIGH severity. Do not trust ANY
+    RSA or SHA-384/512 operation on these three targets, asm or not.
+  - Everything Configured as `linux-generic32`/`linux-generic64` (arm,
+    arm-linaro, pogo, poky, poky64) has NO asm modules to enable regardless
+    of the flag.
+  - MIPS (`mips`/`mipsel`, linux-mips32) has no runtime capability fallback
+    - asm is compiled unconditionally for the Configure-time ISA. Only
+    trusted here after a real crypto run (`speed aes-128-cbc sha256` under
+    qemu-mipsel).
+
+Every 64-bit Configure target gets `enable-ec_nistp_64_gcc_128` (faster P-256
+ECC via native 128-bit ints), matching the repo's own `openssl-<arch>`
+scripts. The flag doesn't add a separate object file.
+
+`-Os` is applied only to genuinely IoT/router/flash-space-constrained
+targets, not simply "everything cross-compiled". General-purpose 64-bit
+targets that happen to be built cross/emulated but aren't actually
+space-constrained (arm64, alpine-x86-64, freebsd, openbsd) favor speed
+instead, same as x86-64/x86. Per-target -Os status is called out below.
+
+See the per-arch `openssl-*` scripts (path 1) or `targets.sh` (path 2) for
+the exact flag list actually used per target.
+
+
+Actual version per architecture
+--------------------------------
+Verified by inspecting the version string in each committed libcrypto.a
+(`strings libcrypto.a | grep "OpenSSL 1."`) and the object count
+(`ar t libcrypto.a | wc -l`). Keep this table honest: a stale claim here is
+worse than none.
+
+  UPDATED to 1.1.1w, asm ENABLED, run-tested (build+link+run, correct crypto
+  results):
+    linux/x86-64      576 objs. NO -Os (general-purpose native build, favors
+                       speed). AES-NI/SHA-NI/bignum asm, enable-ec_nistp_64_gcc_128.
+    linux/x86          566 objs. NO -Os (same reasoning as x86-64).
+                       aesni-x86.o/sha1-586.o/sha256-586.o/x86cpuid.o
+                       present. Built with `gcc -m32` (native i386 multilib).
+    linux/arm64        564 objs. NO -Os (general-purpose glibc ARM64 build,
+                       ARCHID=26, not IoT/router/restricted-space). asm
+                       ENABLED: aesv8-armx.o/sha1-256-512-armv8.o/ghashv8-armx.o/
+                       chacha-armv8.o/poly1305-armv8.o/armcap.o present, plus
+                       enable-ec_nistp_64_gcc_128. Ran clean under
+                       qemu-aarch64 through the OpenSSL/IO stress-test
+                       sections. Needs a makefile INCDIRS entry for jpeg
+                       headers (KVM=1 -> linux_kvm.c -> jpeglib.h ->
+                       jconfig.h) via the repo's own vendored
+                       lib-jpeg-turbo/includes/.
+
+  UPDATED to 1.1.1w, asm ENABLED via the buildroot, staged but not
+  independently run-tested (build+link+version+object-count+glibc-symbol
+  checks passed via `build.sh`, no qemu run of an actual agent binary):
+    linux/aarch64             564 objs. HAS -Os (ARCHID=32-equivalent, a
+                               legacy-ABI arm64 embedded compat target,
+                               unlike arm64 above - same toolchain/Configure/
+                               object-count otherwise).
+    linux/aarch64-cortex-a53  564 objs. HAS -Os (router/AP chip class,
+                               genuinely restricted-space). musl (OpenWRT SDK
+                               toolchain, dd-wrt-archive). ARCHID=41.
+    linux/alpine-x86-64       576 objs. NO -Os (general-purpose container/
+                               server distro, not IoT/router). musl.
+    linux/openwrt_x86_64      576 objs. HAS -Os (OpenWrt is router firmware
+                               by definition regardless of the x86-64 CPU).
+                               musl (OpenWrt 18.06.9 SDK).
+    bsd/freebsd_x86-64        576 objs. NO -Os (general-purpose server/
+                               desktop OS, not IoT/router). clang cross +
+                               FreeBSD 14.3 sysroot.
+    bsd/openbsd_x86-64        576 objs. NO -Os (same reasoning as FreeBSD).
+                               clang cross + OpenBSD 7.9 sysroot (build_libs
+                               only - the CLI needs crt objects MeshAgent
+                               doesn't use).
+    macos/osx-arm-64          565 objs. NO -Os (general-purpose macOS, not
+                               IoT/router). osxcross clang cross (SDK 26.5,
+                               darwin64-arm64-cc), build_libs only (same
+                               missing-compiler-rt reason as openbsd above).
+                               meshagent_osx-arm-64 (ARCHID=29) links clean
+                               against it via osxcross.
+    macos/osx-x86-64          577 objs. NO -Os (same reasoning as osx-arm-64).
+                               osxcross clang cross (darwin64-x86_64-cc),
+                               build_libs only. meshagent_osx-x86-64
+                               (ARCHID=16) links clean.
+
+  UPDATED to 1.1.1w via the buildroot, asm left at -no-asm (either because
+  the Configure target has none, or - armhf family only - because asm was
+  tried and found broken, see above). ALL of the following HAVE -Os - every
+  one is a genuinely flash/space-constrained embedded/router/SBC target:
+    linux/armhf                553 objs. Raspberry Pi (ARCHID=25) - glibc,
+                                ARMv6+VFPv2 hardfloat. DO NOT TRUST RSA/
+                                SHA-384/512 operations. linux/armhf2 is a
+                                symlink to this directory, not a separate
+                                build: ARCHID=27 ("Raspbian 7 2015" Pi1
+                                target) used a different toolchain, which is
+                                gone/unreproducible; what replaced it built
+                                byte-identical OpenSSL output to armhf, so
+                                the two were consolidated - see targets.sh.
+                                ARCHID=27 itself is still a distinct agent
+                                build (KVM=0 vs KVM=1), it just links this
+                                same archive now.
+    linux/linux-armada370-hf    553 objs. NAS/plug-computer/router SoC
+                                (ARCHID=35) - musl, static, generic ARMv7
+                                Cortex-A9 build (will NOT run on a real
+                                Synology DSM glibc target). Same linux-armv4
+                                Configure as armhf - same caution applies.
+    linux/arm                  553 objs. ARCHID=9 "Official Linux ARM" -
+                                glibc, linux-generic32 (no asm available
+                                regardless). Makefile's PATH_ARM5 toolchain
+                                naming and ILIBCHAIN_GLOBAL_LOCK grouping
+                                (shared only with MIPS/Pogo) mark this as an
+                                ARMv5-class embedded target.
+    linux/arm-linaro            553 objs. Industrial/embedded ARMv7 gear,
+                                2012-2016 generation (ARCHID=24) - glibc
+                                hardfloat, apt arm-linux-gnueabihf-gcc.
+                                linux-generic32 (no asm available regardless).
+    linux/pogo                  553 objs. PogoPlug NAS/plug computer
+                                (ARCHID=13) - glibc, apt arm-linux-gnueabi-gcc
+                                (no "hf" - softfloat), matching real ARMv5TE
+                                softfloat PogoPlug hardware
+                                (-march=armv5te -mfloat-abi=soft). A hardfloat
+                                toolchain here would silently produce a
+                                binary that does not run on real PogoPlug
+                                hardware. linux-generic32 (no asm available
+                                regardless).
+    linux/mips24kc               553 objs. Classic OpenWrt router SoC family
+                                 (ARCHID=28) - musl (OpenWrt ar71xx SDK).
+    linux/mipsel24kc             553 objs. Same family (ARCHID=40) - musl
+                                 (OpenWrt ramips-mt7621 SDK).
+
+  UPDATED to 1.1.1w, asm ENABLED, run-tested with real crypto (not just a
+  clean build). HAS -Os (MIPS routers/NAS boxes - genuinely restricted-space):
+    linux/mips                  556 objs. musl (toolchain-mipsel_mips32_gcc-
+    linux/mipsel                13.1.0_musl), linux-mips32. mips and mipsel
+                                 are byte-identical - one build staged to both
+                                 dirs. meshagent_mips (ARCHID=7) under
+                                 qemu-mipsel: a 12-cycle x 120-key
+                                 ILibSimpleDataStore stress test passed
+                                 clean, 0 SIGBUS. `apps/openssl speed
+                                 aes-128-cbc sha256` also ran clean under
+                                 qemu-mipsel with correct throughput numbers.
+
+  UPDATED to 1.1.1w (replaces a previous "unknown provenance, 1.1.1x-dev"
+  archive built from an unrecoverable git-checkout commit, not a release).
+  HAS -Os (RISC-V64 SBCs/IoT boards, genuinely restricted-space):
+    linux/riscv64                553 objs. musl (bootlin riscv64-lp64d),
+                                 linux64-riscv64, -march=rv64gc -mabi=lp64d,
+                                 no asm, enable-ec_nistp_64_gcc_128. Staged
+                                 via the buildroot, not independently
+                                 run-tested. NOTE: this is a DIFFERENT
+                                 directory from linux/riscv64-generic
+                                 (ARCHID=46, see below).
+
+  Separately added (not part of the buildroot, a new ARCHID). HAS -Os (same
+  RISC-V64 IoT/SBC reasoning as linux/riscv64 above):
+    linux/riscv64-generic        553 objs, no asm, enable-ec_nistp_64_gcc_128.
+                                 Built via apt riscv64-linux-gnu-gcc,
+                                 -march=rv64gc -mabi=lp64d, `Configure
+                                 linux-generic64`. Backs the ARCHID=46
+                                 makefile target (generic rv64gc, no vendor
+                                 extensions). meshagent_riscv64-generic ran
+                                 under plain qemu-riscv64 (-agentHash
+                                 succeeded); 0 `.insn` custom opcodes. No
+                                 standalone openssl-riscv64-generic script
+                                 exists in this directory - built ad-hoc.
+                                 `.github/workflows/build-openssl-libs.yml`'s
+                                 linux-cross matrix has a riscv64-generic row
+                                 (Configure linux-generic64, -march=rv64gc
+                                 -mabi=lp64d) that hasn't actually been run
+                                 yet - this archive is still the local
+                                 ad-hoc build.
+
+  Still not built anywhere (no toolchain available, or deliberately excluded):
+    linux/poky                   1.1.1i, unbuilt. Intel Galileo/Quark X1000,
+                                  EOL since 2016 - no current SDK targets it.
+    linux/poky64                 1.1.1i, unbuilt. No ARCHID references this
+                                  directory at all - orphaned.
+  Not tracked in this table (Windows, .lib files directly under libstatic/):
+    32MT / 32MTd / 64MT / 64MTd / ARM64 / ARM64d
+
+Rebuilding
+----------
+CI: .github/workflows/build-openssl-libs.yml (workflow_dispatch) builds the
+targets reachable from GitHub runners and uploads them staged in this repo's
+directory layout.
+
+Manual, path 1 (portable, glibc-only): ./linux/fetch-openssl, then run the
+matching openssl-<arch> script from inside the extracted source directory.
+
+Manual, path 2 (musl/uClibc/BSD/dd-wrt/macOS targets, any machine with
+$BUILDROOT provisioned):
+  ./provision-buildroot.sh                      # first time only: fill $BUILDROOT
+  openssl/libstatic/build/build.sh <target|all>
+REPO is auto-derived from the script's own location (override with REPO=...
+to stage into a different checkout). Verifies version+object-count+glibc-
+symbol before staging; rejects and stages nothing on any mismatch. Before
+running `build.sh all` (or any target whose targets.sh entry doesn't
+obviously match this repo's own openssl-<arch> recipe for the same dir),
+diff the two - a mismatched Configure target or missing asm override there
+will silently overwrite a better archive with a worse one.
