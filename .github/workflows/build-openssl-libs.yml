@@ -1,6 +1,8 @@
 name: Build OpenSSL static libs
 run-name: Build bundled libcrypto.a/libssl.a archives
 on:
+  push:
+  pull_request:
   workflow_dispatch:
     inputs:
       version:
@@ -12,9 +14,8 @@ on:
         required: true
         default: "cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8"
 
-# Keep in sync with openssl/libstatic/linux/openssl-<arch>: openssl/include is generated
-# from this same config, and a header/archive mismatch is silent ABI drift.
-# linux-x86-64 alone strips -no-asm below, for AES-NI/SHA-NI/bignum throughput.
+# Keep in sync with openssl/libstatic/linux/openssl-<arch> - a header/archive
+# mismatch here is silent ABI drift.
 env:
   OSSL_FLAGS: >-
     no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic
@@ -87,9 +88,8 @@ jobs:
           - { dir: armhf,              target: linux-armv4,     cc: arm-linux-gnueabihf-gcc, pkg: gcc-arm-linux-gnueabihf, asm: "1" }
           - { dir: arm-linaro,         target: linux-generic32, cc: arm-linux-gnueabihf-gcc, pkg: gcc-arm-linux-gnueabihf }
           - { dir: arm,                target: linux-generic32, cc: arm-linux-gnueabi-gcc, pkg: gcc-arm-linux-gnueabi }
-          # pogo (PogoPlug, ARMv5TE softfloat): same toolchain/Configure target as arm above,
-          # just staged to a different dir - apt's arm-linux-gnueabi-gcc defaults to exactly
-          # the -march=armv5te -mfloat-abi=soft ABI real PogoPlug hardware needs.
+          # pogo (PogoPlug, ARMv5TE softfloat): same toolchain as arm above - apt's
+          # arm-linux-gnueabi-gcc defaults to exactly the ABI real PogoPlug hardware needs.
           - { dir: pogo,               target: linux-generic32, cc: arm-linux-gnueabi-gcc, pkg: gcc-arm-linux-gnueabi }
           - { dir: mips,               target: linux-generic32, cc: mips-linux-gnu-gcc, pkg: gcc-mips-linux-gnu }
           - { dir: mipsel,             target: linux-mips32,    cc: mipsel-linux-gnu-gcc, pkg: gcc-mipsel-linux-gnu, asm: "1" }
@@ -256,9 +256,8 @@ jobs:
   armada370-hf:
     runs-on: ubuntu-24.04
     steps:
-      # dd-wrt's toolchain archive is one 4.2GB tar.xz with every current dd-wrt
-      # toolchain; only the arm_cortex-a9 musl one is needed here. The server
-      # aborts mid-transfer often, so this resumes rather than restarting.
+      # dd-wrt's 4.2GB toolchain archive; only arm_cortex-a9 musl is needed.
+      # The server aborts mid-transfer often, so this resumes, not restarts.
       - name: Download dd-wrt toolchain (arm_cortex-a9 musl)
         run: |
           for i in $(seq 1 50); do
@@ -457,6 +456,5 @@ jobs:
           openssl/libstatic/verify
 
 # (arm2 removed, armhf2 now symlinks to armhf - see targets.sh)
-# poky (Intel Galileo/Quark X1000, EOL 2016) intentionally NOT added: needs an
-# i586-poky-linux-uclibc toolchain with no apt package and no stable public
-# URL - see openssl/libstatic/linux/openssl-poky and state.txt.
+# poky (EOL 2016) intentionally not added: no apt package, no stable URL for
+# its i586-poky-linux-uclibc toolchain.

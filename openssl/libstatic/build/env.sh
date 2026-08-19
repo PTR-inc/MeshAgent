@@ -3,13 +3,8 @@
 #
 # Source this, do not execute it:   . openssl/libstatic/build/env.sh
 #
-# Two locations matter here:
-#   - This script's own directory (openssl/libstatic/build/) is git-tracked,
-#     travels with every clone.
-#   - $BUILDROOT (default /opt/buildroot) holds the toolchains/sysroots/
-#     downloads instead - not in the repo, multi-GB. Shared by every
-#     checkout on a machine by default; override BUILDROOT before sourcing
-#     this file to use a different one.
+# This dir is git-tracked; $BUILDROOT (default /opt/buildroot, override
+# before sourcing) holds the multi-GB toolchains/sysroots/downloads instead.
 
 BR_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export BR_SCRIPTS
@@ -31,19 +26,9 @@ export OPENSSL_VERSION=1.1.1w
 export OPENSSL_TARBALL="$BR_DOWNLOADS/openssl-$OPENSSL_VERSION.tar.gz"
 export OPENSSL_SHA256=cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
 
-# The flag set every target shares - kept identical to the repo's own
-# .github/workflows/build-openssl-libs.yml and
-# openssl/libstatic/linux/openssl-<arch> scripts.
-#
-# no-threads was dropped: MeshAgent is a multi-SSL_CTX process, so no-threads
-# is a real correctness bug against it, not just a reproducibility concern.
-#
-# no-afalgeng/no-devcryptoeng were dropped too, but no-engine still disables
-# both via Configure's own disable_cascades table.
-export OSSL_FLAGS="no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib \
-no-zlib-dynamic no-hw no-dso no-shared -no-asm no-rc5 no-idea no-md4 \
-no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 \
-no-engine no-ocsp no-cms"
+# Shared flag set, kept identical to build-openssl-libs.yml. flags.txt is
+# the single source of truth (also read by windows/*.ps1).
+export OSSL_FLAGS="$(tr '\n' ' ' < "$BR_SCRIPTS/flags.txt")"
 
 # --------------------------------------------------------------- sysroots ----
 export SYSROOT_FREEBSD="$BR_SYSROOTS/freebsd-14.3"
@@ -72,9 +57,8 @@ export TC_ARMGNU_HF="$BR_TOOLCHAINS/armgnu-15.2.rel1-arm-none-linux-gnueabihf"
 # -I would shadow musl's headers with glibc's; -idirafter must be used.
 export MUSL_CC="musl-gcc -idirafter /usr/include/x86_64-linux-gnu -idirafter /usr/include"
 
-# Symbols musl and uClibc genuinely lack. Used to prove an archive can link a
-# non-glibc agent. Do NOT add __stack_chk_fail/__stack_chk_guard - both libcs
-# provide them and SSP-enabled toolchains emit one per object.
+# Symbols musl/uClibc genuinely lack, proving an archive can link a non-glibc
+# agent. Do NOT add __stack_chk_fail/__stack_chk_guard - both libcs have them.
 export GLIBC_ONLY_RE='secure_getenv|__isoc99_[a-z]+|_IO_[a-z_]+|gnu_get_libc_version'
 
 br_check() {
