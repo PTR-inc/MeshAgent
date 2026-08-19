@@ -1,8 +1,6 @@
 name: Build OpenSSL static libs
 run-name: Build bundled libcrypto.a/libssl.a archives
 on:
-  push:
-  pull_request:
   workflow_dispatch:
     inputs:
       version:
