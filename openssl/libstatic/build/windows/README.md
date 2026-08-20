@@ -1,7 +1,7 @@
 # OpenSSL Windows build scripts (vendored)
 
 Native-Windows sibling of `openssl/libstatic/build/`'s WSL/Linux buildroot. MSVC's `Configure`
-and `nmake` need a real `vcvarsall.bat` developer environment, not Git Bash.
+and `nmake` need a real MSVC developer environment, not Git Bash.
 
 Recipe matches `.github/workflows/build-openssl-libs.yml`'s `windows` job: same `Configure`
 targets, same shared [`../flags.txt`](../flags.txt) flags, NASM-enabled asm for x86/x64 only, and
@@ -12,13 +12,7 @@ the same post-`Configure` `/MD`→`/MT` makefile patch for a static CRT.
 ```powershell
 . openssl\libstatic\build\windows\env.ps1
 Test-BuildRootWindows                          # confirms VS/perl/nasm/tarball are all present
-
-# fetch+verify the source tarball once (same pin as env.sh / fetch-openssl)
-New-Item -ItemType Directory -Force -Path $env:BR_DOWNLOADS | Out-Null
-Invoke-WebRequest -Uri $script:OpenSslUrl -OutFile $script:OpenSslTarball
-if ((Get-FileHash $script:OpenSslTarball -Algorithm SHA256).Hash.ToLower() -ne $script:OpenSslSha256) {
-    throw "checksum mismatch - delete $($script:OpenSslTarball) and retry"
-}
+Install-BuildRootWindows                       # fetches whatever that reported missing
 
 openssl\libstatic\build\windows\build.ps1 x64
 openssl\libstatic\build\windows\build.ps1 all
@@ -27,16 +21,57 @@ openssl\libstatic\build\windows\verify.ps1      # read-only report over whatever
 
 ## Prerequisites
 
-- Visual Studio with the **MSVC v143 - VS 2022 C++ x64/x86 build tools** component (required), and
-  **MSVC v143 - VS 2022 C++ ARM64 build tools** (only if building the `arm64`/`arm64-debug` targets).
-  `Test-BuildRootWindows` checks both.
+`Install-BuildRootWindows` provisions everything below except the MSVC toolsets. A bare call does
+the three that need no admin rights - source tarball, perl and NASM - each pinned to a fixed
+version, URL and SHA-256 and unpacked under `$BUILDROOT\tools`. Nothing is installed system-wide,
+put on `PATH`, or written outside `$BUILDROOT`, so undoing it is `Remove-Item -Recurse $BUILDROOT`.
+
+```powershell
+Install-BuildRootWindows                       # tarball + perl + nasm
+Install-BuildRootWindows -Nasm                 # just one of them
+Install-BuildRootWindows -Force                # re-fetch and re-unpack even if present
+Install-BuildRootWindows -VsComponents         # adds the missing MSVC components - prompts, needs admin
+Install-BuildRootWindows -BuildRoot D:\br      # somewhere other than the default
+```
+
+It asks where to put the buildroot before writing anything, defaulting to the current `$BUILDROOT`
+(under the user profile unless overridden) - press Enter to take it. A typed path may be relative
+or contain `%VARS%`/`~`; it is expanded and made absolute. `-BuildRoot` answers the question up
+front, and `-Force` or a non-interactive session takes the default without asking. The answer
+applies to that session only: set `$env:BUILDROOT` before dot-sourcing `env.ps1` to make it stick.
+
+`-VsComponents` is never implied by a bare call: it shells out to the Visual Studio installer
+elevated, so it asks first and prints the exact `setup.exe modify` command it intends to run. That
+command uses `--passive --norestart`, so the installer shows progress and proceeds without further
+interaction (`--norestart` alone is rejected - the installer answers with its usage dialog). It
+adds only what is missing, so re-running it is a no-op rather than another trip through the
+installer, and because setup.exe can exit before its child finishes, a toolset that is not visible
+immediately afterwards means "not done yet" rather than a failed install. Component ids come from the installer's own catalog of what the product offers, which
+lists them whether or not they are installed - so this still works when the C++ workload has been
+removed outright, which is exactly when it is needed. In a non-interactive session it prints the
+command and stops rather than elevating unasked; pass `-Force` to skip the prompt.
+
+
+- Visual Studio with the **C++ x64/x86 build tools** component (required), and the **C++ ARM64
+  build tools** (only if building the `arm64`/`arm64-debug` targets). On VS 2022 these are named
+  *MSVC v143 - VS 2022 C++ x64/x86 build tools* and *... ARM64 build tools*.
+  `Test-BuildRootWindows` reports the toolset version it picked for each target.
+- A **Windows SDK** component. The `C++ ... build tools` components do *not* include one, and an
+  install without it gets a working `cl.exe` that then fails on `Cannot open include file:
+  'stdlib.h'`. `Test-BuildRootWindows` checks for it per target.
+- VS 2017-2022 and VS 2026 (v18) are both supported. `env.ps1` handles the differences: it drives
+  `vcvarsall.bat` when present and falls back to `Common7\Tools\VsDevCmd.bat` when it is not (seen
+  on a v18 install carrying only versioned v143 toolset packages), matches the vswhere component id
+  whether or not it is version-stamped, and pins every target to a toolset verified complete on
+  disk (`-vcvars_ver`) rather than trusting the default, which has pointed at a compiler-less
+  toolset folder.
 - `perl.exe` on `PATH` - Git for Windows ships one (`C:\Program Files\Git\usr\bin\perl.exe`);
   Strawberry Perl (what CI uses, via `choco install strawberryperl`) also works.
 - NASM, for asm-enabled x86/x64 builds (AES-NI/SHA-NI/bignum throughput). Without it, `build.ps1`
   falls back to `-no-asm` for those targets automatically. Install with `choco install nasm` or
   from <https://www.nasm.us/> - `Get-NasmPath` in `env.ps1` checks `PATH`, then
   `%LOCALAPPDATA%\bin\NASM\nasm.exe` (the non-elevated chocolatey install location).
-- ARM64 targets cross-compile from an x64 host (`vcvarsall.bat x64_arm64`) - no ARM64 machine needed.
+- ARM64 targets cross-compile from an x64 host (`x64_arm64`) - no ARM64 machine needed.
 
 ## What gets staged, and where
 

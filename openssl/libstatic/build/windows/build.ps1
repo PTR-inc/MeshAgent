@@ -39,8 +39,8 @@ if (-not (Test-Path $script:OpenSslTarball)) {
     exit 1
 }
 
-$vcvarsall = Get-VcVarsAllPath
-if (-not $vcvarsall) { Write-Host "MISSING: vcvarsall.bat - no usable Visual Studio install found"; exit 1 }
+$vcEnv = Get-VcEnvScript
+if (-not $vcEnv) { Write-Host "MISSING: no usable Visual Studio install found (need vcvarsall.bat or VsDevCmd.bat)"; exit 1 }
 
 $nasm = Get-NasmPath
 $nasmDir = if ($nasm) { Split-Path -Parent $nasm } else { $null }
@@ -49,11 +49,20 @@ $perl = Get-PerlPath
 if (-not $perl) { Write-Host "MISSING: perl.exe - Configure cannot run without it"; exit 1 }
 $perlDir = Split-Path -Parent $perl
 
-# Pin to whichever toolset has a complete arm64 lib set - see
-# Get-Arm64ToolsetVersion.
-$arm64ToolsetVer = Get-Arm64ToolsetVersion
-if (($list | Where-Object { $_.VcVars -eq 'x64_arm64' }) -and -not $arm64ToolsetVer) {
-    Write-Host "WARNING: no installed MSVC toolset has a complete arm64 lib set (setargv.obj missing everywhere) - arm64 targets will likely fail to link apps\openssl.exe"
+# Refuse up front rather than after a Configure run: an incomplete toolset for
+# a target only shows up as a link failure deep into nmake. See
+# Get-VcToolsetVersion.
+foreach ($vcArch in ($list.VcVars | Select-Object -Unique)) {
+    if (-not (Get-VcToolsetVersion -Arch $vcArch)) {
+        Write-Host "MISSING: no complete MSVC toolset for $vcArch - see README.md for the required VS components"
+        exit 1
+    }
+    # A toolset without an SDK compiles nothing: cl.exe runs, then fails on
+    # stdlib.h. Catch it here rather than 40 lines into nmake output.
+    if (-not (Get-WindowsSdkVersion -Arch $vcArch)) {
+        Write-Host "MISSING: no Windows SDK for $vcArch - the VC.Tools components do not include one (Install-BuildRootWindows -VsComponents)"
+        exit 1
+    }
 }
 
 New-Item -ItemType Directory -Force -Path $env:BR_WORK | Out-Null
@@ -87,15 +96,15 @@ foreach ($t in $list) {
     $mdPattern = if ($t.Debug) { '/MDd\b' } else { '/MD\b' }
     $mtReplacement = if ($t.Debug) { '/MTd' } else { '/MT' }
 
-    # One cmd.exe session per target - vcvarsall.bat only mutates its own
+    # One cmd.exe session per target - the vcvars script only mutates its own
     # process. Extend PATH before calling it, so its own vswhere.exe call finds it.
     $vswhereDir = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
     $extraPath = @($nasmDir, $perlDir, $vswhereDir) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
     $cmdLines = @()
     if ($extraPath) { $cmdLines += "set `"PATH=$($extraPath -join ';');%PATH%`"" }
-    $vcvarsVerArg = if ($t.VcVars -eq 'x64_arm64' -and $arm64ToolsetVer) { "-vcvars_ver=$arm64ToolsetVer" } else { '' }
+    $vcEnvCall = Get-VcEnvCall -Arch $t.VcVars
     $cmdLines += @(
-        "call `"$vcvarsall`" $($t.VcVars) $vcvarsVerArg >nul"
+        "$vcEnvCall >nul"
         "if errorlevel 1 exit /b 1"
     )
     $cmdLines += @(
@@ -134,7 +143,7 @@ foreach ($t in $list) {
     $listCmdLines = @()
     if ($extraPath) { $listCmdLines += "set `"PATH=$($extraPath -join ';');%PATH%`"" }
     $listCmdLines += @(
-        "call `"$vcvarsall`" $($t.VcVars) $vcvarsVerArg >nul"
+        "$vcEnvCall >nul"
         "lib /list `"$libcrypto`""
     )
     $listCmdLines -join "`r`n" | Set-Content -Path $listCmdFile -Encoding ASCII
