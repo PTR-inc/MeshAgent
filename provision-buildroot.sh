@@ -1,23 +1,12 @@
 #!/bin/bash
 # Provision $BUILDROOT: download+verify+extract every toolchain/sysroot/source
-# that CAN be fetched from a stable public URL, and print exact manual
-# instructions for the handful that genuinely can't (see
-# openssl/libstatic/build/README.md's "Sources" section - this script follows
-# that table component for component).
-#
-# NOT an OpenSSL-only tool: $BUILDROOT's toolchains are the same ones several
-# makefile ARCHIDs need to cross-compile the AGENT itself (PATH_MIPS24KC/
-# PATH_MIPSEL24KC etc. in the makefile) - this script lives at the repo root,
-# not under openssl/, for exactly that reason. See the "makefile wiring"
-# section below for which toolchains it symlinks into ../ToolChains/ (the
-# makefile's own expected location) after fetching them.
+# fetchable from a stable public URL; prints manual instructions for the rest
+# (see openssl/libstatic/build/README.md's "Sources"). Also used by the
+# makefile itself (PATH_MIPS24KC/PATH_MIPSEL24KC ARCHIDs), which is why this
+# lives at the repo root instead of under openssl/. Safe to re-run.
 #
 #   ./provision-buildroot.sh                # everything fetchable
-#   ./provision-buildroot.sh openssl freebsd # just these components
 #   ./provision-buildroot.sh list            # show status, fetch nothing
-#   BUILDROOT=/some/other/buildroot ./provision-buildroot.sh
-#
-# Safe to re-run: an already-present component is skipped, not re-downloaded.
 . "$(dirname "$(readlink -f "$0")")/openssl/libstatic/build/env.sh"
 
 mkdir -p "$BR_DOWNLOADS" "$BR_SYSROOTS" "$BR_TOOLCHAINS"
@@ -26,22 +15,39 @@ STATUS_LOG="$(mktemp)"
 trap 'rm -f "$STATUS_LOG"' EXIT
 log_status() { echo "$1: $2" | tee -a "$STATUS_LOG" >&2; }
 
-# download URL sha256 dest_file
-# Skips the download if dest_file already exists and matches sha256 (or no
-# sha256 was given, in which case existence alone is enough).
+# True if dest reads clean as an archive (xz/gzip's own checksum) - catches a
+# truncated download that a checksum-less fetch can't. Unknown ext = pass.
+archive_ok() {
+    case "$1" in
+        *.tar.xz|*.txz|*.xz)  xz -t "$1"    >/dev/null 2>&1 ;;
+        *.tar.gz|*.tgz|*.gz)  gzip -t "$1"   >/dev/null 2>&1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# download URL sha256 dest_file - skips if dest already matches sha256, or
+# (no sha256 published) passes archive_ok; else deleted and re-fetched.
 fetch() {
     local url="$1" sha="$2" dest="$3"
     if [ -f "$dest" ]; then
-        if [ -z "$sha" ] || echo "$sha  $dest" | sha256sum -c - >/dev/null 2>&1; then
+        if [ -n "$sha" ]; then
+            if echo "$sha  $dest" | sha256sum -c - >/dev/null 2>&1; then
+                return 0
+            fi
+            echo "  $dest exists but fails checksum - re-downloading"
+        elif archive_ok "$dest"; then
             return 0
+        else
+            echo "  $dest exists but fails archive integrity check - re-downloading"
         fi
-        echo "  $dest exists but fails checksum - re-downloading"
         rm -f "$dest"
     fi
     echo "  downloading $url"
     curl -sSL --fail -o "$dest" "$url" || { echo "  FETCH FAILED: $url" >&2; return 1; }
     if [ -n "$sha" ]; then
         echo "$sha  $dest" | sha256sum -c - || { echo "  CHECKSUM MISMATCH: $dest" >&2; rm -f "$dest"; return 1; }
+    elif ! archive_ok "$dest"; then
+        echo "  CORRUPT ARCHIVE (failed integrity check): $dest" >&2; rm -f "$dest"; return 1
     fi
 }
 
@@ -53,26 +59,31 @@ p_openssl() {
         && log_status openssl "OK" || { log_status openssl "FAILED"; return 1; }
 }
 
+# True if $1 (a cross-gcc) can actually compile, not just exist - a truncated
+# tarball can extract a working bin/*-gcc wrapper while cc1 is still empty.
+toolchain_smoke_ok() {
+    [ -x "$1" ] || return 1
+    echo 'typedef int x;' | "$1" -c -x c -o /dev/null - >/dev/null 2>&1
+}
+
 # -------------------------------------------------------------- OpenWrt SDKs -
-# No published per-tarball checksum for this old (18.06.9) release - see
-# README.md. Verified by extraction sanity (expected CC binary present)
-# instead of a hash.
+# No published checksum for 18.06.9 - verified via toolchain_smoke_ok instead.
 p_openwrt() {
     local name="$1" wtarget="$2" wsubtarget="$3" destvar="$4" ccbin="$5"
     local file="openwrt-sdk-18.06.9-${wtarget}-${wsubtarget}_gcc-7.3.0_musl.Linux-x86_64.tar.xz"
     local tarball="$BR_DOWNLOADS/$file"
     local destdir="${!destvar}"
-    [ -x "$destdir/bin/$ccbin" ] && { log_status "$name" "already present"; return 0; }
+    toolchain_smoke_ok "$destdir/bin/$ccbin" && { log_status "$name" "already present"; return 0; }
+    [ -e "$destdir" ] && { echo "  $destdir present but fails a smoke compile - re-fetching" >&2; rm -rf "$destdir"; }
     fetch "https://downloads.openwrt.org/releases/18.06.9/targets/$wtarget/$wsubtarget/$file" "" "$tarball" || { log_status "$name" "FAILED (download)"; return 1; }
     mkdir -p "$BR_TOOLCHAINS" && tar xf "$tarball" -C "$BR_TOOLCHAINS" || { log_status "$name" "FAILED (extract)"; return 1; }
-    [ -x "$destdir/bin/$ccbin" ] \
+    toolchain_smoke_ok "$destdir/bin/$ccbin" \
         && log_status "$name" "OK" \
-        || { log_status "$name" "FAILED (extracted, but $destdir/bin/$ccbin not found - archive layout changed?)"; return 1; }
+        || { log_status "$name" "FAILED (extracted, but $destdir/bin/$ccbin fails a smoke compile - archive layout changed, or extraction incomplete?)"; return 1; }
 }
 
 # ------------------------------------------------------------ bootlin toolchains
-# Bootlin does publish a per-tarball .sha256 next to the download, despite
-# README.md's "no stable checksum" caveat. Fetched and pinned here.
+# Bootlin does publish a per-tarball .sha256 (unlike most others) - pinned here.
 p_bootlin() {
     local name="$1" arch="$2" tag="$3" destvar="$4"
     local file="$arch--$tag.tar.xz"
@@ -88,10 +99,7 @@ p_bootlin() {
 }
 
 # ------------------------------------------------------------- Arm GNU toolchain
-# Unused by any target as of 2026-08-18 (see targets.sh/README.md) - fetched
-# anyway since it's cheap and README lists it as part of the layout. Arm's own
-# release archive top-level dir doesn't match the name env.sh expects
-# (TC_ARMGNU_HF), so it's renamed after extraction.
+# Unused by any target - fetched per README's layout, renamed to match env.sh.
 p_armgnu() {
     [ -d "$TC_ARMGNU_HF" ] && { log_status armgnu "already present"; return 0; }
     local file="arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-linux-gnueabihf.tar.xz"
@@ -104,8 +112,7 @@ p_armgnu() {
 }
 
 # --------------------------------------------------------------- BSD sysroots
-# Only usr/include + usr/lib are pulled out of the base set - that's all
-# Configure/clang need to cross-compile against (see README.md).
+# usr/include + usr/lib + lib/ - usr/lib's libfoo.so symlinks need that last one.
 p_freebsd() {
     [ -d "$SYSROOT_FREEBSD/usr/include" ] && { log_status freebsd "already present"; return 0; }
     local rel="https://download.freebsd.org/releases/amd64/amd64/14.3-RELEASE"
@@ -113,29 +120,31 @@ p_freebsd() {
     [ -n "$sha" ] || { log_status freebsd "FAILED (couldn't fetch MANIFEST)"; return 1; }
     fetch "$rel/base.txz" "$sha" "$BR_DOWNLOADS/freebsd-14.3-base.txz" || { log_status freebsd "FAILED (download)"; return 1; }
     mkdir -p "$SYSROOT_FREEBSD"
-    tar xf "$BR_DOWNLOADS/freebsd-14.3-base.txz" -C "$SYSROOT_FREEBSD" ./usr/include ./usr/lib \
+    tar xf "$BR_DOWNLOADS/freebsd-14.3-base.txz" -C "$SYSROOT_FREEBSD" ./usr/include ./usr/lib ./lib \
         && log_status freebsd "OK" \
         || { log_status freebsd "FAILED (extract)"; return 1; }
 }
 
+# OpenBSD splits base79.tgz (runtime) from comp79.tgz (headers/crt objects) -
+# base79 alone has an EMPTY usr/include, so both sets are fetched here.
 p_openbsd() {
     [ -d "$SYSROOT_OPENBSD/usr/include" ] && { log_status openbsd "already present"; return 0; }
     local rel="https://cdn.openbsd.org/pub/OpenBSD/7.9/amd64"
-    local sha; sha=$(curl -sSL --fail "$rel/SHA256" | awk '/^SHA256 \(base79.tgz\)/{print $4}')
-    [ -n "$sha" ] || { log_status openbsd "FAILED (couldn't fetch SHA256 manifest)"; return 1; }
-    fetch "$rel/base79.tgz" "$sha" "$BR_DOWNLOADS/openbsd-7.9-base79.tgz" || { log_status openbsd "FAILED (download)"; return 1; }
+    local sha_manifest; sha_manifest=$(curl -sSL --fail "$rel/SHA256") || { log_status openbsd "FAILED (couldn't fetch SHA256 manifest)"; return 1; }
+    local sha_base; sha_base=$(echo "$sha_manifest" | awk '/^SHA256 \(base79.tgz\)/{print $4}')
+    local sha_comp; sha_comp=$(echo "$sha_manifest" | awk '/^SHA256 \(comp79.tgz\)/{print $4}')
+    [ -n "$sha_base" ] && [ -n "$sha_comp" ] || { log_status openbsd "FAILED (couldn't parse SHA256 manifest)"; return 1; }
+    fetch "$rel/base79.tgz" "$sha_base" "$BR_DOWNLOADS/openbsd-7.9-base79.tgz" || { log_status openbsd "FAILED (download base)"; return 1; }
+    fetch "$rel/comp79.tgz" "$sha_comp" "$BR_DOWNLOADS/openbsd-7.9-comp79.tgz" || { log_status openbsd "FAILED (download comp)"; return 1; }
     mkdir -p "$SYSROOT_OPENBSD"
     tar xzf "$BR_DOWNLOADS/openbsd-7.9-base79.tgz" -C "$SYSROOT_OPENBSD" ./usr/include ./usr/lib \
+        && tar xzf "$BR_DOWNLOADS/openbsd-7.9-comp79.tgz" -C "$SYSROOT_OPENBSD" ./usr/include ./usr/lib \
         && log_status openbsd "OK" \
         || { log_status openbsd "FAILED (extract)"; return 1; }
 }
 
 # ------------------------------------------------------------ dd-wrt toolchains
-# dd-wrt publishes one 4.2GB tar.xz with every current toolchain, including
-# the 3 this buildroot needs - top-level dir names match env.sh's TC_* vars
-# exactly (verified by listing). No published checksum. The download server
-# aborts mid-transfer often - resumed with curl -C -/--http1.1 rather than
-# restarted from scratch each time.
+# One 4.2GB tar.xz, no checksum; server aborts often, so downloads resume.
 p_ddwrt() {
     [ -d "$TC_MIPS32EL_MUSL" ] && [ -d "$TC_AARCH64_CORTEXA53_MUSL" ] && [ -d "$TC_ARMV7_CORTEXA9_MUSL" ] \
         && { log_status ddwrt "already present"; return 0; }
@@ -155,24 +164,41 @@ p_ddwrt() {
 }
 
 # ---------------------------------------------------------- not fetchable ----
-# No stable public URL for these (README.md's "Sources" section) - genuinely
-# bring-your-own. Reported, never attempted.
+# No stable public URL for these - genuinely bring-your-own, reported only.
+
+# apt package list, shared between check_host_deps's message and print_manual.
+APT_PACKAGES="gcc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi gcc-arm-linux-gnueabihf gcc-mips-linux-gnu gcc-mipsel-linux-gnu gcc-riscv64-linux-gnu libc6-dev-i386 lib32gcc-14-dev musl-tools clang lld make curl tar xz-utils"
+
 print_manual() {
     echo
     echo "NOT fetchable by this script - bring your own (see README.md 'Sources'):"
     [ -d "$OSXCROSS_BIN" ]            || echo "  - $OSXCROSS_BIN  (osxcross, built from an Apple-distributed Xcode .xip)"
     echo
     echo "Host apt prerequisites (not installed by this script - run manually):"
-    echo "  sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \\"
-    echo "    gcc-arm-linux-gnueabihf gcc-mips-linux-gnu gcc-mipsel-linux-gnu \\"
-    echo "    gcc-riscv64-linux-gnu gcc-multilib musl-tools clang lld"
+    echo "  sudo apt-get install -y $APT_PACKAGES"
+    echo "  (NOT gcc-multilib - on Debian trixie/Ubuntu 24.10+ that metapackage's"
+    echo "  gcc-14-multilib dependency Conflicts with every gcc-14-<target>-linux-gnu"
+    echo "  cross package. libc6-dev-i386 + lib32gcc-14-dev are the same underlying"
+    echo "  32-bit runtime gcc-multilib pulls in - 'gcc -m32' works identically -"
+    echo "  without the metapackage-level conflict.)"
+}
+
+# Needs curl (fetch) + tar/xz (extract) - checked upfront instead of failing
+# halfway through a component with a bare "command not found".
+check_host_deps() {
+    local missing="" cmd
+    for cmd in curl tar xz; do
+        command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
+    done
+    [ -z "$missing" ] && return 0
+    echo "ERROR: missing required command(s):$missing" >&2
+    echo >&2
+    print_manual >&2
+    exit 1
 }
 
 # ---------------------------------------------------------- makefile wiring -
-# The makefile expects two of these OpenWrt toolchains at ../ToolChains/<name>/
-# (PATH_MIPS24KC/PATH_MIPSEL24KC) - symlinked in for `make linux ARCHID=28`/
-# `ARCHID=40`. The rest of the PATH_* vars aren't wired: different names/
-# versions, or no public URL.
+# Symlinks the 2 OpenWrt toolchains `make ARCHID=28`/`40` need; others aren't.
 wire_makefile_toolchains() {
     local tc_dir; tc_dir="$(cd "$REPO/.." && pwd)/ToolChains"
     mkdir -p "$tc_dir"
@@ -188,6 +214,8 @@ wire_makefile_toolchains() {
 }
 
 # --------------------------------------------------------------------- main --
+check_host_deps
+
 ALL="openssl openwrt-mips24kc openwrt-mipsel24kc openwrt-openwrt_x86_64 bootlin-mips32el bootlin-riscv64 armgnu freebsd openbsd ddwrt"
 
 run_one() {

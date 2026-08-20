@@ -79,13 +79,23 @@ exactly what's still missing and how to get it at the end of every run.
 ### Host prerequisites (apt, Debian/Ubuntu)
 
 ```
-gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi gcc-arm-linux-gnueabihf \
+gcc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi gcc-arm-linux-gnueabihf \
 gcc-mips-linux-gnu gcc-mipsel-linux-gnu gcc-riscv64-linux-gnu \
-gcc-multilib musl-tools clang lld
+libc6-dev-i386 lib32gcc-14-dev musl-tools clang lld make curl tar xz-utils
 ```
 
 These are used directly by name (`aarch64-linux-gnu-gcc`, `arm-linux-gnueabi-gcc`,
 `arm-linux-gnueabihf-gcc`, `gcc -m32`, `musl-gcc`, `clang`) — no `$BUILDROOT` entry needed for them.
+`curl`/`tar`/`xz` are what `provision-buildroot.sh` itself needs to fetch and extract
+toolchains; it checks for them upfront and prints this same list if any are missing.
+
+Note: not `gcc-multilib`. On Debian trixie / Ubuntu 24.10+, `gcc-multilib`'s
+`gcc-14-multilib` dependency carries a blanket `Conflicts:` against every
+`gcc-14-<target>-linux-gnu` cross package (it's really just a dummy package
+depending on `gcc-14`, `libc6-dev-i386` and `lib32gcc-14-dev` — see
+`apt-cache show gcc-14-multilib`). Installing those two packages directly
+gives `gcc -m32` the same 32-bit runtime without the metapackage-level
+conflict, so it coexists fine with the cross compilers above.
 
 ### `$BUILDROOT` layout
 
