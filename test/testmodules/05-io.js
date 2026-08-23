@@ -63,27 +63,49 @@ exports.run = function (check, deepEqual, done) {
     var streamPayload = Buffer.alloc(65536);
     for (var si = 0; si < streamPayload.length; ++si) { streamPayload.writeUInt8((si * 7) & 0xFF, si); }
 
-    var ws = fs.createWriteStream(streamPath);
-    ws.on('finish', function () {
-        var chunks = '';
-        var rs = fs.createReadStream(streamPath);
-        rs.on('data', function (chunk) { chunks += chunk.toString('hex'); });
-        rs.on('end', function () {
-            check('IO', chunks == streamPayload.toString('hex'), 'streaming read-back did not match the streamed write');
-            try { fs.unlinkSync(streamPath); } catch (e) { }
+    // Round-trips the payload twice: once with the default flags and once with explicit binary
+    // flags. On Windows the defaults are "w"/"r", i.e. text mode - see meshagent-todo.md #0m.
+    // Each round-trip gets its own file: Windows refuses to unlink a file whose read stream is
+    // still open, so reusing one path makes the next createWriteStream fail with a sharing error.
+    var streamFiles = [];
+    function streamRoundTrip(label, path, wopts, ropts, next) {
+        streamFiles.push(path);
+        try { if (fs.existsSync(path)) { fs.unlinkSync(path); } } catch (e) { }
+        var ws = wopts == null ? fs.createWriteStream(path) : fs.createWriteStream(path, wopts);
+        ws.on('finish', function () {
+            var chunks = '';
+            var rs = ropts == null ? fs.createReadStream(path) : fs.createReadStream(path, ropts);
+            rs.on('data', function (chunk) { chunks += chunk.toString('hex'); });
+            rs.on('end', function () {
+                check('IO', chunks == streamPayload.toString('hex'),
+                    'streaming read-back did not match the streamed write [' + label + '] - read ' +
+                    (chunks.length / 2) + ' of ' + streamPayload.length + ' bytes');
+                next();
+            });
+            // Unlike Node, attaching a 'data' listener alone does not start the flow here -
+            // resume() must be called after listeners are attached, or 'data'/'end' never fire.
+            rs.resume();
+        });
+        ws.end(streamPayload);
+    }
+
+    streamRoundTrip('default flags', streamPath + '.1', null, null, function () {
+        streamRoundTrip('binary flags', streamPath + '.2', { flags: 'wb' }, { flags: 'rb' }, function () {
+            for (var fi = 0; fi < streamFiles.length; ++fi) {
+                try { fs.unlinkSync(streamFiles[fi]); } catch (e) { }
+            }
             testChildProcess(done);
         });
-        // Unlike Node, attaching a 'data' listener alone does not start the flow here -
-        // resume() must be called after listeners are attached, or 'data'/'end' never fire.
-        rs.resume();
     });
-    ws.end(streamPayload);
 
     function testChildProcess(next) {
         try {
             var cp = require('child_process');
             var isWin = process.platform == 'win32';
-            var child = isWin ? cp.execFile('cmd.exe', ['cmd.exe']) : cp.execFile('/bin/sh', ['sh']);
+            // Windows CreateProcessW gets lpApplicationName, which does not search PATH - a bare
+            // 'cmd.exe' fails with "Could not exec". Use the full path from %ComSpec%.
+            var shell = isWin ? (process.env['ComSpec'] || 'C:\\Windows\\System32\\cmd.exe') : '/bin/sh';
+            var child = cp.execFile(shell, [isWin ? 'cmd.exe' : 'sh']);
             child.stdout.str = '';
             child.stdout.on('data', function (chunk) { this.str += chunk.toString(); });
             child.stdin.write(isWin ? 'echo STRESS_TEST_MARKER_12345\r\nexit\r\n' : 'echo STRESS_TEST_MARKER_12345\nexit\n');

@@ -606,6 +606,13 @@ BSDSSL =
 INCDIRS = -I. -I/usr/include/openssl -Imicrostack -Imicroscript -Imeshcore -Imeshconsole
 endif
 
+# ASAN=1: AddressSanitizer build, output gets an _asan suffix and keeps its symbols.
+ifeq ($(ASAN),1)
+EXENAME2 := $(EXENAME2)_asan
+CFLAGS += -fsanitize=address -fsanitize-recover=address -fno-omit-frame-pointer -g
+LDEXTRA += -fsanitize=address
+endif
+
 ifeq ($(DEBUG),1)
 # Debug Build, include Symbols
 CFLAGS += -g -D_DEBUG 
@@ -615,6 +622,11 @@ else
 CFLAGS += -O2
 STRIP += ./$(EXENAME)_$(ARCHNAME)$(EXENAME2)
 SYMBOLCP = cp ./$(EXENAME)_$(ARCHNAME)$(EXENAME2) ./DEBUG_$(EXENAME)_$(ARCHNAME)$(EXENAME2)
+endif
+
+# Stripping an ASan build throws away the symbols its reports are made of.
+ifeq ($(ASAN),1)
+STRIP = $(NOECHO) $(NOOP)
 endif
 
 ifeq ($(SSL_TRACE),1)

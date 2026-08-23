@@ -59,6 +59,24 @@ limitations under the License.
 var RESULTS = { pass: 0, fail: 0 };
 var FAILURES = [];
 
+// Options, accepted in either invocation form (argv is empty under -b64exec, so both have defaults):
+//   --watchdog=<ms>        overall watchdog, default 10000 (raise it under valgrind - ~20x slower)
+//   --exclude=a,b          skip testmodules whose filename contains any of these substrings
+//                          (e.g. --exclude=06-tls to skip the known-crashing TLS section)
+var OPT_WATCHDOG = 10000;
+var OPT_EXCLUDE = [];
+(function () {
+    var av = process.argv || [];
+    for (var i = 0; i < av.length; ++i) {
+        var a = ('' + av[i]);
+        if (a.indexOf('--watchdog=') == 0) { OPT_WATCHDOG = parseInt(a.substring(11)) || OPT_WATCHDOG; }
+        else if (a.indexOf('--exclude=') == 0) {
+            var parts = a.substring(10).split(',');
+            for (var j = 0; j < parts.length; ++j) { if (parts[j] != '') { OPT_EXCLUDE.push(parts[j]); } }
+        }
+    }
+})();
+
 // NB: never name a local 'keys' - Object.prototype.keys is a readonly polyfill, and a top-level
 // 'var keys = ...' silently no-ops (see meshagent-todo.md #0b). Harmless inside a function, but
 // kept as a blanket convention here for safety.
@@ -113,7 +131,10 @@ function runAll(sections, done) {
     step();
 }
 
+var FINISHED = false;
 function finish() {
+    if (FINISHED) { return; }
+    FINISHED = true;
     console.log('');
     console.log('==================================================');
     console.log('TOTAL: ' + RESULTS.pass + ' passed, ' + RESULTS.fail + ' failed (of ' + (RESULTS.pass + RESULTS.fail) + ')');
@@ -146,12 +167,24 @@ var TESTMODULES_DIR = 'test/testmodules';
 function loadSections() {
     var fs = require('fs');
     var files = fs.readdirSync(TESTMODULES_DIR).filter(function (f) { return (/\.js$/i).test(f); }).sort();
+    if (OPT_EXCLUDE.length > 0) {
+        files = files.filter(function (f) {
+            for (var x = 0; x < OPT_EXCLUDE.length; ++x) {
+                if (f.indexOf(OPT_EXCLUDE[x]) >= 0) { console.log('SKIP ' + f + ' (--exclude)'); return false; }
+            }
+            return true;
+        });
+    }
     if (files.length == 0) { console.log('WARNING: no test modules found under ' + TESTMODULES_DIR); }
 
     var sections = [];
     for (var i = 0; i < files.length; ++i) {
         var modName = files[i].replace(/\.js$/i, '');
-        var mod = require('./testmodules/' + modName);
+        // require() resolves relative to the cwd (repo root), not to this file - try the
+        // cwd-relative form first, fall back to the file-relative one.
+        var mod = null;
+        try { mod = require('./' + TESTMODULES_DIR + '/' + modName); }
+        catch (e) { mod = require('./testmodules/' + modName); }
         (function (mod, fileName) {
             sections.push(wrapSection(mod.name || fileName, function (done) {
                 mod.run(check, deepEqual, done);
@@ -165,8 +198,22 @@ function loadSections() {
 // run everything
 // ---------------------------------------------------------------------------------------------
 
-armWatchdog(120000);
-runAll(loadSections(), function () {
-    clearTimeout(watchdogTimer);
+armWatchdog(OPT_WATCHDOG);
+
+// A throw out of loadSections() would otherwise unwind silently and leave the process idling
+// until the watchdog - report it and exit instead.
+var SECTIONS = [];
+try { SECTIONS = loadSections(); }
+catch (e) {
+    RESULTS.fail++;
+    var loadMsg = 'EXCEPTION loading test modules from ' + TESTMODULES_DIR + ': ' + (e && e.message ? e.message : e);
+    FAILURES.push('[loader] ' + loadMsg);
+    console.log('FAIL [loader] ' + loadMsg);
+    finish();
+}
+
+runAll(SECTIONS, function () {
+    // clearTimeout() on an already-elapsed timer throws 'Invalid Parameter' here (Node no-ops).
+    try { clearTimeout(watchdogTimer); } catch (e) { }
     finish();
 });

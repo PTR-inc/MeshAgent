@@ -67,7 +67,7 @@ exports.run = function (check, deepEqual, done) {
             failCount++;
             console.log('  attempt ' + (attempt + 1) + '/' + TLS_ATTEMPTS + ': TIMEOUT (likely meshagent-todo.md #2)');
             attemptDone();
-        }, 8000);
+        }, 3000);
 
         var s = tls.connect({ host: '127.0.0.1', port: port, rejectUnauthorized: false }, function () {
             if (settled) { return; }

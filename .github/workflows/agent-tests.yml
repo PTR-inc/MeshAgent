@@ -1,0 +1,169 @@
+name: Agent Tests
+run-name: Test MeshAgent (stress / self-test / valgrind)
+
+# CI wrapper around test/test-agent.sh (--ci adds ::group:: folding, annotations, a job summary).
+# The stress test's TLS section is expected to crash - meshagent-todo.md #1 - so it is reported
+# as KNOWN, not a failure. Run manually with strict=true to make it fatal, e.g. to confirm a fix.
+
+on:
+  # push:
+  # pull_request:
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: 'Fail the job on the known TLS crash (meshagent-todo.md #1)'
+        type: boolean
+        default: false
+      qemu_cross:
+        description: 'Also run the qemu cross-architecture job (mipsel - see the job comment)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------------------------
+  # Primary gate: native x86-64, full run including both valgrind phases.
+  # ARCHID=20 is NOKVM, so no X11/libjpeg build dependencies are needed.
+  # ---------------------------------------------------------------------------------------------
+  x86-64:
+    name: x86-64 (ARCHID 20, NOKVM)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v7.0.0
+      - name: Install packages
+        run: |
+          sudo apt-get update &&
+          sudo apt-get install -y build-essential valgrind
+      - name: Build 64 Bit NOKVM Linux
+        run: make -j4 linux ARCHID=20
+      - name: Run agent tests
+        run: bash test/test-agent.sh --ci -b ./meshagent_x86-64_nokvm ${{ inputs.strict && '--strict' || '' }}
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: test-logs-x86-64
+          path: test/logs/
+
+  # ---------------------------------------------------------------------------------------------
+  # 32-bit x86, built and run natively on the same amd64 runner.
+  # ---------------------------------------------------------------------------------------------
+  x86-32:
+    name: x86 32-bit (ARCHID 19, NOKVM)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v7.0.0
+      - name: Install packages
+        run: |
+          sudo dpkg --add-architecture i386 &&
+          sudo apt-get update &&
+          sudo apt-get install -y build-essential gcc-multilib linux-libc-dev:i386 libc6-dev-i386 libc6-dbg:i386
+      - name: Build 32 Bit NOKVM Linux
+        run: make -j4 linux ARCHID=19
+      - name: Run agent tests
+        run: bash test/test-agent.sh --ci -b ./meshagent_x86_nokvm ${{ inputs.strict && '--strict' || '' }}
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: test-logs-x86-32
+          path: test/logs/
+
+  # ---------------------------------------------------------------------------------------------
+  # ARM64 on a native arm runner - a second architecture with no emulation in the loop.
+  # ARCHID=26 has KVM=1, so it needs the X11/libjpeg headers (same set as linux-build.yml).
+  # ---------------------------------------------------------------------------------------------
+  arm64:
+    name: ARM64 (ARCHID 26)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v7.0.0
+      - name: Install packages
+        run: |
+          sudo apt-get update &&
+          sudo apt-get install -y build-essential valgrind
+          sudo apt-get install -y libx11-dev libxtst-dev libxext-dev libjpeg-dev libxrandr-dev
+      - name: Build ARM64 Linux
+        run: make -j4 linux ARCHID=26
+      - name: Run agent tests
+        run: bash test/test-agent.sh --ci -b ./meshagent_arm64 ${{ inputs.strict && '--strict' || '' }}
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: test-logs-arm64
+          path: test/logs/
+
+  # ---------------------------------------------------------------------------------------------
+  # RISC-V64 (T-Head C906) under qemu. CC/CEXTRA replace the vendor musl toolchain ARCHID=45
+  # hardcodes; STRIP must carry the filename or make exits 2 on the missing vendor strip; no
+  # -static (SIGILLs under qemu-user). test-agent.sh picks -cpu thead-c906 from the ELF itself.
+  # Full recipe: meshagent-riscv64-cross-compile.md.
+  # ---------------------------------------------------------------------------------------------
+  riscv64-qemu:
+    name: RISC-V64 C906 under qemu (ARCHID 45)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v7.0.0
+      - name: Install packages
+        run: |
+          sudo apt-get update &&
+          sudo apt-get install -y build-essential gcc-riscv64-linux-gnu qemu-user
+      - name: Build RISC-V64 Linux
+        run: |
+          make -j4 linux ARCHID=45 \
+            CC=riscv64-linux-gnu-gcc \
+            CEXTRA="-D_FORTIFY_SOURCE=2 -D_NOILIBSTACKDEBUG -D_NOFSWATCHER -Wformat -Wformat-security -fno-strict-aliasing" \
+            LDFLAGS="-L. -lpthread -lutil -lm" \
+            STRIP="riscv64-linux-gnu-strip ./meshagent_riscv64"
+      - name: Run agent tests under qemu
+        run: bash test/test-agent.sh --ci -b ./meshagent_riscv64 ${{ inputs.strict && '--strict' || '' }}
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: test-logs-riscv64
+          path: test/logs/
+
+  # ---------------------------------------------------------------------------------------------
+  # Opt-in, non-blocking: the committed mips OpenSSL archive no longer links against a current
+  # mipsel toolchain (undefined reference to __ctype_b), so this fails until it is rebuilt. Kept
+  # wired up as the only CI exercise of the script's qemu path.
+  # ---------------------------------------------------------------------------------------------
+  qemu-mipsel:
+    name: MIPSEL under qemu (ARCHID 7, opt-in)
+    if: ${{ inputs.qemu_cross }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    continue-on-error: true
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v7.0.0
+      - name: Install packages
+        run: |
+          sudo apt-get update &&
+          sudo apt-get install -y build-essential gcc-mipsel-linux-gnu qemu-user
+      - name: Build MIPSEL Linux
+        run: make -j4 linux ARCHID=7 CC=mipsel-linux-gnu-gcc STRIP=mipsel-linux-gnu-strip
+      - name: Run agent tests under qemu
+        run: bash test/test-agent.sh --ci -b ./meshagent_mips ${{ inputs.strict && '--strict' || '' }}
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: test-logs-mipsel
+          path: test/logs/
