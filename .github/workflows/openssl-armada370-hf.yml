@@ -1,0 +1,124 @@
+name: openssl-armada370-hf
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      sha256:
+        required: true
+        type: string
+      force:
+        required: true
+        type: boolean
+      version_suffix:
+        required: false
+        default: false
+        type: boolean
+
+env:
+  OSSL_FLAGS: >-
+    no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic
+    no-hw no-dso no-shared -no-asm no-rc5 no-idea no-md4
+    no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2
+    no-mdc2 no-engine no-ocsp no-cms
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      # Set (to -<version>) writes this run's archives beside the committed ones
+      # instead of overwriting them, so several versions can coexist.
+      SFX: ${{ inputs.version_suffix && format('-{0}', inputs.version) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check whether the archive already matches the requested version
+        id: check
+        run: |
+          f="openssl/libstatic/linux/linux-armada370-hf/libcrypto${SFX}.a"
+          skip=false
+          if [ -f "$f" ] && strings "$f" | grep -qF "OpenSSL ${{ inputs.version }} "; then
+            skip=true
+          fi
+          [ "${{ inputs.force }}" = "true" ] && skip=false
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          [ "$skip" = "true" ] && echo "::notice::linux-armada370-hf already at OpenSSL ${{ inputs.version }} and force=false - skipping rebuild."
+          true
+      - name: Install musl cross toolchain (arm-linux-musleabihf)
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          # A copy is mirrored at meshagent-toolchains, same as openssl-bsd.yml's
+          # sysroots. Falls back to musl.cc if the mirror doesn't have it.
+          #
+          # media.githubusercontent.com/media, not raw.githubusercontent.com:
+          # the mirror repo tracks *.tar.* via Git LFS, and raw.* only serves
+          # the LFS pointer text, not real content.
+          MIRROR_RAW=https://media.githubusercontent.com/media/PTR-inc/meshagent-toolchains/main
+          mirror_url="$MIRROR_RAW/TC/arm-linux-musleabihf-cross.tar.xz"
+          if curl -sSfL -o /dev/null --head "$mirror_url" \
+             && curl -sSL --fail --connect-timeout 20 --max-time 300 -o musl.tar.xz "$mirror_url" \
+             && xz -t musl.tar.xz 2>/dev/null; then
+            echo "::notice::using toolchain from meshagent-toolchains mirror"
+            tar xf musl.tar.xz
+          else
+            echo "::notice::not on mirror (or corrupt) - falling back to musl.cc"
+            # musl.cc publishes no checksums, so the toolchain is gated on a smoke compile instead.
+            curl -sSL --fail -o musl.tgz "https://musl.cc/arm-linux-musleabihf-cross.tgz"
+            tar xzf musl.tgz
+          fi
+          echo 'typedef int x;' | ./arm-linux-musleabihf-cross/bin/arm-linux-musleabihf-gcc -c -x c -o /dev/null -
+      - name: Download and verify source
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          # 1.x releases are tagged OpenSSL_1_1_1w; 3.x and later, openssl-3.5.7.
+          case "${{ inputs.version }}" in
+            1.*) tag="OpenSSL_$(echo "${{ inputs.version }}" | tr . _)" ;;
+            *)   tag="openssl-${{ inputs.version }}" ;;
+          esac
+          curl -sSL -o ossl.tar.gz \
+            "https://github.com/openssl/openssl/releases/download/$tag/openssl-${{ inputs.version }}.tar.gz"
+          echo "${{ inputs.sha256 }}  ossl.tar.gz" | sha256sum -c -
+          mkdir src && tar xzf ossl.tar.gz -C src --strip-components=1
+      - name: Build linux-armada370-hf (musl, -Os, no-asm - linux-armv4 asm broke crypto correctness on this Configure target)
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          cd src
+          # armv7-a + VFPv2 hardfloat: matches the ABI of the archive this replaces (Tag_CPU_arch v7, Tag_FP_arch VFPv2, VFP registers).
+          tc="$GITHUB_WORKSPACE/arm-linux-musleabihf-cross"
+          CC="$tc/bin/arm-linux-musleabihf-gcc -march=armv7-a -marm -mfpu=vfp -mfloat-abi=hard" ./Configure linux-armv4 $OSSL_FLAGS
+          sed -i 's/ -O3 / -Os /g' Makefile
+          # build_libs only: this repo ships just the two archives, and 3.x's
+          # apps/fuzz link pulls 64-bit atomics that 32-bit targets lack.
+          make -j"$(nproc)" build_libs
+      - name: Verify version and target architecture
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          cd src
+          v=$(strings libcrypto.a | grep -oE 'OpenSSL [0-9]+\.[0-9]+\.[0-9]+[a-z]?' | sort -u | tr '\n' ' ')
+          echo "version: $v"
+          strings libcrypto.a | grep -qF "OpenSSL ${{ inputs.version }} "
+          obj=$(ar t libcrypto.a | grep -m1 '\.o$')
+          mkdir -p /tmp/probe && cd /tmp/probe && ar x "$GITHUB_WORKSPACE/src/libcrypto.a" "$obj"
+          file "$obj"
+          if file "$obj" | grep -q 'x86-64'; then
+            echo "ERROR: linux-armada370-hf archive contains host x86-64 objects" >&2
+            exit 1
+          fi
+      - name: Assert asm absent
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          n=$(ar t src/libcrypto.a | grep -cE '(^|-)(armv4cpuid|x86_64cpuid)\.o$' || true)
+          echo "linux-armada370-hf asm marker objects (expect 0): $n"
+          test "$n" -eq 0
+      - name: Stage repo layout
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          d=out/openssl/libstatic/linux/linux-armada370-hf
+          mkdir -p "$d"
+          cp src/libcrypto.a "$d/libcrypto${SFX}.a"
+          cp src/libssl.a "$d/libssl${SFX}.a"
+      - uses: actions/upload-artifact@v7.0.1
+        if: ${{ steps.check.outputs.skip != 'true' }}
+        with:
+          name: openssl-linux-armada370-hf
+          path: out/

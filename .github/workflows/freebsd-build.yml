@@ -3,29 +3,64 @@ run-name: Build FreeBSD versions of MeshAgent
 on:
   push:
   pull_request:
+
 jobs:
   freebsd-build-x86-64:
     name: FreeBSD x86_64 (ARCHID=30)
-    # GitHub has no FreeBSD runners, so the build runs inside a FreeBSD VM on a Linux runner.
-    # Binaries built on an older FreeBSD release run on all newer ones, but not vice versa,
-    # so build on the oldest release CI can still support: 13.5 covers 13.x (TrueNAS CORE,
-    # older OPNsense/pfSense) through 15.x. FreeBSD 13 is EOL — if its pkg repo or VM image
-    # disappears and the "prepare" step starts failing, bump the release to 14.4.
-    runs-on: ubuntu-latest
+    # Cross-compiled from Linux via the makefile's CROSS=1 bsd path (clang + a
+    # base.txz sysroot), the same way openssl-bsd.yml builds the BSD OpenSSL
+    # archives - no FreeBSD VM needed. The release comes from the ARCH_30 stanza.
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository code
         uses: actions/checkout@v7.0.0
-      - name: Build meshagent (x86_64) in FreeBSD VM
-        uses: vmactions/freebsd-vm@v1
-        with:
-          release: "13.5"
-          # The makefile generates ILibDuktape_Commit.h only when git works — without git the
-          # build fails on a missing header. safe.directory is needed because the rsynced
-          # repo is owned by the runner uid, not the VM user, so git refuses it otherwise.
-          prepare: |
-            pkg install -y gmake git
-            git config --global --add safe.directory '*'
-          run: gmake -j4 freebsd ARCHID=30
+      - name: Install clang and lld
+        run: sudo apt-get update && sudo apt-get install -y clang lld
+      - name: Fetch FreeBSD sysroot
+        run: |
+          set -euo pipefail
+          rel=$(make -s print-bsdrel ARCHID=30)
+          [ -n "$rel" ] || { echo "ERROR: ARCH_30 has no BSDREL" >&2; exit 1; }
+          echo "::notice::cross-building against FreeBSD $rel"
+          sysroot="$RUNNER_TEMP/sysroot"
+          rm -rf "$sysroot" && mkdir -p "$sysroot"
+
+          # Pre-trimmed sysroot (usr/include+usr/lib, built by
+          # build-bsd-sysroot-archives.sh) is mirrored at meshagent-toolchains,
+          # same as openssl-bsd.yml. Falls back to a real upstream release if
+          # the mirror doesn't have this OS release yet.
+          #
+          # media.githubusercontent.com/media, not raw.githubusercontent.com:
+          # the mirror repo tracks *.tar.* via Git LFS, and raw.* only serves
+          # the LFS pointer text, not real content.
+          MIRROR_RAW=https://media.githubusercontent.com/media/PTR-inc/meshagent-toolchains/main
+          mirror_url="$MIRROR_RAW/SR/freebsd-$rel-sysroot.tar.xz"
+          mirror_tarball="$RUNNER_TEMP/freebsd-$rel-sysroot.tar.xz"
+          if curl -sSfL -o /dev/null --head "$mirror_url" \
+             && curl -sSL --fail --connect-timeout 20 --max-time 300 -o "$mirror_tarball" "$mirror_url" \
+             && xz -t "$mirror_tarball" 2>/dev/null; then
+            echo "::notice::using pre-trimmed sysroot from meshagent-toolchains mirror"
+            tar xf "$mirror_tarball" -C "$sysroot"
+          else
+            echo "::notice::not on mirror (or corrupt) - falling back to upstream release"
+            url="https://download.freebsd.org/releases/amd64/amd64/${rel}-RELEASE"
+            # base.txz alone carries the headers and libs; ARCHID=30 is KVM=0, so
+            # nothing from ports (X11, libjpeg) is needed.
+            manifest=$(curl -sSL --fail --connect-timeout 20 --max-time 300 "$url/MANIFEST")
+            sha=$(echo "$manifest" | awk '$1=="base.txz"{print $2}')
+            [ -n "$sha" ] || { echo "ERROR: no base.txz checksum in MANIFEST" >&2; exit 1; }
+            tarball="$RUNNER_TEMP/base.txz"
+            curl -sSL --fail --connect-timeout 20 --max-time 900 -o "$tarball" "$url/base.txz"
+            echo "$sha  $tarball" | sha256sum -c -
+            tar xf "$tarball" -C "$sysroot"
+          fi
+          echo "SYSROOT=$sysroot" >> "$GITHUB_ENV"
+      - name: Build meshagent (x86_64)
+        run: make -j4 freebsd ARCHID=30 CROSS=1
+      - name: Verify the binary targets FreeBSD
+        run: |
+          file meshagent_freebsd_x86-64
+          file meshagent_freebsd_x86-64 | grep -q FreeBSD
       - name: Upload artifacts
         uses: actions/upload-artifact@v7.0.1
         with:
