@@ -2,6 +2,7 @@
 #
 #   openssl\libstatic\build\windows\build.ps1 x64
 #   openssl\libstatic\build\windows\build.ps1 all
+#   openssl\libstatic\build\windows\build.ps1 --names-json   # CI matrix source
 #
 # Mirrors build.sh's contract (version + object-count gate before staging)
 # and the CI `windows` job's recipe, so local and CI builds match.
@@ -10,8 +11,6 @@ param(
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$TargetNames
 )
-
-. (Join-Path $PSScriptRoot 'env.ps1')
 
 # One entry per staged target. Asm: x86/x64 only (CPUID-gated); ARM64 has no
 # asm path in OpenSSL 1.1.1's VC-WIN64-ARM config. ObjCount via `lib /list`.
@@ -24,8 +23,15 @@ $Targets = @(
     @{ Name = 'arm64-debug'; VcVars = 'x64_arm64'; VcConf = 'VC-WIN64-ARM'; Suffix = 'ARM64'; MtTag = 'MT'; Asm = $false; Debug = $true;  ObjCount = 553 }
 )
 
+# The CI matrix is generated from $Targets above, never restated in YAML.
+if ($TargetNames -and $TargetNames[0] -eq '--names-json') {
+    Write-Output (($Targets.Name | ForEach-Object { '"' + $_ + '"' }) -join ',' | ForEach-Object { "[$_]" })
+    exit 0
+}
+. (Join-Path $PSScriptRoot 'env.ps1')
+
 if (-not $TargetNames -or $TargetNames.Count -eq 0) {
-    Write-Host "usage: build.ps1 <target|all> [target...]"
+    Write-Host "usage: build.ps1 <target|all|--names-json> [target...]"
     Write-Host "targets: $($Targets.Name -join ' ')"
     exit 2
 }
@@ -158,11 +164,11 @@ foreach ($t in $list) {
     }
 
     $dsuffix = if ($t.Debug) { 'd' } else { '' }
-    $destDir = Join-Path $Repo 'openssl\libstatic'
+    $destDir = Join-Path $Repo 'openssl\libstatic\windows'
     New-Item -ItemType Directory -Force -Path $destDir | Out-Null
     Copy-Item $libcrypto (Join-Path $destDir "libcrypto$($t.Suffix)$($t.MtTag)$dsuffix.lib") -Force
     Copy-Item $libssl    (Join-Path $destDir "libssl$($t.Suffix)$($t.MtTag)$dsuffix.lib") -Force
-    Write-Host "  staged  -> openssl\libstatic\libcrypto$($t.Suffix)$($t.MtTag)$dsuffix.lib / libssl$($t.Suffix)$($t.MtTag)$dsuffix.lib"
+    Write-Host "  staged  -> openssl\libstatic\windows\libcrypto$($t.Suffix)$($t.MtTag)$dsuffix.lib / libssl$($t.Suffix)$($t.MtTag)$dsuffix.lib"
     Write-Host "${name}: OK"
 }
 

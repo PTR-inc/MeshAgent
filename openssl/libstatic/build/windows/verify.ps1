@@ -1,5 +1,5 @@
 # Report version and object count for every Windows archive in the repo.
-# Read-only - mirrors verify.sh's role for the Linux/BSD/macOS archives.
+# Read-only - mirrors openssl/libstatic/verify's role for the Linux/BSD/macOS archives.
 
 . (Join-Path $PSScriptRoot 'env.ps1')
 
@@ -11,8 +11,8 @@ if (-not $vcEnvCall -or -not (Get-VcToolsetVersion -Arch x64)) {
     exit 1
 }
 
-$libs = Get-ChildItem -Path (Join-Path $Repo 'openssl\libstatic') -Filter 'libcrypto*.lib' -File | Sort-Object Name
-if (-not $libs) { Write-Host "No openssl\libstatic\libcrypto*.lib files found."; exit 1 }
+$libs = Get-ChildItem -Path (Join-Path $Repo 'openssl\libstatic\windows') -Filter 'libcrypto*.lib' -File | Sort-Object Name
+if (-not $libs) { Write-Host "No openssl\libstatic\windows\libcrypto*.lib files found."; exit 1 }
 
 "{0,-28} {1,-10} {2}" -f 'FILE', 'VERSION', 'OBJS' | Write-Host
 "{0,-28} {1,-10} {2}" -f '----', '-------', '----' | Write-Host

@@ -1,32 +1,26 @@
-name: Build OpenSSL static lib (single target)
+name: Build OpenSSL static libs
 run-name: Build ${{ inputs.jobname }}${{ inputs.force == true && ' (force)' || '' }}${{ inputs.version_suffix == true && format(' [suffix -{0}]', inputs.version) || '' }}
 
-# Selective counterpart to build-openssl-libs.yml: rebuilds one target (or 'all')
-# via the per-target reusable openssl-*.yml workflows below, skipping any target
-# whose committed archive already matches `version` unless force=true.
+# Every per-target decision (Configure target, compiler, asm, extra flags, libc
+# family, toolchain provisioning, object count) comes from
+# openssl/libstatic/build/targets.sh - and on Windows, from windows/build.ps1's
+# own $Targets. This file only decides WHICH targets to dispatch and on what
+# runner (T_CI: linux -> ubuntu, macos -> a macOS runner with Xcode's clang, the
+# same host detection `make macos` does); it restates no recipe, no version, no
+# URL and no checksum. The eight
+# per-family openssl-*.yml workflows this replaced each carried their own copy
+# and drifted from targets.sh repeatedly - see BUILD.md.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "OpenSSL release version"
-        required: true
-        default: "1.1.1w"
+        description: "OpenSSL release version (default: the pin in build-env.sh)"
+        required: false
+        default: ""
       jobname:
-        description: "Target to build ('all' for every target)"
+        description: "Target to build: 'all', a family, or a single targets.sh target name"
         required: true
         default: "all"
-        type: choice
-        options:
-          - all
-          - linux-native
-          - linux-cross
-          - linux-musl
-          - openwrt-mips
-          - openwrt-x86_64
-          - armada370-hf
-          - windows
-          - macos
-          - bsd
       force:
         description: "Rebuild and overwrite even if the committed archive already matches this version"
         required: true
@@ -35,12 +29,12 @@ on:
       # Suffixed archives are inert: the makefile and the .vcxproj files link the
       # unsuffixed names, so this stages a copy without changing any build.
       version_suffix:
-        description: "Name the outputs libcrypto-<version>.a / libcrypto64MT-<version>.lib instead of overwriting the standard names, so several versions can coexist"
+        description: "Name the outputs libcrypto-<version>.a / libcrypto64MT-<version>.lib instead of overwriting the standard names"
         required: true
         default: false
         type: boolean
       create_pr:
-        description: "Open a pull request with the rebuilt archives (unchecked: leave them as a downloadable artifact only)"
+        description: "Open a pull request with the rebuilt archives"
         required: true
         default: false
         type: boolean
@@ -50,158 +44,164 @@ permissions:
   pull-requests: write
 
 jobs:
-  # The only pin any target needs is `version` - the sha256 isn't hand-maintained,
-  # it's looked up here (once, for every downstream job) from openssl.org's own
-  # openssl-<version>.tar.gz.sha256 sidecar, which resolves for both the current
-  # release series and every "old" one. Mirrors fetch-toolchains.sh's
-  # openssl_sha256_lookup, so the local buildroot and CI agree on how a version
-  # resolves to a checksum without a shared file.
-  resolve-sha256:
+  resolve:
     runs-on: ubuntu-24.04
     outputs:
-      sha256: ${{ steps.lookup.outputs.sha256 }}
+      version: ${{ steps.r.outputs.version }}
+      matrix: ${{ steps.r.outputs.matrix }}
+      windows: ${{ steps.r.outputs.windows }}
     steps:
-      - id: lookup
+      - uses: actions/checkout@v4
+      - id: r
+        name: Resolve version and matrices from targets.sh / build.ps1
         run: |
-          body=$(curl -sSL --fail --retry 3 --retry-delay 2 "https://www.openssl.org/source/openssl-${{ inputs.version }}.tar.gz.sha256") \
-            || { echo "::error::couldn't reach openssl.org for openssl-${{ inputs.version }}.tar.gz.sha256"; exit 1; }
-          sha=$(echo "$body" | awk '{print $1}')
-          echo "$sha" | grep -qE '^[0-9a-f]{64}$' \
-            || { echo "::error::openssl-${{ inputs.version }}.tar.gz.sha256 didn't parse to a sha256 - is '${{ inputs.version }}' a real release?"; exit 1; }
-          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          . ./build-env.sh >/dev/null
+          v="${{ inputs.version }}"; [ -n "$v" ] || v="$OPENSSL_VERSION"
+          openssl_sha256_lookup "$v" >/dev/null \
+            || { echo "::error::'$v' does not resolve to a published OpenSSL release"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
 
-  linux-native:
-    needs: resolve-sha256
-    if: ${{ inputs.jobname == 'all' || inputs.jobname == 'linux-native' }}
-    uses: ./.github/workflows/openssl-linux-native.yml
-    with:
-      version: ${{ inputs.version }}
-      sha256: ${{ needs.resolve-sha256.outputs.sha256 }}
-      force: ${{ inputs.force }}
-      version_suffix: ${{ inputs.version_suffix }}
+          # One row per unix target: "<name> <runner>", runner chosen by T_CI.
+          rows=$(for t in $(openssl/libstatic/build/targets.sh --names); do
+                   case "$(openssl/libstatic/build/targets.sh --field "$t" CI)" in
+                     macos) echo "$t macos-latest" ;;
+                     *)     echo "$t ubuntu-24.04" ;;
+                   esac
+                 done)
+          # Windows names come from build.ps1's own $Targets - grepped, not run,
+          # so this job needs no pwsh (act's image has none). consistency.sh
+          # check 5 asserts this parse agrees with `build.ps1 --names-json`.
+          win=$(grep -oE "Name *= *'[^']+'" openssl/libstatic/build/windows/build.ps1 | sed "s/.*'\(.*\)'/\1/")
 
-  linux-cross:
-    needs: resolve-sha256
-    if: ${{ inputs.jobname == 'all' || inputs.jobname == 'linux-cross' }}
-    uses: ./.github/workflows/openssl-linux-cross.yml
-    with:
-      version: ${{ inputs.version }}
-      sha256: ${{ needs.resolve-sha256.outputs.sha256 }}
-      force: ${{ inputs.force }}
-      version_suffix: ${{ inputs.version_suffix }}
+          sel="${{ inputs.jobname }}"
+          case "$sel" in
+            all)     ;;
+            linux)   rows=$(echo "$rows" | awk '$2=="ubuntu-24.04"'); win="" ;;
+            macos)   rows=$(echo "$rows" | awk '$2=="macos-latest"'); win="" ;;
+            windows) rows="" ;;
+            *)       rows=$(echo "$rows" | awk -v s="$sel" '$1==s')
+                     win=$(echo "$win" | awk -v s="$sel" '$0==s')
+                     [ -n "$rows$win" ] || { echo "::error::'$sel' is not a target of targets.sh or windows/build.ps1"; exit 1; } ;;
+          esac
 
-  linux-musl:
-    needs: resolve-sha256
-    if: ${{ inputs.jobname == 'all' || inputs.jobname == 'linux-musl' }}
-    uses: ./.github/workflows/openssl-linux-musl.yml
-    with:
-      version: ${{ inputs.version }}
-      sha256: ${{ needs.resolve-sha256.outputs.sha256 }}
-      force: ${{ inputs.force }}
-      version_suffix: ${{ inputs.version_suffix }}
+          m=$(echo "$rows" | awk 'NF{printf "%s{\"target\":\"%s\",\"os\":\"%s\"}", (n++?",":""), $1, $2}')
+          w=$(echo "$win"  | awk 'NF{printf "%s\"%s\"", (n++?",":""), $0}')
+          { echo "matrix=[$m]"; echo "windows=[$w]"; } >> "$GITHUB_OUTPUT"
 
-  openwrt-mips:
-    needs: resolve-sha256
-    if: ${{ inputs.jobname == 'all' || inputs.jobname == 'openwrt-mips' }}
-    uses: ./.github/workflows/openssl-openwrt-mips.yml
-    with:
-      version: ${{ inputs.version }}
-      sha256: ${{ needs.resolve-sha256.outputs.sha256 }}
-      force: ${{ inputs.force }}
-      version_suffix: ${{ inputs.version_suffix }}
-
-  openwrt-x86_64:
-    needs: resolve-sha256
-    if: ${{ inputs.jobname == 'all' || inputs.jobname == 'openwrt-x86_64' }}
-    uses: ./.github/workflows/openssl-openwrt-x86_64.yml
-    with:
-      version: ${{ inputs.version }}
-      sha256: ${{ needs.resolve-sha256.outputs.sha256 }}
-      force: ${{ inputs.force }}
-      version_suffix: ${{ inputs.version_suffix }}
-
-  armada370-hf:
-    needs: resolve-sha256
-    if: ${{ inputs.jobname == 'all' || inputs.jobname == 'armada370-hf' }}
-    uses: ./.github/workflows/openssl-armada370-hf.yml
-    with:
-      version: ${{ inputs.version }}
-      sha256: ${{ needs.resolve-sha256.outputs.sha256 }}
-      force: ${{ inputs.force }}
-      version_suffix: ${{ inputs.version_suffix }}
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.matrix != '[]'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    env:
+      BUILDROOT: ${{ github.workspace }}/br
+      OPENSSL_VERSION: ${{ needs.resolve.outputs.version }}
+      SFX: ${{ inputs.version_suffix && format('-{0}', needs.resolve.outputs.version) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      # On a macos runner targets.sh picks the native clang/ar/ranlib; on Linux
+      # it cross-compiles - same composite action, same build.sh either way.
+      - uses: ./.github/actions/openssl-build-target
+        with:
+          target: ${{ matrix.target }}
+          version: ${{ needs.resolve.outputs.version }}
+          force: ${{ inputs.force }}
+          sfx: ${{ env.SFX }}
+      - uses: actions/upload-artifact@v7.0.1
+        if: ${{ hashFiles('out/**') != '' && !env.ACT }}
+        with: { name: "openssl-${{ matrix.target }}", path: out/ }
+      - uses: actions/upload-artifact@v3
+        if: ${{ hashFiles('out/**') != '' && env.ACT }}
+        with: { name: "openssl-${{ matrix.target }}", path: out/ }
 
   windows:
-    needs: resolve-sha256
-    if: ${{ inputs.jobname == 'all' || inputs.jobname == 'windows' }}
-    uses: ./.github/workflows/openssl-windows.yml
-    with:
-      version: ${{ inputs.version }}
-      sha256: ${{ needs.resolve-sha256.outputs.sha256 }}
-      force: ${{ inputs.force }}
-      version_suffix: ${{ inputs.version_suffix }}
-
-  macos:
-    needs: resolve-sha256
-    if: ${{ inputs.jobname == 'all' || inputs.jobname == 'macos' }}
-    uses: ./.github/workflows/openssl-macos.yml
-    with:
-      version: ${{ inputs.version }}
-      sha256: ${{ needs.resolve-sha256.outputs.sha256 }}
-      force: ${{ inputs.force }}
-      version_suffix: ${{ inputs.version_suffix }}
-
-  bsd:
-    needs: resolve-sha256
-    if: ${{ inputs.jobname == 'all' || inputs.jobname == 'bsd' }}
-    uses: ./.github/workflows/openssl-bsd.yml
-    with:
-      version: ${{ inputs.version }}
-      sha256: ${{ needs.resolve-sha256.outputs.sha256 }}
-      force: ${{ inputs.force }}
-      version_suffix: ${{ inputs.version_suffix }}
+    needs: resolve
+    if: needs.resolve.outputs.windows != '[]'
+    # arm64 is cross-built with the x64_arm64 MSVC toolset (build.ps1's VcVars),
+    # so one x64 runner covers every Windows target.
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.resolve.outputs.windows) }}
+    env:
+      BUILDROOT: ${{ github.workspace }}\br
+      OPENSSL_VERSION: ${{ needs.resolve.outputs.version }}
+      SFX: ${{ inputs.version_suffix && format('-{0}', needs.resolve.outputs.version) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/setup-nasm@v1
+      - name: Install Strawberry Perl (Configure needs a real Windows perl)
+        shell: pwsh
+        run: choco install -y strawberryperl --no-progress
+      - name: Fetch the OpenSSL source (URL and sha256 both from env.ps1)
+        shell: pwsh
+        run: |
+          . openssl/libstatic/build/windows/env.ps1
+          New-Item -ItemType Directory -Force -Path $env:BR_DOWNLOADS | Out-Null
+          if (-not (Save-BrDownload -Url $script:OpenSslUrl -Path $script:OpenSslTarball -Sha256 (Get-OpenSslSha256))) {
+            throw "could not fetch $($script:OpenSslUrl)"
+          }
+      # build.ps1 owns the recipe, the .lib naming and the version/object-count
+      # gates - this step only invokes it. force is irrelevant here: build.ps1
+      # always rebuilds, and the collect step below uploads only what changed.
+      - name: Build ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          pwsh -File openssl/libstatic/build/windows/build.ps1 ${{ matrix.target }}
+          if ($LASTEXITCODE -ne 0) { throw "build.ps1 ${{ matrix.target }} failed" }
+      - name: Collect what the build actually changed
+        shell: bash
+        run: |
+          mkdir -p out
+          git status --porcelain -- openssl/libstatic | awk '{print $2}' | while read -r f; do
+            d="out/$(dirname "$f")"; mkdir -p "$d"
+            b=$(basename "$f"); ext="${b##*.}"; stem="${b%.*}"
+            cp "$f" "$d/${stem}${SFX}.${ext}"
+          done
+      - uses: actions/upload-artifact@v7.0.1
+        if: ${{ hashFiles('out/**') != '' && !env.ACT }}
+        with: { name: "openssl-windows-${{ matrix.target }}", path: out/ }
+      - uses: actions/upload-artifact@v3
+        if: ${{ hashFiles('out/**') != '' && env.ACT }}
+        with: { name: "openssl-windows-${{ matrix.target }}", path: out/ }
 
   verify-summary:
-    needs: [resolve-sha256, linux-native, linux-cross, linux-musl, openwrt-mips, openwrt-x86_64, armada370-hf, windows, macos, bsd]
+    needs: [resolve, build, windows]
     if: always()
     runs-on: ubuntu-24.04
     env:
-      # Audit and stale-check the filenames this run actually produced.
-      SFX: ${{ inputs.version_suffix && format('-{0}', inputs.version) || '' }}
+      SFX: ${{ inputs.version_suffix && format('-{0}', needs.resolve.outputs.version) || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v7
-        with:
-          path: artifacts
+        with: { path: artifacts }
       - name: Overlay this run's freshly built archives onto the checkout
         run: |
-          # actions/download-artifact nests under artifacts/<name>/ when the run has
-          # multiple artifacts, but extracts flat into artifacts/ when there's only
-          # one (e.g. a single-target dispatch) - search instead of assuming depth.
+          # download-artifact nests under artifacts/<name>/ with multiple artifacts, flat with one - search instead of assuming depth.
           find artifacts -type d -path '*/openssl/libstatic' -print0 |
-            while IFS= read -r -d '' d; do
-              cp -rf "$d"/. openssl/libstatic/
-            done
-      - name: Audit every archive - version, object count, glibc-only symbols
-        run: |
-          chmod +x openssl/libstatic/verify
-          openssl/libstatic/verify
+            while IFS= read -r -d '' d; do cp -rf "$d"/. openssl/libstatic/; done
+      - name: Audit every archive - version, object count, libc symbol gates
+        run: openssl/libstatic/verify
       - name: Fail if any dispatched target did not succeed
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
           echo "One or more dispatched targets failed or were cancelled - their archives were NOT" >&2
-          echo "regenerated this run, and the overlay step silently left the old committed" >&2
-          echo "archive in place. See the failed job(s) above." >&2
+          echo "regenerated this run, and the overlay step left the old committed archive in place." >&2
           exit 1
-      - name: Fail if a full ('all') rebuild left any linux/macos/bsd archive stale
+      - name: Fail if a full ('all') rebuild left any archive stale
         if: inputs.jobname == 'all'
         run: |
           fail=0
-          for f in $(find openssl/libstatic/linux openssl/libstatic/macos openssl/libstatic/bsd -name "libcrypto${SFX}.a" 2>/dev/null | grep -v '/linux-armada370-hf/'); do
-            if ! strings "$f" | grep -qF "OpenSSL ${{ inputs.version }} "; then
-              v=$(strings "$f" | grep -oE 'OpenSSL [0-9]+\.[0-9]+\.[0-9]+[a-z]?' | sort -u | tr '\n' ' ')
-              echo "STALE: $f -> ${v:-none} (expected OpenSSL ${{ inputs.version }})" >&2
-              fail=1
-            fi
+          for f in $(find openssl/libstatic -name "libcrypto${SFX}.a"); do
+            strings "$f" | grep -qF "OpenSSL ${{ needs.resolve.outputs.version }} " && continue
+            v=$(strings "$f" | grep -oE 'OpenSSL [0-9]+\.[0-9]+\.[0-9]+[a-z]?' | sort -u | tr '\n' ' ')
+            echo "STALE: $f -> ${v:-none} (expected OpenSSL ${{ needs.resolve.outputs.version }})" >&2
+            fail=1
           done
           exit $fail
       - name: Open a pull request with the rebuilt archives
@@ -209,11 +209,11 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           add-paths: openssl/libstatic
-          commit-message: "openssl: update static libs to ${{ inputs.version }} (${{ inputs.jobname }})${{ inputs.version_suffix == true && ' - suffixed filenames' || '' }}"
-          title: "openssl: update static libs to ${{ inputs.version }} (${{ inputs.jobname }})${{ inputs.version_suffix == true && ' - suffixed filenames' || '' }}"
+          commit-message: "openssl: update static libs to ${{ needs.resolve.outputs.version }} (${{ inputs.jobname }})"
+          title: "openssl: update static libs to ${{ needs.resolve.outputs.version }} (${{ inputs.jobname }})"
           body: |
-            Automated rebuild via `${{ github.workflow }}` (workflow_dispatch: jobname=${{ inputs.jobname }}, force=${{ inputs.force }}, version_suffix=${{ inputs.version_suffix }}).
+            Automated rebuild via `${{ github.workflow }}` (jobname=${{ inputs.jobname }}, force=${{ inputs.force }}, version_suffix=${{ inputs.version_suffix }}).
 
-            No pull request is opened if the rebuilt archives are byte-identical to what's already committed.
-          branch: openssl-update-${{ inputs.version }}-${{ inputs.jobname }}${{ inputs.version_suffix == true && '-suffixed' || '' }}
+            No pull request is opened if the rebuilt archives are byte-identical to what is already committed.
+          branch: openssl-update-${{ needs.resolve.outputs.version }}-${{ inputs.jobname }}${{ inputs.version_suffix == true && '-suffixed' || '' }}
           base: ${{ github.ref_name }}

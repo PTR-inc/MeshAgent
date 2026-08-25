@@ -16,7 +16,7 @@
 # same fallback; set BUILDROOT in the environment to override both.
 export BUILDROOT="${BUILDROOT:-/opt/buildroot}"
 
-. "$(dirname "$(readlink -f "$0")")/openssl/libstatic/build/env.sh"
+. "$(dirname "$(readlink -f "$0")")/build-env.sh"
 
 STATUS_LOG="$(mktemp)"
 trap 'rm -f "$STATUS_LOG"' EXIT
@@ -40,7 +40,7 @@ fetch() {
     local url="$1" sha="$2" dest="$3"
     if [ -f "$dest" ]; then
         if [ -n "$sha" ]; then
-            if echo "$sha  $dest" | sha256sum -c - >/dev/null 2>&1; then
+            if [ "$(br_sha256 "$dest")" = "$sha" ]; then
                 return 0
             fi
             echo "  $dest exists but fails checksum - re-downloading"
@@ -54,36 +54,19 @@ fetch() {
     echo "  downloading $url"
     curl -sSL --fail --retry 3 --retry-delay 2 -o "$dest" "$url" || { echo "  FETCH FAILED: $url" >&2; return 1; }
     if [ -n "$sha" ]; then
-        echo "$sha  $dest" | sha256sum -c - || { echo "  CHECKSUM MISMATCH: $dest" >&2; rm -f "$dest"; return 1; }
+        [ "$(br_sha256 "$dest")" = "$sha" ] || { echo "  CHECKSUM MISMATCH: $dest" >&2; rm -f "$dest"; return 1; }
     elif ! archive_ok "$dest"; then
         echo "  CORRUPT ARCHIVE (failed integrity check): $dest" >&2; rm -f "$dest"; return 1
     fi
 }
 
 # ---------------------------------------------------------------- OpenSSL ----
-# sha256 isn't a hand-maintained pin - openssl.org's own <tarball>.sha256
-# sidecar resolves for every release (current series or "old"), so it's looked
-# up fresh here rather than kept in a separate checksum file.
-openssl_sha256_lookup() {
-    local url="https://www.openssl.org/source/openssl-$1.tar.gz.sha256" body sha
-    body=$(curl -sSL --fail --retry 3 --retry-delay 2 "$url") || return 1
-    # openssl.org's sidecar has two observed formats: a bare hex hash, or the
-    # standard `sha256sum` two-column form ("<hash> *filename") - $1 covers both.
-    sha=$(echo "$body" | awk '{print $1}')
-    echo "$sha" | grep -qE '^[0-9a-f]{64}$' || return 1
-    echo "$sha"
-}
-
+# URL, release tag and sha256 lookup all live in build-env.sh so CI and the
+# Windows scripts resolve them the same way - nothing is pinned by hand here.
 p_openssl() {
     local sha; sha=$(openssl_sha256_lookup "$OPENSSL_VERSION") \
         || { log_status openssl "FAILED (couldn't look up sha256 for $OPENSSL_VERSION from openssl.org)"; return 1; }
-    # 1.x is tagged OpenSSL_1_1_1w; 3.x and later, openssl-3.5.7.
-    local tag; case "$OPENSSL_VERSION" in
-        1.*) tag="OpenSSL_${OPENSSL_VERSION//./_}" ;;
-        *)   tag="openssl-$OPENSSL_VERSION" ;;
-    esac
-    fetch "https://github.com/openssl/openssl/releases/download/$tag/openssl-$OPENSSL_VERSION.tar.gz" \
-        "$sha" "$OPENSSL_TARBALL" \
+    fetch "$(openssl_tarball_url "$OPENSSL_VERSION")" "$sha" "$OPENSSL_TARBALL" \
         && log_status openssl "OK ($OPENSSL_VERSION, sha256 looked up from openssl.org)" || { log_status openssl "FAILED"; return 1; }
 }
 
@@ -116,10 +99,8 @@ p_openwrt() {
 # so a fetch is one small file instead of the ~200-600MB upstream release
 # tarball. Falls back to fetching+trimming from the real upstream release if
 # the mirror doesn't have this OS release yet.
-# media.githubusercontent.com, not raw.githubusercontent.com - the mirror
-# repo tracks *.tar.* via Git LFS (see its .gitattributes), and raw.* only
-# serves the LFS pointer text, not the actual archive.
-MESHAGENT_TOOLCHAINS_RAW="https://media.githubusercontent.com/media/PTR-inc/meshagent-toolchains/main"
+# $MESHAGENT_TOOLCHAINS_RAW comes from build-env.sh - one definition, shared
+# with every workflow that falls back to the mirror.
 
 # name sysroot_dir url -> 0 and extracts if the mirror has it, 1 if not (not fatal)
 fetch_sysroot_mirror() {
@@ -171,6 +152,25 @@ p_openbsd() {
         || { log_status openbsd "FAILED (extract)"; return 1; }
 }
 
+# ------------------------------------------------------- vendor toolchains ----
+# T-Head/Xuantie C906 riscv64-unknown-linux-musl - no public upstream URL (the
+# XuanTie repo only ships source; a prebuilt needs their account-gated OCC
+# portal, or a from-source build - see docs/meshagent-riscv64-cross-compile.md).
+# Mirrored at PTR-inc/meshagent-toolchains/TC instead, same LFS setup as the
+# BSD sysroots above. Not fatal if missing - ARCH_45 stays bring-your-own.
+p_riscv64_xthead() {
+    local destdir="$TC_RISCV64_XTHEAD" url="$MESHAGENT_TOOLCHAINS_RAW/TC/riscv64-linux-musl-xthead.tar.xz"
+    toolchain_smoke_ok "$destdir/bin/riscv64-unknown-linux-musl-gcc" && { log_status riscv64-xthead "already present"; return 0; }
+    curl -sSfL -o /dev/null --head "$url" 2>/dev/null || { log_status riscv64-xthead "FAILED (not on meshagent-toolchains mirror, no other source - see ARCH_45 in the makefile)"; return 1; }
+    local dest="$BR_DOWNLOADS/riscv64-linux-musl-xthead.tar.xz"
+    fetch "$url" "" "$dest" || { log_status riscv64-xthead "FAILED (mirror download)"; return 1; }
+    archive_ok "$dest" || { log_status riscv64-xthead "mirror archive is corrupt/truncated - discarding"; rm -f "$dest"; return 1; }
+    mkdir -p "$BR_TOOLCHAINS" && tar xf "$dest" -C "$BR_TOOLCHAINS" || { log_status riscv64-xthead "FAILED (extract)"; return 1; }
+    toolchain_smoke_ok "$destdir/bin/riscv64-unknown-linux-musl-gcc" \
+        && log_status riscv64-xthead "OK (from mirror)" \
+        || { log_status riscv64-xthead "FAILED (extracted, but $destdir/bin/riscv64-unknown-linux-musl-gcc fails a smoke compile)"; return 1; }
+}
+
 # ------------------------------------------------------------ musl.cc cross ----
 # Prebuilt musl cross toolchains (~100MB each). No published checksum, so each
 # is gated on a real smoke compile rather than a hash.
@@ -201,9 +201,135 @@ p_bootlin() {
     fetch "https://toolchains.bootlin.com/downloads/releases/toolchains/$family/tarballs/$base.tar.bz2" "" "$tarball" \
         || { log_status "$name" "FAILED (download)"; return 1; }
     mkdir -p "$BR_TOOLCHAINS" && tar xjf "$tarball" -C "$BR_TOOLCHAINS" || { log_status "$name" "FAILED (extract)"; return 1; }
+    bootlin_fixup_extracted_dirname "$family" "$destdir"
     toolchain_smoke_ok "$destdir/bin/$ccname" \
         && log_status "$name" "OK" \
         || { log_status "$name" "FAILED (extracted, but $destdir/bin/$ccname fails a smoke compile)"; return 1; }
+}
+
+# Bootlin's oldest releases (2017.05, the earliest for x86/x86-64) extract to
+# <family>--glibc--stable with no release suffix, unlike every later release
+# where the top-level dir matches the tarball basename - rename it into place
+# so destdir (TC_*_BOOTLIN, or p_bootlin_pinned's version-suffixed alias)
+# resolves either way.
+bootlin_fixup_extracted_dirname() {
+    local family="$1" destdir="$2" nosuffix="$BR_TOOLCHAINS/$family--glibc--stable"
+    [ -d "$destdir" ] || [ ! -d "$nosuffix" ] || mv "$nosuffix" "$destdir"
+}
+
+# Same as p_bootlin, but for an explicit GLIBCVER= pin instead of the shared
+# $_BOOTLIN default. Lands in its own versioned dir/alias (<alias>-<glibcver>)
+# so it can't collide with, or silently move, a target still on the shared pin.
+p_bootlin_pinned() {
+    local name="$1" family="$2" ccname="$3" glibcver="$4" alias="$5"
+    local rel; rel="$(bootlin_release_for_glibc "$glibcver")" || {
+        echo "unknown GLIBCVER=$glibcver - no known Bootlin release ships it for $family" >&2
+        return 1
+    }
+    local base="$family--glibc--stable-$rel"
+    local destdir="$BR_TOOLCHAINS/$base"
+    local tarball="$BR_DOWNLOADS/$base.tar.bz2"
+    if ! toolchain_smoke_ok "$destdir/bin/$ccname"; then
+        [ -e "$destdir" ] && { echo "  $destdir present but fails a smoke compile - re-fetching" >&2; rm -rf "$destdir"; }
+        fetch "https://toolchains.bootlin.com/downloads/releases/toolchains/$family/tarballs/$base.tar.bz2" "" "$tarball" \
+            || { log_status "$name" "FAILED (download)"; return 1; }
+        mkdir -p "$BR_TOOLCHAINS" && tar xjf "$tarball" -C "$BR_TOOLCHAINS" || { log_status "$name" "FAILED (extract)"; return 1; }
+        bootlin_fixup_extracted_dirname "$family" "$destdir"
+        toolchain_smoke_ok "$destdir/bin/$ccname" \
+            || { log_status "$name" "FAILED (extracted, but $destdir/bin/$ccname fails a smoke compile)"; return 1; }
+    fi
+    local tc_dir; tc_dir="$(cd "$REPO/.." && pwd)/ToolChains"
+    mkdir -p "$tc_dir"
+    ln -sfn "$destdir" "$tc_dir/$alias-$glibcver"
+    log_status "$name" "OK (glibc $glibcver pinned -> $tc_dir/$alias-$glibcver)"
+}
+
+# ---------------------------------------------------------------- osxcross --
+# Builds osxcross (clang cross toolchain for macOS) in $OSXCROSS_DIR - part of
+# the default run, skipped (not failed) there when no SDK is available. The
+# compiler itself is open source; the macOS SDK it needs is Apple-licensed and
+# is NOT downloaded from anywhere public. In order, the SDK comes from:
+#   1. $OSXCROSS_SDK_TARBALL already in $BR_DOWNLOADS (e.g. produced by
+#      build-toolchain-archives.sh from an Xcode .xip, or copied from a Mac);
+#   2. an Xcode_<ver>_Universal.xip in $BR_DOWNLOADS, extracted here;
+#   3. $OSXCROSS_SDK_URL, a private/access-controlled URL you set yourself.
+# On Darwin nothing is built - Xcode's clang is used directly.
+OSXCROSS_APT="clang llvm-dev libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev cmake patch cpio git python3"
+osxcross_cc() { ls "$OSXCROSS_BIN"/aarch64-apple-darwin*-clang 2>/dev/null | head -1; }
+# Compiles against the SDK's libc headers, not just `typedef int x;` - a broken
+# SDK (NULLcanary headers) still passes a header-free probe.
+# ...and LINKS it, with $OSXCROSS_BIN on PATH the way the makefile runs it:
+# clang finds <triple>-ld only through PATH, else it falls back to host ld.
+osxcross_smoke_ok() {
+    [ -n "$1" ] || return 1
+    local o; o=$(mktemp)
+    printf '#include <stdio.h>\n#include <pthread.h>\nint main(void){puts("x");return 0;}\n' \
+        | PATH="$OSXCROSS_BIN:$PATH" "$1" -x c -o "$o" - >/dev/null 2>&1
+    local rc=$?; rm -f "$o"; return $rc
+}
+p_osxcross() {
+    if [ "$(uname -s)" = Darwin ]; then log_status osxcross "not needed on macOS (Xcode clang)"; return 0; fi
+    local cc; cc=$(osxcross_cc)
+    if osxcross_smoke_ok "$cc"; then
+        log_status osxcross "already present ($cc)"; return 0
+    fi
+    [ -n "$cc" ] && echo "  $cc exists but cannot compile a <stdio.h>/<pthread.h> program - rebuilding"
+    # A tarball made by the old pattern-only extraction is full of NULLcanary
+    # placeholder headers (build-env.sh osxcross_patch_pbzx) - quarantine it
+    # and extract again rather than build a toolchain that can't compile hello.c.
+    if [ -f "$OSXCROSS_SDK_TARBALL" ] && ! osxcross_sdk_ok "$OSXCROSS_SDK_TARBALL"; then
+        echo "  $OSXCROSS_SDK_TARBALL has NULLcanary placeholder headers - moving to .broken, re-extracting"
+        mv -f "$OSXCROSS_SDK_TARBALL" "$OSXCROSS_SDK_TARBALL.broken"
+    fi
+    if [ ! -f "$OSXCROSS_SDK_TARBALL" ]; then
+        local xip; xip=$(ls "$BR_DOWNLOADS"/Xcode_*_Universal.xip 2>/dev/null | head -1)
+        if [ -n "$xip" ]; then
+            echo "  extracting the macOS SDK from $xip (xar + pbzx + cpio, a few minutes)"
+            osxcross_extract_sdk "$xip" "$BR_DOWNLOADS" || { log_status osxcross "FAILED (SDK extraction from $xip)"; return 1; }
+            osxcross_sdk_ok "$OSXCROSS_SDK_TARBALL" || { log_status osxcross "FAILED (extracted SDK still has placeholder headers)"; return 1; }
+        elif [ -n "$OSXCROSS_SDK_URL" ]; then
+            fetch "$OSXCROSS_SDK_URL" "" "$OSXCROSS_SDK_TARBALL" || { log_status osxcross "FAILED (download of OSXCROSS_SDK_URL)"; return 1; }
+        fi
+    fi
+    local miss; miss="$(missing_apt_packages $OSXCROSS_APT)"
+    [ -z "$miss" ] || offer_apt "osxcross build prerequisites" "$miss" || { log_status osxcross "FAILED (missing:$miss)"; return 1; }
+    osxcross_clone || { log_status osxcross "FAILED (clone)"; return 1; }
+    mkdir -p "$OSXCROSS_DIR/tarballs"
+    # Only the pinned SDK goes in: build.sh picks whichever tarballs/ holds.
+    cmp -s "$OSXCROSS_SDK_TARBALL" "$OSXCROSS_DIR/tarballs/$(basename "$OSXCROSS_SDK_TARBALL")" \
+        || cp -f "$OSXCROSS_SDK_TARBALL" "$OSXCROSS_DIR/tarballs/"
+    # SDK_VERSION/BUILD_FLAVOR must be explicit or build.sh prompts (and, under
+    # set -e, dies silently on EOF); UNATTENDED skips its final confirmation.
+    # build.sh re-extracts the SDK and rebuilds cctools/ld64 every run (~15 min,
+    # no incremental mode of its own) and tests every wrapper at the end.
+    echo "  building/configuring/testing the osxcross environment (SDK $OSXCROSS_SDK_VER, cctools, ld64, clang wrappers)"
+    echo "  log: $OSXCROSS_DIR/build.log"
+    ( cd "$OSXCROSS_DIR" && SDK_VERSION="$OSXCROSS_SDK_VER" BUILD_FLAVOR=latest UNATTENDED=1 \
+        JOBS="$(nproc 2>/dev/null || echo 2)" ./build.sh >build.log 2>&1 ) \
+        || { log_status osxcross "FAILED (build - $(grep -m1 -E 'error:|Error|failed' "$OSXCROSS_DIR/build.log" | cut -c1-120); see $OSXCROSS_DIR/build.log)"; return 1; }
+    cc=$(osxcross_cc)
+    osxcross_smoke_ok "$cc" \
+        && log_status osxcross "OK ($cc, SDK $OSXCROSS_SDK_VER)" \
+        || { log_status osxcross "FAILED (built, but no working aarch64-apple-darwin*-clang in $OSXCROSS_BIN)"; return 1; }
+}
+
+# --------------------------------------------------------------- rcodesign --
+# apple-codesign's rcodesign: signs the macOS agents on Linux and macOS alike
+# (build-env.sh macos_sign). Checksum from the release's own .sha256 sidecar.
+p_rcodesign() {
+    if [ -x "$RCODESIGN" ] && "$RCODESIGN" --version 2>/dev/null | grep -q "$APPLE_CODESIGN_VER"; then
+        log_status rcodesign "already present ($APPLE_CODESIGN_VER)"; return 0
+    fi
+    local asset; asset=$(rcodesign_asset) || { log_status rcodesign "FAILED (no release asset for $(uname -s)/$(uname -m))"; return 1; }
+    local sha; sha=$(curl -sSL --fail "$(rcodesign_url "$asset.sha256")" | awk '{print $1}')
+    echo "$sha" | grep -qE '^[0-9a-f]{64}$' || { log_status rcodesign "FAILED (couldn't fetch $asset.sha256)"; return 1; }
+    fetch "$(rcodesign_url "$asset")" "$sha" "$BR_DOWNLOADS/$asset" || { log_status rcodesign "FAILED (download)"; return 1; }
+    mkdir -p "$BUILDROOT/bin" \
+        && tar xzf "$BR_DOWNLOADS/$asset" -C "$BUILDROOT/bin" --strip-components=1 --wildcards '*/rcodesign' \
+        && chmod +x "$RCODESIGN" \
+        && "$RCODESIGN" --version >/dev/null 2>&1 \
+        && log_status rcodesign "OK ($APPLE_CODESIGN_VER -> $RCODESIGN)" \
+        || { log_status rcodesign "FAILED (extract/run)"; return 1; }
 }
 
 # ---------------------------------------------------------- not fetchable ----
@@ -215,7 +341,7 @@ APT_PACKAGES="gcc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi gcc-arm-linux-gnue
 print_manual() {
     echo
     echo "NOT fetchable by this script - bring your own (see README.md 'Sources'):"
-    [ -d "$OSXCROSS_BIN" ]            || echo "  - $OSXCROSS_BIN  (osxcross, built from an Apple-distributed Xcode .xip)"
+    [ -n "$(osxcross_cc)" ] || echo "  - $OSXCROSS_BIN  (osxcross: './fetch-toolchains.sh osxcross' builds it, but the Apple-licensed SDK must be supplied - see p_osxcross)"
     echo
     echo "Host apt prerequisites (this script offers to install these):"
     echo "  sudo apt-get install -y $APT_PACKAGES"
@@ -229,6 +355,9 @@ print_manual() {
 # Commands this script itself needs, and the apt package carrying each where
 # the two names differ.
 HOST_DEPS="curl tar xz zstd bzip2 perl"
+# A macOS host only ever fetches the OpenSSL tarball (its cross toolchains are
+# Linux-only), so don't demand the Linux-side extractors there.
+[ "$(uname -s)" = Darwin ] && HOST_DEPS="curl tar perl"
 apt_pkg_for() { case "$1" in xz) echo xz-utils ;; *) echo "$1" ;; esac; }
 
 # Echoes the subset of $* that dpkg doesn't have installed. Silent (nothing
@@ -361,7 +490,9 @@ wire_makefile_toolchains() {
                 "x86-64-glibc:$TC_X86_64_BOOTLIN" \
                 "arm-linux-musleabihf-cross:$TC_ARMV7_MUSL_HF" \
                 "aarch64-linux-musl-cross:$TC_AARCH64_A53_MUSL" \
-                "x86_64-linux-musl-cross:$TC_X86_64_MUSL"; do
+                "x86_64-linux-musl-cross:$TC_X86_64_MUSL" \
+                "riscv64-linux-musl-cross:$TC_RISCV64_MUSL" \
+                "riscv64-linux-musl-x86_64:$TC_RISCV64_XTHEAD"; do
         name="${pair%%:*}"; src="${pair#*:}"
         if [ -d "$src" ]; then
             ln -sfn "$src" "$tc_dir/$name"
@@ -371,8 +502,8 @@ wire_makefile_toolchains() {
 }
 
 # --------------------------------------------------------------------- main --
-ALL="openssl openwrt-mips24kc openwrt-mipsel24kc openwrt-openwrt_x86_64 openwrt-aarch64-cortex-a53 openwrt-armvirt32 muslcc-aarch64 muslcc-armhf muslcc-x86_64 \
-bootlin-armv5 bootlin-armv7hf bootlin-aarch64 bootlin-mipsel-uclibc bootlin-x86 bootlin-x86-64 freebsd openbsd"
+ALL="openssl openwrt-mips24kc openwrt-mipsel24kc openwrt-openwrt_x86_64 openwrt-aarch64-cortex-a53 openwrt-armvirt32 muslcc-aarch64 muslcc-armhf muslcc-x86_64 muslcc-riscv64 riscv64-xthead \
+bootlin-armv5 bootlin-armv7hf bootlin-aarch64 bootlin-mipsel-uclibc bootlin-x86 bootlin-x86-64 freebsd openbsd rcodesign osxcross"
 
 usage() {
     cat <<EOF
@@ -385,6 +516,11 @@ Safe to re-run - anything already present and passing its check is skipped.
   ./fetch-toolchains.sh deps              show which packages are installed
   ./fetch-toolchains.sh help              this message
   ./fetch-toolchains.sh freebsd openbsd   named components only
+  ./fetch-toolchains.sh osxcross          macOS cross toolchain (Linux only). Built when the
+                                          Apple-licensed SDK is supplied locally (see below);
+                                          the no-argument run skips it otherwise, naming it
+                                          explicitly makes a missing SDK fatal.
+  ./fetch-toolchains.sh rcodesign         apple-codesign's rcodesign (signs the macOS agents)
   ./fetch-toolchains.sh -y [components]   answer the apt-get prompts yes
 
 Missing packages are offered for install (default yes): the host deps this
@@ -402,6 +538,8 @@ Paths - BUILDROOT defaults to /opt/buildroot; override it in the environment:
   toolchains      $BR_TOOLCHAINS
   sysroots        $BR_SYSROOTS
   osxcross        $OSXCROSS_BIN
+  rcodesign       $RCODESIGN
+  signing id      $MACOS_SIGN_P12  (self-signed, generated on first 'make macos' if absent)
   repo (staged)   $REPO
 EOF
     print_manual
@@ -419,8 +557,22 @@ case "$1" in
 esac
 
 check_host_deps
-check_cross_prereqs
+# Only the "fetch everything" run offers to install the full cross-compiler set;
+# `fetch-toolchains.sh freebsd` (or a CI call for one target) must not.
+[ $# -eq 0 ] && check_cross_prereqs
 mkdir -p "$BR_DOWNLOADS" "$BR_SYSROOTS" "$BR_TOOLCHAINS"
+
+# GLIBCVER=<version> routes a bootlin-* component to p_bootlin_pinned instead
+# of the shared $_BOOTLIN default - see env.sh's bootlin_release_for_glibc.
+GLIBCVER="${GLIBCVER:-}"
+bootlin_dispatch() {
+    local name="$1" family="$2" destvar="$3" ccname="$4" alias="$5"
+    if [ -n "$GLIBCVER" ]; then
+        p_bootlin_pinned "$name" "$family" "$ccname" "$GLIBCVER" "$alias"
+    else
+        p_bootlin "$name" "$family" "$destvar" "$ccname"
+    fi
+}
 
 run_one() {
     case "$1" in
@@ -433,19 +585,23 @@ run_one() {
         muslcc-aarch64)         p_muslcc muslcc-aarch64 TC_AARCH64_A53_MUSL ;;
         muslcc-armhf)           p_muslcc muslcc-armhf   TC_ARMV7_MUSL_HF ;;
         muslcc-x86_64)          p_muslcc muslcc-x86_64  TC_X86_64_MUSL ;;
-        bootlin-armv5)          p_bootlin bootlin-armv5  armv5-eabi    TC_ARMV5_BOOTLIN     arm-linux-gcc ;;
-        bootlin-armv7hf)        p_bootlin bootlin-armv7hf armv7-eabihf TC_ARMV7HF_BOOTLIN   arm-linux-gcc ;;
-        bootlin-aarch64)        p_bootlin bootlin-aarch64 aarch64      TC_AARCH64_BOOTLIN   aarch64-linux-gcc ;;
+        muslcc-riscv64)         p_muslcc muslcc-riscv64 TC_RISCV64_MUSL ;;
+        riscv64-xthead)         p_riscv64_xthead ;;
+        bootlin-armv5)          bootlin_dispatch bootlin-armv5  armv5-eabi    TC_ARMV5_BOOTLIN     arm-linux-gcc     armv5-eabi-glibc ;;
+        bootlin-armv7hf)        bootlin_dispatch bootlin-armv7hf armv7-eabihf TC_ARMV7HF_BOOTLIN   arm-linux-gcc     armv7-eabihf-glibc ;;
+        bootlin-aarch64)        bootlin_dispatch bootlin-aarch64 aarch64      TC_AARCH64_BOOTLIN   aarch64-linux-gcc aarch64-glibc ;;
         bootlin-mipsel-uclibc)  p_bootlin bootlin-mipsel-uclibc mips32el TC_MIPSEL_UCLIBC_BOOTLIN mipsel-linux-gcc ;;
-        bootlin-x86)            p_bootlin bootlin-x86    x86-i686      TC_X86_BOOTLIN       i686-linux-gcc ;;
-        bootlin-x86-64)         p_bootlin bootlin-x86-64 x86-64-core-i7 TC_X86_64_BOOTLIN   x86_64-linux-gcc ;;
+        bootlin-x86)            bootlin_dispatch bootlin-x86    x86-i686      TC_X86_BOOTLIN       i686-linux-gcc    x86-i686-glibc ;;
+        bootlin-x86-64)         bootlin_dispatch bootlin-x86-64 x86-64-core-i7 TC_X86_64_BOOTLIN   x86_64-linux-gcc  x86-64-glibc ;;
         freebsd)                p_freebsd ;;
         openbsd)                p_openbsd ;;
+        osxcross)               p_osxcross ;;
+        rcodesign)              p_rcodesign ;;
         *) echo "unknown component: $1 - run '$0 help' for the list" >&2; return 2 ;;
     esac
 }
 
-list="$*"; [ -z "$list" ] && list="$ALL"
+list="$*"; EXPLICIT=1; [ -z "$list" ] && { list="$ALL"; EXPLICIT=0; }
 rc=0
 for c in $list; do
     echo "=== $c ==="

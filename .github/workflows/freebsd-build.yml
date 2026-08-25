@@ -7,62 +7,34 @@ on:
 jobs:
   freebsd-build-x86-64:
     name: FreeBSD x86_64 (ARCHID=30)
-    # Cross-compiled from Linux via the makefile's CROSS=1 bsd path (clang + a
-    # base.txz sysroot), the same way openssl-bsd.yml builds the BSD OpenSSL
-    # archives - no FreeBSD VM needed. The release comes from the ARCH_30 stanza.
+    # Cross-compiled (clang + a base.txz sysroot, no FreeBSD VM). The release,
+    # the sysroot location and the mirror-with-fallback fetch all come from
+    # ARCH_30's BSDREL / build-env.sh / fetch-toolchains.sh - nothing is
+    # restated here. See BUILD.md.
     runs-on: ubuntu-24.04
+    env:
+      BUILDROOT: ${{ github.workspace }}/br
     steps:
-      - name: Check out repository code
-        uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.0
       - name: Install clang and lld
         run: sudo apt-get update && sudo apt-get install -y clang lld
-      - name: Fetch FreeBSD sysroot
-        run: |
-          set -euo pipefail
-          rel=$(make -s print-bsdrel ARCHID=30)
-          [ -n "$rel" ] || { echo "ERROR: ARCH_30 has no BSDREL" >&2; exit 1; }
-          echo "::notice::cross-building against FreeBSD $rel"
-          sysroot="$RUNNER_TEMP/sysroot"
-          rm -rf "$sysroot" && mkdir -p "$sysroot"
-
-          # Pre-trimmed sysroot (usr/include+usr/lib, built by
-          # build-bsd-sysroot-archives.sh) is mirrored at meshagent-toolchains,
-          # same as openssl-bsd.yml. Falls back to a real upstream release if
-          # the mirror doesn't have this OS release yet.
-          #
-          # media.githubusercontent.com/media, not raw.githubusercontent.com:
-          # the mirror repo tracks *.tar.* via Git LFS, and raw.* only serves
-          # the LFS pointer text, not real content.
-          MIRROR_RAW=https://media.githubusercontent.com/media/PTR-inc/meshagent-toolchains/main
-          mirror_url="$MIRROR_RAW/SR/freebsd-$rel-sysroot.tar.xz"
-          mirror_tarball="$RUNNER_TEMP/freebsd-$rel-sysroot.tar.xz"
-          if curl -sSfL -o /dev/null --head "$mirror_url" \
-             && curl -sSL --fail --connect-timeout 20 --max-time 300 -o "$mirror_tarball" "$mirror_url" \
-             && xz -t "$mirror_tarball" 2>/dev/null; then
-            echo "::notice::using pre-trimmed sysroot from meshagent-toolchains mirror"
-            tar xf "$mirror_tarball" -C "$sysroot"
-          else
-            echo "::notice::not on mirror (or corrupt) - falling back to upstream release"
-            url="https://download.freebsd.org/releases/amd64/amd64/${rel}-RELEASE"
-            # base.txz alone carries the headers and libs; ARCHID=30 is KVM=0, so
-            # nothing from ports (X11, libjpeg) is needed.
-            manifest=$(curl -sSL --fail --connect-timeout 20 --max-time 300 "$url/MANIFEST")
-            sha=$(echo "$manifest" | awk '$1=="base.txz"{print $2}')
-            [ -n "$sha" ] || { echo "ERROR: no base.txz checksum in MANIFEST" >&2; exit 1; }
-            tarball="$RUNNER_TEMP/base.txz"
-            curl -sSL --fail --connect-timeout 20 --max-time 900 -o "$tarball" "$url/base.txz"
-            echo "$sha  $tarball" | sha256sum -c -
-            tar xf "$tarball" -C "$sysroot"
-          fi
-          echo "SYSROOT=$sysroot" >> "$GITHUB_ENV"
+      - name: Fetch the FreeBSD sysroot
+        run: ./fetch-toolchains.sh -y freebsd
       - name: Build meshagent (x86_64)
         run: make -j4 freebsd ARCHID=30 CROSS=1
       - name: Verify the binary targets FreeBSD
         run: |
-          file meshagent_freebsd_x86-64
-          file meshagent_freebsd_x86-64 | grep -q FreeBSD
+          file build/freebsd_x86-64/meshagent_freebsd_x86-64
+          file build/freebsd_x86-64/meshagent_freebsd_x86-64 | grep -q FreeBSD
       - name: Upload artifacts
+        if: ${{ !env.ACT }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: meshagent-freebsd-x86_64
-          path: ${{ github.workspace }}/meshagent_*
+          path: ${{ github.workspace }}/build/*/meshagent_*
+      - name: Upload artifacts (act)
+        if: ${{ env.ACT }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: meshagent-freebsd-x86_64
+          path: ${{ github.workspace }}/build/*/meshagent_*

@@ -20,11 +20,19 @@
 #   ./build-toolchain-archives.sh                                   # every toolchain in $BR_TOOLCHAINS
 #   ./build-toolchain-archives.sh riscv64-lp64d--musl--stable-2025.08-1
 #   ./build-toolchain-archives.sh riscv64-lp64d--musl--stable-2025.08-1 mips32el--uclibc--stable-2025.08-1
+#
+#   # macOS SDK from an Xcode .xip under $BR_DOWNLOADS (Xcode_<version>_Universal.xip).
+#   # This is Apple's proprietary SDK, not redistributable to the public
+#   # meshagent-toolchains mirror the way every other archive here is - the
+#   # flag is a deliberate, explicit acknowledgement of that, required every
+#   # time. Lands in $BUILDROOT/private/, for a private/access-controlled
+#   # destination only (then point OSXCROSS_SDK_URL at it for other hosts).
+#   ./build-toolchain-archives.sh --i-have-rights-to-redistribute-this Xcode_26.6_Universal.xip
 
 set -euo pipefail
 
 export BUILDROOT="${BUILDROOT:-/opt/buildroot}"
-. "$(dirname "$(readlink -f "$0")")/openssl/libstatic/build/env.sh"
+. "$(dirname "$(readlink -f "$0")")/build-env.sh"
 
 log() { echo "[$1] $2"; }
 
@@ -89,11 +97,81 @@ trim_and_pack() {
     log "$name" "OK -> $out_base.tar.xz ($(du -h "$out_base.tar.xz" | cut -f1)), was $(du -sh "$src" | cut -f1)"
 }
 
+# --- macOS SDK, extracted from an Xcode .xip -------------------------------
+#
+# This is proprietary Apple content (the Xcode/macOS SDK license agreement),
+# not something PTR-inc owns or can redistribute outside Apple's own channels
+# - unlike every other toolchain here. It is packed into $BUILDROOT/private/
+# (never the same directory as the redistributable archives, so a blanket
+# upload of $BUILDROOT/*.tar.xz cannot sweep it onto the public TC/ mirror),
+# and only when the caller explicitly acknowledges that with
+# --i-have-rights-to-redistribute-this. Without the flag an Xcode_*.xip name
+# on the command line fails instead of silently packing Apple's SDK.
+REDISTRIBUTE_OK=0
+args=()
+for a in "$@"; do
+    case "$a" in
+        --i-have-rights-to-redistribute-this) REDISTRIBUTE_OK=1 ;;
+        *) args+=("$a") ;;
+    esac
+done
+set -- "${args[@]}"
+
+# Extracts the macOS SDK(s) from an Xcode .xip with osxcross's own
+# tools/gen_sdk_package_pbzx.sh (build-env.sh's osxcross_extract_sdk: clones
+# osxcross into $OSXCROSS_DIR and pipes the cpio stream through
+# openssl/libstatic/build/xip-sdk-cpio.py - SDK subtree only, hard-link
+# placeholders resolved; unrestricted extraction needs ~45GB scratch and a
+# real run here hit ENOSPC at 11GB free). Output goes to
+# $BUILDROOT/private/, NOT next to the redistributable archives, and the
+# SDK tarball fetch-toolchains.sh osxcross consumes is dropped in $BR_DOWNLOADS
+# so the same machine can build osxcross from it without a second extraction.
+pack_xcode_sdk() {
+    local xip_name="$1" xip="$BR_DOWNLOADS/$1"
+    [ -f "$xip" ] || { log "$xip_name" "FAILED (not found under $BR_DOWNLOADS)"; return 1; }
+
+    local version
+    version=$(echo "$xip_name" | sed -nE 's/^Xcode_([0-9.]+)_Universal\.xip$/\1/p')
+    [ -n "$version" ] || { log "$xip_name" "FAILED (name doesn't match Xcode_<version>_Universal.xip)"; return 1; }
+
+    if [ "$REDISTRIBUTE_OK" != 1 ]; then
+        log "$xip_name" "FAILED (Apple SDK content - refusing without --i-have-rights-to-redistribute-this)"
+        return 1
+    fi
+
+    local name="Xcode_${version}_Universal"
+    local out_base="$BUILDROOT/private/$name"
+    mkdir -p "$BUILDROOT/private"
+    local work; work=$(mktemp -d)
+    trap 'rm -rf "$work"' RETURN
+
+    log "$name" "extracting SDK from $xip_name (gen_sdk_package_pbzx.sh via xip-sdk-cpio.py)"
+    osxcross_extract_sdk "$xip" "$work/$name" || { log "$name" "FAILED (gen_sdk_package_pbzx.sh)"; return 1; }
+    local sdks=("$work/$name"/MacOSX*.sdk.tar.xz)
+    [ -e "${sdks[0]}" ] || { log "$name" "FAILED (no MacOSX*.sdk.tar.xz produced)"; return 1; }
+    log "$name" "produced $(basename -a "${sdks[@]}" | tr '\n' ' ')"
+
+    # Keep a local copy of the SDK the pinned osxcross build wants, if the xip has it.
+    if [ -f "$work/$name/$(basename "$OSXCROSS_SDK_TARBALL")" ]; then
+        cp -f "$work/$name/$(basename "$OSXCROSS_SDK_TARBALL")" "$OSXCROSS_SDK_TARBALL"
+        log "$name" "copied $(basename "$OSXCROSS_SDK_TARBALL") to $BR_DOWNLOADS (for ./fetch-toolchains.sh osxcross)"
+    else
+        log "$name" "note: no $(basename "$OSXCROSS_SDK_TARBALL") in this xip - build-env.sh pins OSXCROSS_SDK_VER=$OSXCROSS_SDK_VER"
+    fi
+
+    log "$name" "packing $out_base.tar.xz (private - do not upload to the public TC/ mirror)"
+    pack_xz "$work" "$out_base" "./$name"
+    log "$name" "OK -> $out_base.tar.xz ($(du -h "$out_base.tar.xz" | cut -f1)), from $xip_name ($(du -sh "$xip" | cut -f1))"
+}
+
 list="$*"
 [ -z "$list" ] && list=$(ls "$BR_TOOLCHAINS")
 
 rc=0
 for name in $list; do
-    trim_and_pack "$name" || rc=1
+    case "$name" in
+        Xcode_*_Universal.xip) pack_xcode_sdk "$name" || rc=1 ;;
+        *) trim_and_pack "$name" || rc=1 ;;
+    esac
 done
 exit $rc

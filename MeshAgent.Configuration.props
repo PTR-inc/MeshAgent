@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Shared by meshconsole\MeshConsole-2022.vcxproj and meshservice\MeshService-2022.vcxproj.
+  Imported between Microsoft.Cpp.Default.props and Microsoft.Cpp.props: everything the C++
+  toolset needs to know before it loads. Per-cell settings live in MeshAgent.Common.props.
+  Configuration axis: Debug | Release, optionally suffixed _NoOpenSSL (BCrypt only, no TLS).
+-->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Configuration">
+    <MeshDebug Condition="$(Configuration.StartsWith('Debug'))">true</MeshDebug>
+    <MeshDebug Condition="'$(MeshDebug)'==''">false</MeshDebug>
+    <MeshNoTLS Condition="$(Configuration.EndsWith('_NoOpenSSL'))">true</MeshNoTLS>
+    <MeshNoTLS Condition="'$(MeshNoTLS)'==''">false</MeshNoTLS>
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+    <UseDebugLibraries>$(MeshDebug)</UseDebugLibraries>
+    <WholeProgramOptimization Condition="'$(MeshDebug)'=='false'">true</WholeProgramOptimization>
+  </PropertyGroup>
+</Project>

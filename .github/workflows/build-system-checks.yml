@@ -1,0 +1,60 @@
+name: Build system checks
+run-name: Anti-drift gate + committed archive audit
+
+# Replaces verify-openssl-libs.yml. Runs on ANY change to a build-system file,
+# not just openssl/libstatic - the old path filter listed a single workflow, so
+# edits to the other seven openssl workflows skipped the audit entirely.
+on:
+  push:
+    paths:
+      - 'openssl/libstatic/**'
+      - 'build-env.sh'
+      - 'fetch-toolchains.sh'
+      - 'build-toolchain-archives.sh'
+      - 'build-bsd-sysroot-archives.sh'
+      - 'makefile'
+      - 'BUILD.md'
+      - '.github/workflows/**'
+      - '.github/actions/**'
+  pull_request:
+    paths:
+      - 'openssl/libstatic/**'
+      - 'build-env.sh'
+      - 'fetch-toolchains.sh'
+      - 'build-toolchain-archives.sh'
+      - 'build-bsd-sysroot-archives.sh'
+      - 'makefile'
+      - 'BUILD.md'
+      - '.github/workflows/**'
+      - '.github/actions/**'
+  workflow_dispatch:
+
+jobs:
+  consistency:
+    name: Sources of truth still agree
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: openssl/libstatic/build/consistency.sh
+
+  verify-archives:
+    name: Audit committed libcrypto.a/libssl.a
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: openssl/libstatic/verify
+
+  shellcheck:
+    name: Build scripts parse
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n every build script
+        run: |
+          rc=0
+          for f in build-env.sh fetch-toolchains.sh build-toolchain-archives.sh \
+                   build-bsd-sysroot-archives.sh \
+                   openssl/libstatic/verify openssl/libstatic/build/*.sh; do
+            bash -n "$f" || { echo "::error file=$f::syntax error"; rc=1; }
+          done
+          exit $rc

@@ -338,9 +338,5 @@ ToolChains/
 # Regenerated every build
 microscript/ILibDuktape_Commit.h
 
-# compiled builds: meshagent_<arch>, DEBUG_meshagent_<arch>
-/meshagent_*
-/DEBUG_meshagent_*
-
-# per-ARCHID object tree
-/obj/
+# build output
+/build/

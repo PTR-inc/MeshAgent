@@ -9,10 +9,27 @@ $script:BrWindowsDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:BrScripts = Split-Path -Parent $BrWindowsDir
 $script:Repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $BrScripts))
 
-# Keep in sync with env.sh - same pinned release, same tarball, same source.
-$script:OpenSslVersion = '1.1.1w'
-$script:OpenSslSha256 = 'cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8'
-$script:OpenSslUrl = "https://github.com/openssl/openssl/releases/download/OpenSSL_$($OpenSslVersion -replace '\.', '_')/openssl-$OpenSslVersion.tar.gz"
+# The version is read out of build-env.sh, not restated here - that file is the
+# single pin. Override for one session with $env:OPENSSL_VERSION.
+$script:OpenSslVersion = if ($env:OPENSSL_VERSION) { $env:OPENSSL_VERSION } else {
+    $m = Select-String -Path (Join-Path $script:Repo 'build-env.sh') `
+                       -Pattern 'OPENSSL_VERSION:-([0-9][^}"]*)' -ErrorAction SilentlyContinue
+    if ($m) { $m.Matches[0].Groups[1].Value } else { throw "couldn't read OPENSSL_VERSION from build-env.sh" }
+}
+# 1.x releases are tagged OpenSSL_1_1_1w; 3.x and later, openssl-3.5.7. Same
+# rule as build-env.sh's openssl_release_tag.
+$script:OpenSslTag = if ($script:OpenSslVersion -like '1.*') { "OpenSSL_" + ($script:OpenSslVersion -replace '\.', '_') } else { "openssl-$($script:OpenSslVersion)" }
+$script:OpenSslUrl = "https://github.com/openssl/openssl/releases/download/$($script:OpenSslTag)/openssl-$($script:OpenSslVersion).tar.gz"
+
+# No hand-pinned checksum: openssl.org publishes a <tarball>.sha256 sidecar for
+# every release, looked up at download time exactly as build-env.sh does.
+function Get-OpenSslSha256 {
+    param([string]$Version = $script:OpenSslVersion)
+    $body = (Invoke-WebRequest -UseBasicParsing -Uri "https://www.openssl.org/source/openssl-$Version.tar.gz.sha256").Content
+    $sha = ($body -split '\s+')[0]
+    if ($sha -notmatch '^[0-9a-f]{64}$') { throw "openssl-$Version.tar.gz.sha256 did not parse to a sha256" }
+    return $sha
+}
 
 # The default lives under the user profile; override by setting BUILDROOT before
 # dot-sourcing, or answer Install-BuildRootWindows's prompt for this session.
@@ -52,7 +69,9 @@ function Set-BuildRoot {
 
 Set-BuildRoot $(if ($env:BUILDROOT) { $env:BUILDROOT } else { $script:BuildRootDefault })
 
-# Same flags.txt env.sh reads - single source of truth for both.
+# Same flags.txt build-env.sh reads - single source of truth for both. Per-
+# target deltas live in build.ps1's $Targets (Asm) and targets.sh, not in
+# separate override files.
 $script:OsslFlags = (Get-Content (Join-Path $BrScripts 'flags.txt')) -join ' '
 
 # Prerequisites Install-BuildRootWindows can provision, pinned the same way the
@@ -400,7 +419,7 @@ function Install-BuildRootWindows {
 
     if ($Tarball) {
         Write-Host "  openssl $script:OpenSslVersion source tarball"
-        if (Save-BrDownload -Url $script:OpenSslUrl -Path $script:OpenSslTarball -Sha256 $script:OpenSslSha256 -Force:$Force) {
+        if (Save-BrDownload -Url $script:OpenSslUrl -Path $script:OpenSslTarball -Sha256 (Get-OpenSslSha256) -Force:$Force) {
             Write-Host "    ready   : $script:OpenSslTarball"
         } else { $ok = $false }
     }

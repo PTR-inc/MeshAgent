@@ -3,7 +3,23 @@ run-name: Build MacOS versions of MeshAgent
 on:
   push:
   pull_request:
+
+# Deliberately native: macOS runners with Xcode's clang, which is what the
+# makefile picks on Darwin (osxcross is only the Linux developer-machine path -
+# its Apple-licensed SDK can't be provisioned in public CI). The two ARCHIDs
+# need different runners, so the pairing below is curated - `guard` asserts it
+# still covers exactly what the makefile calls CLASS=macos.
 jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - name: The jobs below must cover every CLASS=macos ARCHID
+        run: |
+          want=$(make -s print-archids CLASS=macos | tr -s ' ' '\n' | sort -n | tr -d '\n')
+          have=$(printf '16\n29\n' | sort -n | tr -d '\n')
+          [ "$want" = "$have" ] || { echo "::error::CLASS=macos is now '$want' but mac-build.yml builds '$have'"; exit 1; }
+
   macos-build-arm64:
     name: macOS arm64 (ARCHID=29)
     runs-on: macos-15
@@ -13,10 +29,17 @@ jobs:
       - name: Build meshagent (arm64, KVM enabled)
         run: make -j4 macos ARCHID=29
       - name: Upload artifacts
+        if: ${{ !env.ACT }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: meshagent-macos-arm64
-          path: ${{ github.workspace }}/meshagent_*
+          path: ${{ github.workspace }}/build/*/meshagent_*
+      - name: Upload artifacts (act)
+        if: ${{ env.ACT }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: meshagent-macos-arm64
+          path: ${{ github.workspace }}/build/*/meshagent_*
 
   macos-build-x86_64:
     name: macOS x86_64 (ARCHID=16)
@@ -27,7 +50,14 @@ jobs:
       - name: Build meshagent (x86_64, KVM enabled)
         run: make -j4 macos ARCHID=16
       - name: Upload artifacts
+        if: ${{ !env.ACT }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: meshagent-macos-x86_64
-          path: ${{ github.workspace }}/meshagent_*
+          path: ${{ github.workspace }}/build/*/meshagent_*
+      - name: Upload artifacts (act)
+        if: ${{ env.ACT }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: meshagent-macos-x86_64
+          path: ${{ github.workspace }}/build/*/meshagent_*

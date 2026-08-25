@@ -1,0 +1,40 @@
+name: OpenBSD Build
+run-name: Build OpenBSD versions of MeshAgent
+on:
+  push:
+  pull_request:
+
+jobs:
+  openbsd-build-x86-64:
+    name: OpenBSD x86_64 (ARCHID=37)
+    # Cross-compiled (clang + a base+comp sysroot, no OpenBSD VM). The release,
+    # the sysroot location and the mirror-with-fallback fetch all come from
+    # ARCH_37's BSDREL / build-env.sh / fetch-toolchains.sh - nothing is
+    # restated here. See BUILD.md.
+    runs-on: ubuntu-24.04
+    env:
+      BUILDROOT: ${{ github.workspace }}/br
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - name: Install clang and lld
+        run: sudo apt-get update && sudo apt-get install -y clang lld
+      - name: Fetch the OpenBSD sysroot
+        run: ./fetch-toolchains.sh -y openbsd
+      - name: Build meshagent (x86_64)
+        run: make -j4 openbsd ARCHID=37 CROSS=1
+      - name: Verify the binary targets OpenBSD
+        run: |
+          file build/openbsd_x86-64/meshagent_openbsd_x86-64
+          file build/openbsd_x86-64/meshagent_openbsd_x86-64 | grep -q OpenBSD
+      - name: Upload artifacts
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: meshagent-openbsd-x86_64
+          path: ${{ github.workspace }}/build/*/meshagent_*
+      - name: Upload artifacts (act)
+        if: ${{ env.ACT }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: meshagent-openbsd-x86_64
+          path: ${{ github.workspace }}/build/*/meshagent_*

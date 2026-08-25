@@ -12,7 +12,7 @@
 set -euo pipefail
 
 export BUILDROOT="${BUILDROOT:-/opt/buildroot}"
-. "$(dirname "$(readlink -f "$0")")/openssl/libstatic/build/env.sh"
+. "$(dirname "$(readlink -f "$0")")/build-env.sh"
 
 log() { echo "[$1] $2"; }
 

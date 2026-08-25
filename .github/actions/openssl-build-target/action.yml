@@ -1,0 +1,61 @@
+name: Build one OpenSSL target
+description: >
+  Skip-check, provision, build and collect a single targets.sh target using the
+  same openssl/libstatic/build/build.sh a developer runs locally. Shared by the
+  linux and macos jobs so there is exactly one CI recipe, not one per family.
+
+inputs:
+  target:
+    description: targets.sh target name
+    required: true
+  version:
+    description: OpenSSL version being built
+    required: true
+  force:
+    description: rebuild even if the committed archive already matches
+    required: false
+    default: "false"
+  sfx:
+    description: filename suffix for coexisting versions, e.g. -3.0.16
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Skip if ${{ inputs.target }} already matches OpenSSL ${{ inputs.version }}
+      id: check
+      shell: bash
+      run: |
+        skip=true
+        for d in $(openssl/libstatic/build/targets.sh --field '${{ inputs.target }}' DEST); do
+          f="openssl/libstatic/$d/libcrypto${{ inputs.sfx }}.a"
+          { [ -f "$f" ] && strings "$f" | grep -qF "OpenSSL ${{ inputs.version }} "; } || { skip=false; break; }
+        done
+        [ '${{ inputs.force }}' = 'true' ] && skip=false
+        echo "skip=$skip" >> "$GITHUB_OUTPUT"
+        [ "$skip" = true ] && echo "::notice::${{ inputs.target }} already at OpenSSL ${{ inputs.version }} and force=false - skipping rebuild."
+        true
+
+    - name: Fetch the OpenSSL source
+      if: steps.check.outputs.skip != 'true'
+      shell: bash
+      run: ./fetch-toolchains.sh -y openssl
+
+    # BR_FETCH=1 makes build.sh provision from the target's own T_FETCH tokens -
+    # the same table `make list` and fetch-toolchains.sh use. No per-target
+    # toolchain installation steps live in YAML.
+    - name: Build ${{ inputs.target }}
+      if: steps.check.outputs.skip != 'true'
+      shell: bash
+      run: BR_FETCH=1 openssl/libstatic/build/build.sh '${{ inputs.target }}'
+
+    - name: Collect the staged archives
+      if: steps.check.outputs.skip != 'true'
+      shell: bash
+      run: |
+        for d in $(openssl/libstatic/build/targets.sh --field '${{ inputs.target }}' DEST); do
+          mkdir -p "out/openssl/libstatic/$d"
+          cp "openssl/libstatic/$d/libcrypto.a" "out/openssl/libstatic/$d/libcrypto${{ inputs.sfx }}.a"
+          cp "openssl/libstatic/$d/libssl.a"    "out/openssl/libstatic/$d/libssl${{ inputs.sfx }}.a"
+        done

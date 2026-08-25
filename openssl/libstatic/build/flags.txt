@@ -21,5 +21,6 @@ no-cast
 no-md2
 no-mdc2
 no-engine
+no-async
 no-ocsp
 no-cms
