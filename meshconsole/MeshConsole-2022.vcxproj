@@ -13,18 +13,6 @@
       <Configuration>Debug</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="Debug_NoOpenSSL|ARM64">
-      <Configuration>Debug_NoOpenSSL</Configuration>
-      <Platform>ARM64</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Debug_NoOpenSSL|Win32">
-      <Configuration>Debug_NoOpenSSL</Configuration>
-      <Platform>Win32</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Debug_NoOpenSSL|x64">
-      <Configuration>Debug_NoOpenSSL</Configuration>
-      <Platform>x64</Platform>
-    </ProjectConfiguration>
     <ProjectConfiguration Include="Release|ARM64">
       <Configuration>Release</Configuration>
       <Platform>ARM64</Platform>
@@ -37,16 +25,16 @@
       <Configuration>Release</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="Release_NoOpenSSL|ARM64">
-      <Configuration>Release_NoOpenSSL</Configuration>
+    <ProjectConfiguration Include="Release_ASAN|ARM64">
+      <Configuration>Release_ASAN</Configuration>
       <Platform>ARM64</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="Release_NoOpenSSL|Win32">
-      <Configuration>Release_NoOpenSSL</Configuration>
+    <ProjectConfiguration Include="Release_ASAN|Win32">
+      <Configuration>Release_ASAN</Configuration>
       <Platform>Win32</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="Release_NoOpenSSL|x64">
-      <Configuration>Release_NoOpenSSL</Configuration>
+    <ProjectConfiguration Include="Release_ASAN|x64">
+      <Configuration>Release_ASAN</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
@@ -55,6 +43,7 @@
     <RootNamespace>MeshConsole</RootNamespace>
     <Keyword>Win32Proj</Keyword>
     <ProjectName>MeshConsole-2022</ProjectName>
+    <!-- Newest SDK on the machine. MeshAgent.Common.props enforces the oldest one allowed. -->
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <!-- What this project tells ..\MeshAgent.Common.props. Everything else is shared with the other agent. -->
     <MeshTargetBase>MeshConsole</MeshTargetBase>
@@ -73,6 +62,11 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <Import Project="..\MeshAgent.Common.props" />
+  <ItemDefinitionGroup>
+    <Manifest>
+      <AdditionalManifestFiles>$(ProjectDir)longpath.manifest %(AdditionalManifestFiles)</AdditionalManifestFiles>
+    </Manifest>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.c" />
   </ItemGroup>

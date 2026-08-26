@@ -19,12 +19,13 @@ limitations under the License.
 // The test sections live under test/testmodules/, one file per section, run in filename order.
 // Each must export exports.name and exports.run(check, deepEqual, done). See ISSUES.md.
 //
-// Run from the repo root, because module paths are cwd-relative:
+// Run from the repo root, because module paths are cwd-relative. Scratch files do not go to the
+// working directory, see scratch() below:
 //   meshagent test/stress-test.js
 //   meshagent -b64exec <base64 of this file>
 //
 // A timer only fires while its return value stays referenced, so every setTimeout() here and in
-// the testmodules is assigned to a variable that stays in scope (meshagent-todo.md #0d).
+// the testmodules is assigned to a variable that stays in scope.
 // A native crash in the 06-* sections kills the process outright, so automate with an external timeout.
 //
 
@@ -53,7 +54,7 @@ var OPT_EXCLUDE = [];
 })();
 
 // Never name a variable 'keys'. Object.prototype.keys is a readonly polyfill, so a top-level
-// 'var keys = ...' silently does nothing (meshagent-todo.md #0b). Kept as a blanket convention.
+// 'var keys = ...' silently does nothing. Kept as a blanket convention.
 
 function check(section, cond, msg) {
     if (cond) { RESULTS.pass++; }
@@ -109,6 +110,7 @@ var FINISHED = false;
 function finish() {
     if (FINISHED) { return; }
     FINISHED = true;
+    removeScratchDir();
     console.log('');
     console.log('==================================================');
     console.log('TOTAL: ' + RESULTS.pass + ' passed, ' + RESULTS.fail + ' failed (of ' + (RESULTS.pass + RESULTS.fail) + ')');
@@ -120,8 +122,44 @@ function finish() {
     process.exit(RESULTS.fail == 0 ? 0 : 1);
 }
 
+// ---------------------------------------------------------------------------------------------
+// scratch files
+// ---------------------------------------------------------------------------------------------
+
+// Every scratch file a section writes goes under this directory, never the working directory, so a
+// run cannot leave residue inside the repository. The pid keeps concurrent runs apart. Sections get
+// it as the fourth argument to run().
+var SCRATCH_DIR = null;
+function scratch(name) {
+    if (SCRATCH_DIR == null) {
+        // tmpdir() ends with a separator on Windows and Linux, but on macOS it comes from TMPDIR.
+        var base = require('os').tmpdir();
+        if (!(/[\\\/]$/).test(base)) { base += '/'; }
+        SCRATCH_DIR = base + 'meshagent-stresstest-' + (process.pid || 0);
+        try { require('fs').mkdirSync(SCRATCH_DIR); } catch (e) { }
+    }
+    return SCRATCH_DIR + '/' + name;
+}
+
+// Windows refuses to unlink a file whose stream is still open, so this can legitimately fail.
+// Say where the leftovers are rather than failing the run over them.
+function removeScratchDir() {
+    if (SCRATCH_DIR == null) { return; }
+    var fs = require('fs'), left = [];
+    try {
+        var entries = fs.readdirSync(SCRATCH_DIR);
+        for (var i = 0; i < entries.length; ++i) {
+            var e = ('' + entries[i]);
+            if (e == '.' || e == '..') { continue; }
+            try { fs.unlinkSync(SCRATCH_DIR + '/' + e); } catch (x) { left.push(e); }
+        }
+    } catch (e) { return; }
+    if (left.length == 0) { try { fs.rmdirSync(SCRATCH_DIR); } catch (e) { } }
+    else { console.log('NOTE: ' + left.length + ' scratch file(s) still open, left in ' + SCRATCH_DIR); }
+}
+
 // Anchored on this top-level var so it survives GC, because an unreferenced setTimeout return
-// value can be collected before it ever fires (meshagent-todo.md #0d).
+// value can be collected before it ever fires.
 var watchdogTimer = null;
 function armWatchdog(ms) {
     watchdogTimer = setTimeout(function () {
@@ -161,7 +199,7 @@ function loadSections() {
         catch (e) { mod = require('./testmodules/' + modName); }
         (function (mod, fileName) {
             sections.push(wrapSection(mod.name || fileName, function (done) {
-                mod.run(check, deepEqual, done);
+                mod.run(check, deepEqual, done, scratch);
             }));
         })(mod, files[i]);
     }

@@ -841,9 +841,17 @@ endif
 
 GITTEST := $(shell git log -1 > /dev/null 2>&1 ; echo $$? )
 ifeq ($(GITTEST),0)
+# Rewriting this header on every parse changes its mtime and forces a rebuild of everything that
+# includes it, so only regenerate when the commit actually changed. The hash covers every value in
+# the file, and it is written last so that finding it also proves the file was written completely.
+GITHASH := $(shell git log -1 --format=%H )
+ifneq ($(shell grep -qs '"$(GITHASH)"' microscript/ILibDuktape_Commit.h && echo uptodate),uptodate)
 $(shell echo "// This file is auto-generated, any edits may be overwritten" > microscript/ILibDuktape_Commit.h )
-$(shell git log -1 | grep "Date: " | awk '{ aLen=split($$0, a, " "); printf "#define SOURCE_COMMIT_DATE \"%s-%s-%s %s%s\"\n", a[6], a[3], a[4], a[5], a[7]; }' >> microscript/ILibDuktape_Commit.h )
+$(shell git log -1 --format=%cI | awk '{ printf "#define SOURCE_COMMIT_DATE \"%s\"\n", $$0; }' >> microscript/ILibDuktape_Commit.h )
+$(shell git rev-parse --short=12 HEAD | awk '{ printf "#define SOURCE_COMMIT_HASH_SHORT \"%s\"\n", $$0; }' >> microscript/ILibDuktape_Commit.h )
+$(shell git log -1 --date=format:'%y,%m,%d,%H%M' --format=%cd | awk '{ printf "#define SOURCE_COMMIT_FILEVERSION %s\n", $$0; }' >> microscript/ILibDuktape_Commit.h )
 $(shell git log -1 --format=%H | awk '{ printf "#define SOURCE_COMMIT_HASH \"%s\"\n", $$0; }' >> microscript/ILibDuktape_Commit.h )
+endif
 endif
 
 .PHONY: all clean cleanbin list list-archs print-toolchain print-ossldir print-bsdrel print-macosarch print-archids

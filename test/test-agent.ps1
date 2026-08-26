@@ -8,30 +8,40 @@
       1. -info sanity banner (version, ARCHID, OpenSSL)
       2. test/stress-test.js, every testmodule except 06-*   must pass
       3. test/stress-test.js, the 06-* sections only          known native crashes (TLS reconnect,
-                                                              WebSocket teardown), see meshagent-todo.md
+                                                              WebSocket teardown)
       4. the same core run delivered via -b64exec             the meshcore delivery path, must pass
       5. connection test against <binary>.msh                 connect, authenticate, launch meshcore,
                                                               and persist the identity into <binary>.db
-      6. Dr. Memory over the core stress run                  leak and error report (optional tool)
-      7. AddressSanitizer over the core stress run            needs an ASan build, see -Asan
+      6. AddressSanitizer over the core stress run            needs an ASan build, see -Asan
     Every check lives in test/testmodules/*.js. This script only launches, judges and tabulates.
+    The stress phases run the agent through a hard link in the repo root, because on Windows the
+    agent chdirs to its own directory and stress-test.js resolves its modules against the cwd.
     The legacy upstream scripts (self-test.js, leaktest.js, update-test.js, authtest.js) are unused.
     Everything is written to the console and to a logfile at the same time.
 .PARAMETER Binary
     Agent .exe to test. Default: newest MeshConsole*.exe under build\win-*\ (or the pre-layout Release\, Debug\).
 
+.PARAMETER Platform
+    Restrict auto-discovery to one platform: x86, x64 or ARM64.
+
+.PARAMETER Configuration
+    Restrict auto-discovery to one configuration: Debug or Release. Each one has its own
+    build\win-<platform>-<configuration>\ directory, so without this a newer build of the
+    other configuration can be picked instead.
+
+.PARAMETER AllowStale
+    Do not fail when the agent was not built from the current HEAD commit.
+
 .PARAMETER Log
     Logfile path. Default: test\logs\test-agent-<timestamp>.log
-
-.PARAMETER Quick
-    Skip the Dr. Memory phase.
 
 .PARAMETER NoConnect
     Skip the .msh connection test.
 
 .PARAMETER Asan
-    ASan-instrumented agent for phase 8. Default: <binary>_asan.exe if it exists. Build one with:
-    msbuild MeshAgent-2022.sln /p:Configuration=Release /p:Platform=x64 /p:EnableASAN=true
+    ASan-instrumented agent for phase 6. Default: the Release_ASAN build of the same platform,
+    or <binary>_asan.exe beside the agent. Build one with:
+    msbuild MeshAgent-2022.sln /p:Configuration=Release_ASAN /p:Platform=x64
 
 .PARAMETER AsanRuntimeDir
     Directory holding clang_rt.asan_dynamic-<arch>.dll. Default: probed from the MSVC toolsets.
@@ -44,31 +54,29 @@
 .PARAMETER Ci
     GitHub Actions mode: ::group:: folding, annotations, job summary table. Implies -Yes.
 
-.PARAMETER Yes
-    Non-interactive: install missing tools without asking.
-
 .EXAMPLE
     .\test\test-agent.ps1
 .EXAMPLE
-    .\test\test-agent.ps1 -Binary .\build\win-x64-Release\MeshConsole64.exe -Quick
+    .\test\test-agent.ps1 -Binary .\build\win-x64-Release\MeshConsole64.exe -NoConnect
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
     [string]$Binary,
+    [ValidateSet('x86', 'x64', 'ARM64')][string]$Platform,
+    [ValidateSet('Debug', 'Release', 'Release_ASAN')][string]$Configuration,
+    [switch]$AllowStale,
     [string]$Log,
-    [switch]$Quick,
     [switch]$NoConnect,
     [string]$Asan,
     [string]$AsanRuntimeDir,
     [switch]$Strict,
     [switch]$Lenient,
-    [switch]$Ci,
-    [switch]$Yes
+    [switch]$Ci
 )
 
 $ErrorActionPreference = 'Continue'
-if ($Ci) { $Yes = $true; if (-not $Lenient) { $Strict = $true } }
+if ($Ci -and -not $Lenient) { $Strict = $true }
 
 # The cwd must be the repo root, because stress-test.js resolves its testmodules relative to it.
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -98,9 +106,8 @@ function Head2([string]$Title) {
     if ($script:Ci) { Write-Host "::group::$Title"; $script:GroupOpen = $true }
 }
 
-$TmpDir = Join-Path ([IO.Path]::GetTempPath()) ('test-agent-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-$null = New-Item -ItemType Directory -Force -Path $TmpDir
 $script:Started = @()
+$script:Shims = @()
 
 # ---------------------------------------------------------------------------------------------
 # process helper: run with a timeout, capture output, optionally drive stdin, stop early
@@ -124,12 +131,14 @@ function Invoke-Agent {
     $psi.RedirectStandardError = $true
     if ($PSBoundParameters.ContainsKey('StdinLines')) { $psi.RedirectStandardInput = $true }
 
-    $sb = New-Object System.Text.StringBuilder
+    # stdout and stderr are delivered on two different threads. A plain StringBuilder is not
+    # thread-safe, so the two handlers could interleave or lose a line. A synchronised list cannot.
+    $lines = [Collections.ArrayList]::Synchronized((New-Object Collections.ArrayList))
     $p = New-Object System.Diagnostics.Process
     $p.StartInfo = $psi
-    $handler = { if ($null -ne $EventArgs.Data) { [void]$Event.MessageData.AppendLine($EventArgs.Data) } }
-    $eo = Register-ObjectEvent -InputObject $p -EventName OutputDataReceived -Action $handler -MessageData $sb
-    $ee = Register-ObjectEvent -InputObject $p -EventName ErrorDataReceived  -Action $handler -MessageData $sb
+    $handler = { if ($null -ne $EventArgs.Data) { [void]$Event.MessageData.Add($EventArgs.Data) } }
+    $eo = Register-ObjectEvent -InputObject $p -EventName OutputDataReceived -Action $handler -MessageData $lines
+    $ee = Register-ObjectEvent -InputObject $p -EventName ErrorDataReceived  -Action $handler -MessageData $lines
 
     [void]$p.Start()
     $script:Started += $p
@@ -145,8 +154,17 @@ function Invoke-Agent {
 
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $timedOut = $false
+    $sawStop = $false
+    $scanned = 0
     while (-not $p.HasExited) {
-        if ($StopWhen -and $sb.ToString().Contains($StopWhen)) { break }
+        if ($StopWhen) {
+            # Only the lines that arrived since the last poll are scanned, so a chatty run does not
+            # re-read its whole output every 250 ms.
+            $seen = $lines.ToArray()
+            for ($i = $scanned; $i -lt $seen.Count; $i++) { if ($seen[$i].Contains($StopWhen)) { $sawStop = $true } }
+            $scanned = $seen.Count
+            if ($sawStop) { break }
+        }
         if ((Get-Date) -gt $deadline) { $timedOut = $true; break }
         Start-Sleep -Milliseconds 250
     }
@@ -164,7 +182,9 @@ function Invoke-Agent {
     Unregister-Event -SourceIdentifier $eo.Name -ErrorAction SilentlyContinue
     Unregister-Event -SourceIdentifier $ee.Name -ErrorAction SilentlyContinue
     $p.Dispose()
-    [pscustomobject]@{ Output = $sb.ToString(); ExitCode = $code; TimedOut = $timedOut }
+    $text = $lines.ToArray() -join "`r`n"
+    if ($text) { $text += "`r`n" }
+    [pscustomobject]@{ Output = $text; ExitCode = $code; TimedOut = $timedOut }
 }
 
 function Emit($Result, [int]$MaxLines = 0) {
@@ -179,6 +199,16 @@ function Emit($Result, [int]$MaxLines = 0) {
     else { $lines | ForEach-Object { Say $_ } }
 }
 
+# Every stress phase judges itself on the TOTAL line rather than on the exit code, because
+# process.exit(1) does not always survive on Windows.
+function Get-StressTotals([string]$Text) {
+    $line = ([regex]::Matches($Text, 'TOTAL: .*') | Select-Object -Last 1).Value
+    if ($line -match 'TOTAL: (\d+) passed, (\d+) failed') {
+        return [pscustomobject]@{ Line = $line; Passed = [int]$Matches[1]; Failed = [int]$Matches[2] }
+    }
+    return [pscustomobject]@{ Line = $line; Passed = -1; Failed = -1 }
+}
+
 # NTSTATUS values such as 0xC0000005 read as huge negative numbers. Name them, or nobody can
 # tell a crash from an application exit code.
 function RcDesc($Code) {
@@ -188,7 +218,7 @@ function RcDesc($Code) {
         -1073741795 { 'ILLEGAL_INSTRUCTION 0xC000001D' }
         -1073741571 { 'STACK_OVERFLOW 0xC00000FD' }
         -1073740791 { 'STACK_BUFFER_OVERRUN 0xC0000409' }
-        -2147483645 { 'BREAKPOINT 0x80000003 - see meshagent-todo.md #0j' }
+        -2147483645 { 'BREAKPOINT 0x80000003' }
         -1073741510 { 'CONTROL_C_EXIT 0xC000013A' }
         -1073741515 { 'DLL_NOT_FOUND 0xC0000135 - missing runtime DLL, e.g. clang_rt.asan_dynamic-*.dll' }
         -1073741511 { 'ENTRYPOINT_NOT_FOUND 0xC0000139 - a DLL loaded but lacks an export the binary needs' }
@@ -209,45 +239,73 @@ function Record([string]$Name, [string]$Result, [string]$Note = '') {
 }
 
 # ---------------------------------------------------------------------------------------------
-# tool discovery
-# ---------------------------------------------------------------------------------------------
-function Ensure-Tool([string]$Tool, [string]$WingetId, [string]$ChocoId) {
-    if (Get-Command $Tool -ErrorAction SilentlyContinue) { return $true }
-    $cmd = $null
-    if (Get-Command winget -ErrorAction SilentlyContinue) { $cmd = "winget install --id $WingetId -e --accept-source-agreements --accept-package-agreements" }
-    elseif (Get-Command choco -ErrorAction SilentlyContinue) { $cmd = "choco install $ChocoId -y" }
-    Say "MISSING TOOL: '$Tool' is not installed."
-    if (-not $cmd) { Say "  No winget or choco found - install $Tool manually and re-run."; return $false }
-    $ans = 'N'
-    if ($script:Yes) { $ans = 'y' }
-    elseif ([Environment]::UserInteractive -and -not $script:Ci) {
-        $ans = Read-Host "  Install it now with: $cmd  [y/N]"
-        Add-Content -Path $script:Log -Value "  Install prompt answered: $ans" -Encoding UTF8
-    }
-    else { Say "  Not interactive - skipping. To enable this phase, run: $cmd"; return $false }
-    if ($ans -notmatch '^[yY]') { Say "  Skipped. To enable this phase later, run: $cmd"; return $false }
-    Say "  Installing: $cmd"
-    cmd.exe /c $cmd 2>&1 | Add-Content -Path $script:Log -Encoding UTF8
-    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
-    if (Get-Command $Tool -ErrorAction SilentlyContinue) { Say "  '$Tool' installed."; return $true }
-    Say '  Install failed - see the log for the package manager output.'
-    return $false
-}
-
-# ---------------------------------------------------------------------------------------------
 # binary selection
 # ---------------------------------------------------------------------------------------------
+# Each platform and configuration has its own build\win-<platform>-<configuration>\ directory, so
+# the newest binary in the tree is often not the one that was just built. Name what was chosen.
+function Get-BuildTag([string]$Path) {
+    $dir = Split-Path -Leaf (Split-Path -Parent $Path)
+    if ($dir -match '^win-(x86|x64|ARM64)-(.+)$') {
+        return [pscustomobject]@{ Platform = $Matches[1]; Configuration = $Matches[2] }
+    }
+    return [pscustomobject]@{ Platform = ''; Configuration = $dir }
+}
+
+# On Windows only, the agent chdirs to its own directory at startup (the WIN32 block around
+# SetCurrentDirectoryW in meshcore/agentcore.c). A binary under build\win-<platform>-<configuration>\
+# therefore resolves both test\stress-test.js and test/testmodules against that directory and finds
+# neither. Running it through a hard link in the repo root puts the working directory where
+# stress-test.js expects it. The bash driver needs none of this, because the chdir is WIN32-only.
+# The testmodules write their scratch files to a per-pid directory under the temp dir, and Windows
+# will not unlink one whose read stream is still open, so a run can leave that directory behind.
+# The repo root is swept too, because that is where a checkout from before this change wrote them.
+function Clear-TestResidue {
+    $globs = @((Join-Path ([IO.Path]::GetTempPath()) 'meshagent-stresstest-*'),
+               (Join-Path $script:RepoRoot 'meshagent-stresstest-*'))
+    Get-ChildItem -Path $globs -ErrorAction SilentlyContinue |
+        Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
+    # A file another process still has open cannot be deleted, and the next phase then fails to
+    # create it. Name the survivors, or that failure looks like a defect in the phase itself.
+    $left = @(Get-ChildItem -Path $globs -Recurse -File -ErrorAction SilentlyContinue)
+    if ($left.Count -gt 0) {
+        Say ('  WARNING: {0} scratch file(s) from an earlier phase could not be removed - something still holds them open:' -f $left.Count)
+        $left | ForEach-Object { Say ('    ' + $_.FullName) }
+    }
+}
+
+function New-RootShim([string]$Path) {
+    if ((Split-Path -Parent $Path) -eq $script:RepoRoot) { return $Path }
+    $shim = Join-Path $script:RepoRoot ('testrun-' + (Split-Path -Leaf $Path))
+    Remove-Item -LiteralPath $shim -Force -ErrorAction SilentlyContinue
+    try { $null = New-Item -ItemType HardLink -Path $shim -Target $Path -ErrorAction Stop }
+    catch { Copy-Item -LiteralPath $Path -Destination $shim -Force }
+    $script:Shims += $shim
+    return $shim
+}
+
 if (-not $Binary) {
-    $Binary = Get-ChildItem -Path @('build\win-*', 'Release', 'Debug', '.') -Filter 'Mesh*.exe' -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -like 'MeshConsole*' -or $_.Name -like 'MeshService*' } |
-              Sort-Object @{Expression = { $_.Name -like 'MeshConsole*' }; Descending = $true}, LastWriteTime -Descending |
-              Select-Object -First 1 -ExpandProperty FullName
+    $roots = @('build\win-*', 'Release', 'Debug', '.')
+    if ($Platform -or $Configuration) {
+        $pf = if ($Platform) { $Platform } else { '*' }
+        $cf = if ($Configuration) { $Configuration } else { '*' }
+        $roots = @("build\win-$pf-$cf")
+    }
+    $cands = @(Get-ChildItem -Path $roots -Filter 'Mesh*.exe' -ErrorAction SilentlyContinue |
+               Where-Object { $_.Name -like 'MeshConsole*' -or $_.Name -like 'MeshService*' } |
+               Sort-Object @{Expression = { $_.Name -like 'MeshConsole*' }; Descending = $true}, LastWriteTime -Descending)
+    if ($cands.Count -gt 1) {
+        Say ('{0} agent binaries match - taking the first. Narrow it with -Platform, -Configuration or -Binary:' -f $cands.Count)
+        $cands | ForEach-Object { Say ('    {0}  ({1:yyyy-MM-dd HH:mm})' -f $_.FullName, $_.LastWriteTime) }
+    }
+    if ($cands.Count -gt 0) { $Binary = $cands[0].FullName }
 }
 if (-not $Binary -or -not (Test-Path $Binary)) {
-    Write-Error 'no agent binary found - build the solution or pass -Binary <path to MeshConsole*.exe>'
+    $what = if ($Platform -or $Configuration) { " for -Platform '$Platform' -Configuration '$Configuration'" } else { '' }
+    Write-Error "no agent binary found$what - build the solution or pass -Binary <path to MeshConsole*.exe>"
     exit 2
 }
 $Binary = (Resolve-Path $Binary).Path
+$BuildTag = Get-BuildTag $Binary
 
 function Get-PeMachine([string]$Path) {
     $fs = [IO.File]::OpenRead($Path)
@@ -260,9 +318,23 @@ function Get-PeMachine([string]$Path) {
     finally { $fs.Close() }
 }
 function Test-IsAsan([string]$Path) {
-    # An MSVC ASan build imports clang_rt.asan*.dll, and the name is in the import table as plain text.
-    try { return [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($Path)) -match 'clang_rt\.asan' }
+    # An MSVC ASan build imports clang_rt.asan*.dll, and the name sits in the import table as plain
+    # ASCII. Read it in fixed blocks, so a large agent never lands in memory whole.
+    try {
+        $sr = New-Object IO.StreamReader($Path, [Text.Encoding]::ASCII)
+        try {
+            $buf = New-Object char[] 65536
+            $tail = ''
+            while (($n = $sr.Read($buf, 0, $buf.Length)) -gt 0) {
+                $block = $tail + (New-Object string($buf, 0, $n))
+                if ($block.Contains('clang_rt.asan')) { return $true }
+                $tail = $block.Substring([Math]::Max(0, $block.Length - 16))
+            }
+        }
+        finally { $sr.Close() }
+    }
     catch { return $false }
+    return $false
 }
 
 # The ASan runtime DLL is needed even by /MT builds since VS 17.7 and is not on PATH outside a
@@ -328,89 +400,129 @@ try {
 $CanRun = $true
 if ($BinMachine -eq 'ARM64' -and $HostArch -ne 'ARM64') { $CanRun = $false }
 
-$RunDrMemory = -not $Quick
-$DrMemSkipReason = ''
-if ($Quick) { $DrMemSkipReason = 'requested (-Quick)' }
-# Package IDs are best-effort. A wrong one just fails the install and the phase skips.
-if ($RunDrMemory -and -not (Ensure-Tool 'drmemory' 'DynamoRIO.DrMemory' 'drmemory')) {
-    $RunDrMemory = $false; $DrMemSkipReason = 'Dr. Memory not installed'
-}
-
 # ---------------------------------------------------------------------------------------------
 # start
 # ---------------------------------------------------------------------------------------------
-if (Test-IsAsan $Binary) { $null = Resolve-AsanRuntime $Binary }
-
 Head2 'MeshAgent test driver (Windows)'
 Say ("date        : {0}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 Say "repo        : $RepoRoot"
 Say "binary      : $Binary"
+Say ("build       : {0}" -f $(if ($BuildTag.Platform) { "$($BuildTag.Platform) $($BuildTag.Configuration)" } else { "unrecognised layout ($($BuildTag.Configuration))" }))
 Say "             PE machine: $BinMachine, host: $HostArch"
 Say ("powershell  : {0}" -f $PSVersionTable.PSVersion)
 Say ("elevated    : {0}" -f $(if ($IsElevated) { 'yes' } else { 'NO - some connect paths need it' }))
-Say ("dr. memory  : {0}" -f $(if ($RunDrMemory) { 'enabled' } else { "disabled ($DrMemSkipReason)" }))
 Say "logfile     : $Log"
 
+# This has to come before the ASan probe below, which starts the agent to find a runtime it accepts.
 if (-not $CanRun) {
     Say ''
     Say "Cannot run an $BinMachine binary on $HostArch - test it on matching hardware."
     exit 1
 }
 
+if (Test-IsAsan $Binary) { $null = Resolve-AsanRuntime $Binary }
+
+# The stress phases run through this, the connection phase does not: that one wants its .msh and .db
+# beside the real binary.
+$RunBinary = New-RootShim $Binary
+if ($RunBinary -ne $Binary) { Say ("run-as       : {0}  (hard link, so the agent's own chdir lands on the repo root)" -f $RunBinary) }
+
 # --- phase 1: -info ---------------------------------------------------------------------------
-Head2 '[1/7] agent -info'
+# -info already reports the commit the agent was built from, whether TLS is compiled in, and the
+# ARCHID it claims. Reading it turns the banner into a check on what is about to be tested.
+Head2 '[1/6] agent -info'
 $r = Invoke-Agent -FilePath $Binary -ArgumentList @('-info') -TimeoutSec 30
 Emit $r 20
-if ($r.ExitCode -eq 0) { Record 'agent -info' 'PASS' } else { Record 'agent -info' 'FAIL' (RcDesc $r.ExitCode) }
+
+$HasTls = $false
+$infoNotes = @()
+if ($r.Output -match '(?m)^Using OpenSSL (.+)$') { $HasTls = $true; $infoNotes += ('OpenSSL ' + $Matches[1].Trim()) }
+else { $infoNotes += 'no TLS (MICROSTACK_NOTLS build)' }
+if ($r.Output -match '(?m)^Agent ARCHID: (\d+)') { $infoNotes += ('ARCHID ' + $Matches[1]) }
+
+# Nothing here builds without TLS, so an agent that reports none did not come out of this tree.
+if ($BuildTag.Platform -and -not $HasTls) {
+    Say '  WARNING: this agent reports no OpenSSL, which no configuration here produces - stale or foreign binary?'
+}
+
+# Auto-discovery takes the newest binary, which makes it easy to test yesterday's build by accident.
+$binCommit = if ($r.Output -match '(?m)Commit Hash:\s*([0-9a-f]{40})') { $Matches[1] } else { '' }
+$headCommit = ''
+try { $headCommit = (& git rev-parse HEAD 2>$null) } catch { }
+$stale = ($binCommit -and $headCommit -and $binCommit -ne $headCommit)
+if ($stale) { $infoNotes += ('built from {0}, HEAD is {1}' -f $binCommit.Substring(0, 12), $headCommit.Substring(0, 12)) }
+elseif ($binCommit -and $headCommit) { $infoNotes += ('at HEAD ' + $binCommit.Substring(0, 12)) }
+
+if ($r.ExitCode -ne 0) { Record 'agent -info' 'FAIL' (RcDesc $r.ExitCode) }
+elseif ($stale -and -not $AllowStale) { Record 'agent -info' 'FAIL' (($infoNotes -join ', ') + ' - rebuild, or pass -AllowStale') }
+else { Record 'agent -info' 'PASS' ($infoNotes -join ', ') }
 
 # --- phase 2: stress test, core sections ------------------------------------------------------
 # The 06-* testmodules are the known native-crash sections (TLS reconnect and WebSocket session
 # teardown). They run in phase 3, apart from the core, so one crash cannot take every other
 # check down with it.
 $coreExcl = ((Get-ChildItem 'test\testmodules' -Filter '*.js' | Where-Object { $_.Name -notlike '06-*' } | ForEach-Object { $_.BaseName }) -join ',')
-Head2 '[2/7] stress test - every testmodule except the known-crash 06-* sections'
-$r = Invoke-Agent -FilePath $Binary -ArgumentList @('test\stress-test.js', '--exclude=06-', '--watchdog=120000') -TimeoutSec 240
+Head2 '[2/6] stress test - every testmodule except the known-crash 06-* sections'
+Clear-TestResidue
+$r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('test\stress-test.js', '--exclude=06-', '--watchdog=120000') -TimeoutSec 240
 Emit $r
-$total = ([regex]::Matches($r.Output, 'TOTAL: .*') | Select-Object -Last 1).Value
-# Trust the TOTAL line over the exit code, because process.exit(1) does not always survive on Windows.
-$failedChecks = if ($total -match 'TOTAL: \d+ passed, (\d+) failed') { [int]$Matches[1] } else { -1 }
-if ($r.ExitCode -eq 0 -and $failedChecks -eq 0) { Record 'stress (core)' 'PASS' $total }
-elseif ($failedChecks -lt 0) { Record 'stress (core)' 'FAIL' ((RcDesc $r.ExitCode) + ' - no TOTAL line, the run did not finish') }
-else { Record 'stress (core)' 'FAIL' ((RcDesc $r.ExitCode) + ' ' + $total) }
+$core = Get-StressTotals $r.Output
+if ($r.ExitCode -eq 0 -and $core.Failed -eq 0) { Record 'stress (core)' 'PASS' $core.Line }
+elseif ($core.Failed -lt 0) { Record 'stress (core)' 'FAIL' ((RcDesc $r.ExitCode) + ' - no TOTAL line, the run did not finish') }
+else { Record 'stress (core)' 'FAIL' ((RcDesc $r.ExitCode) + ' ' + $core.Line) }
 
 # --- phase 3: stress test, TLS section only ---------------------------------------------------
-Head2 '[3/7] stress test - known-crash 06-* sections only (TLS, WebSocket - meshagent-todo.md #1/#2)'
-$r = Invoke-Agent -FilePath $Binary -ArgumentList @('test\stress-test.js', "--exclude=$coreExcl", '--watchdog=40000') -TimeoutSec 120
-Emit $r
-$knownTls = @(254, -1073741819, -2147483645)
-if ($r.ExitCode -eq 0) { Record 'stress (known 06-*)' 'PASS' 'the #1 reconnect-after-end() crash did NOT reproduce' }
-elseif ($knownTls -contains $r.ExitCode) {
-    if ($Strict) { Record 'stress (known 06-*)' 'FAIL' ((RcDesc $r.ExitCode) + ' - known crash, meshagent-todo.md #1') }
-    else { Record 'stress (known 06-*)' 'KNOWN' ((RcDesc $r.ExitCode) + ' - reconnect-after-end() crash, meshagent-todo.md #1') }
+Head2 '[3/6] stress test - known-crash 06-* sections only (TLS, WebSocket)'
+if (-not $HasTls) {
+    Say '  this agent has no TLS compiled in, so the 06-* sections have nothing to exercise'
+    Record 'stress (known 06-*)' 'SKIP' 'no TLS in this build'
 }
-else { Record 'stress (known 06-*)' 'FAIL' ((RcDesc $r.ExitCode) + ' (unexpected - not the known crash signature)') }
+else {
+    Clear-TestResidue
+    $r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('test\stress-test.js', "--exclude=$coreExcl", '--watchdog=40000') -TimeoutSec 120
+    Emit $r
+    $knownTls = @(254, -1073741819, -2147483645)
+    if ($r.ExitCode -eq 0) { Record 'stress (known 06-*)' 'PASS' 'the #1 reconnect-after-end() crash did NOT reproduce' }
+    elseif ($knownTls -contains $r.ExitCode) {
+        if ($Strict) { Record 'stress (known 06-*)' 'FAIL' ((RcDesc $r.ExitCode) + ' - known crash') }
+        else { Record 'stress (known 06-*)' 'KNOWN' ((RcDesc $r.ExitCode) + ' - reconnect-after-end() crash') }
+    }
+    else { Record 'stress (known 06-*)' 'FAIL' ((RcDesc $r.ExitCode) + ' (unexpected - not the known crash signature)') }
+}
 
 # --- phase 4: the core run again, delivered the way meshcore is (-b64exec) -------------------
-Head2 '[4/7] stress test via -b64exec (meshcore delivery path)'
+Head2 '[4/6] stress test via -b64exec (meshcore delivery path)'
 # argv is empty under -b64exec, so the exclude and watchdog defaults are patched into the script.
 $src = Get-Content -Raw 'test\stress-test.js'
 $src = $src -replace '(?m)^var OPT_EXCLUDE = \[\];', 'var OPT_EXCLUDE = ["06-"];' -replace '(?m)^var OPT_WATCHDOG = 10000;', 'var OPT_WATCHDOG = 60000;'
 $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($src))
-$r = Invoke-Agent -FilePath $Binary -ArgumentList @('-b64exec', $b64) -TimeoutSec 180
-Emit $r 30
-$b64Total = ([regex]::Matches($r.Output, 'TOTAL: .*') | Select-Object -Last 1).Value
-$b64Failed = if ($b64Total -match 'TOTAL: \d+ passed, (\d+) failed') { [int]$Matches[1] } else { -1 }
-if ($r.ExitCode -eq 0 -and $b64Failed -eq 0 -and $b64Total -eq $total) { Record 'stress (-b64exec)' 'PASS' $b64Total }
-elseif ($r.ExitCode -eq 0 -and $b64Failed -eq 0) { Record 'stress (-b64exec)' 'FAIL' "passed, but ran a different check count than phase 2: '$b64Total' vs '$total'" }
-elseif ($b64Failed -lt 0) { Record 'stress (-b64exec)' 'FAIL' ((RcDesc $r.ExitCode) + ' - no TOTAL line, the run did not finish') }
-else { Record 'stress (-b64exec)' 'FAIL' ((RcDesc $r.ExitCode) + ' ' + $b64Total) }
+# The whole script travels on the command line, and Windows caps that at 32767 characters. Say so
+# rather than letting the phase fail with an unexplained startup error once the script outgrows it.
+if ($b64.Length -gt 32000) {
+    Say ('  the base64 payload is {0} characters, past the Windows command-line limit' -f $b64.Length)
+    Record 'stress (-b64exec)' 'SKIP' "payload too large for a command line ($($b64.Length) chars)"
+}
+else {
+    Clear-TestResidue
+    $r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('-b64exec', $b64) -TimeoutSec 180
+    Emit $r 30
+    $b64r = Get-StressTotals $r.Output
+    if ($r.ExitCode -eq 0 -and $b64r.Failed -eq 0 -and $b64r.Passed -eq $core.Passed) { Record 'stress (-b64exec)' 'PASS' $b64r.Line }
+    elseif ($r.ExitCode -eq 0 -and $b64r.Failed -eq 0) { Record 'stress (-b64exec)' 'FAIL' ('passed, but ran {0} checks where phase 2 ran {1}' -f $b64r.Passed, $core.Passed) }
+    elseif ($b64r.Failed -lt 0) { Record 'stress (-b64exec)' 'FAIL' ((RcDesc $r.ExitCode) + ' - no TOTAL line, the run did not finish') }
+    else { Record 'stress (-b64exec)' 'FAIL' ((RcDesc $r.ExitCode) + ' ' + $b64r.Line) }
+}
 
 # --- phase 5: connection test against <binary>.msh ---------------------------------------------
 $msh = [IO.Path]::ChangeExtension($Binary, '.msh')
-Head2 ('[5/7] connection test ({0})' -f (Split-Path -Leaf $msh))
+Head2 ('[5/6] connection test ({0})' -f (Split-Path -Leaf $msh))
 if ($NoConnect) {
     Say '  skipped by request (-NoConnect)'
     Record 'connection test' 'SKIP' '-NoConnect'
+}
+elseif (-not $HasTls) {
+    Say '  this agent has no TLS compiled in, so it cannot reach a wss:// server'
+    Record 'connection test' 'SKIP' 'no TLS in this build'
 }
 elseif (-not (Test-Path $msh)) {
     Say ("  no {0} next to the agent - nothing to connect to" -f (Split-Path -Leaf $msh))
@@ -466,52 +578,22 @@ else {
     }
 }
 
-# --- phase 7: Dr. Memory over the core stress run ----------------------------------------------
-Head2 '[6/7] Dr. Memory - core stress run'
-if (-not $RunDrMemory) {
-    Say "  reason: $DrMemSkipReason"
-    Record 'drmemory (stress)' 'SKIP' $DrMemSkipReason
-}
-else {
-    $dmLog = Join-Path $TmpDir 'drmemory'
-    $null = New-Item -ItemType Directory -Force -Path $dmLog
-    Say '  (Dr. Memory is far slower than a bare run - the stress watchdog is raised to match)'
-    $r = Invoke-Agent -FilePath (Get-Command drmemory).Source -TimeoutSec 900 -ArgumentList @(
-        '-batch', '-logdir', $dmLog, '--', $Binary, 'test\stress-test.js', '--exclude=06-', '--watchdog=300000')
-    Emit $r 15
-    $results = Get-ChildItem -Path $dmLog -Recurse -Filter 'results.txt' -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $results) {
-        Say '  Dr. Memory produced no results.txt - it did not run the program'
-        if ($r.Output -match 'failed to start the target application|internal crash') {
-            # Known upstream breakage on Windows 11 24H2 and later (DynamoRIO/drmemory #2543 and #2539).
-            Say '  Dr. Memory itself failed, before the agent ran. To confirm it is not this agent:'
-            Say '    drmemory -batch -- C:\Windows\System32\where.exe /?'
-            Say '    "C:\Program Files (x86)\Dr. Memory\dynamorio\bin64\drrun.exe" -- .\<agent>.exe -info'
-            Record 'drmemory (stress)' 'SKIP' 'Dr. Memory itself crashed/failed to start - the agent was not tested'
-        }
-        else { Record 'drmemory (stress)' 'FAIL' 'no report produced - see the log' }
-    }
-    else {
-        $txt = Get-Content -Raw $results.FullName
-        Add-Content -Path $Log -Value $txt -Encoding UTF8
-        $leaks = ([regex]::Match($txt, '(?m)^\s*ERRORS FOUND:.*$')).Value
-        $bytes = ([regex]::Match($txt, '(?m)^\s*\d+ total.*leak.*$')).Value
-        foreach ($l in @($leaks, $bytes)) { if ($l) { Say ('  ' + $l.Trim()) } }
-        if ($txt -match 'LEAK\s+\d+ direct bytes') { Record 'drmemory (stress)' 'FAIL' 'definite leak reported - see the log' }
-        else { Record 'drmemory (stress)' 'PASS' ($leaks.Trim()) }
-    }
-}
-
-# --- phase 8: AddressSanitizer over the core stress run ----------------------------------------
-Head2 '[7/7] AddressSanitizer - core stress run'
+# --- phase 6: AddressSanitizer over the core stress run ----------------------------------------
+Head2 '[6/6] AddressSanitizer - core stress run'
 if (-not $Asan) {
-    $cand = [IO.Path]::ChangeExtension($Binary, $null) + '_asan.exe'
-    if (Test-Path $cand) { $Asan = $cand }
+    # A Release_ASAN build lands in its own directory beside this one, named <target>_asan.exe.
+    $stem = Split-Path -Leaf ([IO.Path]::ChangeExtension($Binary, $null)).TrimEnd('.')
+    $cand = @([IO.Path]::ChangeExtension($Binary, $null) + '_asan.exe')
+    if ($BuildTag.Platform) {
+        $cand += Join-Path $RepoRoot ("build{0}win-{1}-Release_ASAN{0}{2}_asan.exe" -f [IO.Path]::DirectorySeparatorChar, $BuildTag.Platform, $stem)
+    }
+    $hit = $cand | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($hit) { $Asan = $hit }
     elseif (Test-IsAsan $Binary) { $Asan = $Binary }
 }
 if (-not $Asan) {
     Say '  no ASan build found - make one with:'
-    Say '    msbuild MeshAgent-2022.sln /p:Configuration=Release /p:Platform=x64 /p:EnableASAN=true'
+    Say '    msbuild MeshAgent-2022.sln /p:Configuration=Release_ASAN /p:Platform=x64'
     Record 'asan (stress)' 'SKIP' 'no ASan build'
 }
 elseif (-not (Test-Path $Asan)) {
@@ -520,27 +602,31 @@ elseif (-not (Test-Path $Asan)) {
 else {
     Say "  using $Asan"
     $null = Resolve-AsanRuntime $Asan
-    $env:ASAN_OPTIONS = 'halt_on_error=0:print_legend=0'
-    $r = Invoke-Agent -FilePath $Asan -TimeoutSec 600 -ArgumentList @(
+    # continue_on_error reports every error and keeps running. halt_on_error=0 also keeps running
+    # but still reports only the first: measured on a bare -info, 1 report became 3.
+    $env:ASAN_OPTIONS = 'continue_on_error=1:print_legend=0'
+    Clear-TestResidue
+    $r = Invoke-Agent -FilePath (New-RootShim $Asan) -TimeoutSec 600 -ArgumentList @(
         'test\stress-test.js', '--exclude=06-', '--watchdog=300000')
     Remove-Item Env:\ASAN_OPTIONS -ErrorAction SilentlyContinue
     Emit $r 12
     $reports = ([regex]::Matches($r.Output, 'ERROR: AddressSanitizer')).Count
-    $total = ([regex]::Matches($r.Output, 'TOTAL: .*') | Select-Object -Last 1).Value
+    $asanTotals = Get-StressTotals $r.Output
     if ($reports -gt 0) {
         Say "  $reports AddressSanitizer report(s):"
         [regex]::Matches($r.Output, '(?m)^\s+#[01] 0x[0-9a-f]+ in (.+)$') |
             ForEach-Object { '    ' + $_.Groups[1].Value } | Sort-Object -Unique | Select-Object -First 10 |
             ForEach-Object { Say $_ }
-        Record 'asan (stress)' 'FAIL' "$reports report(s) - $total"
+        $tail = if ($asanTotals.Line) { $asanTotals.Line } else { 'the run stopped before the TOTAL line' }
+        Record 'asan (stress)' 'FAIL' "$reports report(s) - $tail"
     }
     elseif (@(-1073741515, -1073741511) -contains $r.ExitCode) {
         Say '  the ASan runtime still does not match this binary - build and test with one toolset,'
         Say '  or pass -AsanRuntimeDir <dir containing clang_rt.asan_dynamic-*.dll>.'
         Record 'asan (stress)' 'FAIL' (RcDesc $r.ExitCode)
     }
-    elseif (-not $total) { Record 'asan (stress)' 'FAIL' ((RcDesc $r.ExitCode) + ' - the run did not finish') }
-    else { Record 'asan (stress)' 'PASS' "no ASan reports - $total" }
+    elseif (-not $asanTotals.Line) { Record 'asan (stress)' 'FAIL' ((RcDesc $r.ExitCode) + ' - the run did not finish') }
+    else { Record 'asan (stress)' 'PASS' "no ASan reports - $($asanTotals.Line)" }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -576,5 +662,10 @@ if ($Ci -and $env:GITHUB_STEP_SUMMARY) {
 }
 
 foreach ($p in $Started) { try { if (-not $p.HasExited) { & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null } } catch { try { $p.Kill() } catch { } } }
-Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
+Clear-TestResidue
+foreach ($s in $Shims) {
+    # The agent writes its .log and .db beside argv[0], so sweep the whole stem, not just the link.
+    $stem = Join-Path (Split-Path -Parent $s) ([IO.Path]::GetFileNameWithoutExtension($s))
+    Get-ChildItem -Path ($stem + '*') -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+}
 exit $(if ($Failed -gt 0) { 1 } else { 0 })

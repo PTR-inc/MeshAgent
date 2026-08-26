@@ -16,13 +16,13 @@ limitations under the License.
 
 //
 // Datastore: ILibSimpleDataStore Put, PutCompressed, Get, Delete, Compact and Keys, deliberately
-// using key lengths that collide under ILibHashtable_DefaultHashFunc (meshagent-todo.md #0).
+// using key lengths that collide under ILibHashtable_DefaultHashFunc.
 //
 
 exports.name = 'Datastore';
-exports.run = function (check, deepEqual, done) {
+exports.run = function (check, deepEqual, done, scratch) {
     var fs = require('fs');
-    var dbPath = 'meshagent-stresstest-datastore.db';
+    var dbPath = scratch('datastore.db');
     try { if (fs.existsSync(dbPath)) { fs.unlinkSync(dbPath); } } catch (e) { }
 
     var db = require('SimpleDataStore').Create(dbPath);
@@ -39,7 +39,7 @@ exports.run = function (check, deepEqual, done) {
         return str.substring(0, e);
     }
     // Key lengths sweep 4 to 16 chars, deliberately covering the 5 to 12 range where
-    // ILibHashtable_DefaultHashFunc only hashes the last 4 bytes (meshagent-todo.md #0).
+    // ILibHashtable_DefaultHashFunc only hashes the last 4 bytes.
     function keyOf(i) { var pad = ''; for (var p = 0; p < (i % 13); ++p) { pad += 'x'; } return 'sk' + i + '_' + pad; }
     function valOf(i) {
         var unit = keyOf(i) + ':v;';
@@ -68,7 +68,7 @@ exports.run = function (check, deepEqual, done) {
         else { if (got != valOf(i)) { wrongState++; } }
     }
     check('Datastore', wrongState == 0, wrongState + ' keys in the wrong state after Delete() - matches the ' +
-        'known ILibHashtable collision-chain-delete bug if it reproduces (meshagent-todo.md #0)');
+        'known ILibHashtable collision-chain-delete bug if it reproduces');
 
     var dsKeys = db.Keys;
     var present = {};

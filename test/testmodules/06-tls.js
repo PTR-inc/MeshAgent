@@ -16,7 +16,7 @@ limitations under the License.
 
 //
 // TLS Connections: repeated local TLS handshakes against a self-signed https server, offline.
-// This is the same shape as the known Windows reconnect and hang defects in meshagent-todo.md #1 and #2.
+// This is the same shape as the known Windows reconnect and hang defects.
 //
 
 exports.name = 'TLS Connections';
@@ -45,14 +45,14 @@ exports.run = function (check, deepEqual, done) {
         if (attempt < TLS_ATTEMPTS) { nextAttempt(); }
         else {
             check('TLS', okCount == TLS_ATTEMPTS, 'only ' + okCount + '/' + TLS_ATTEMPTS +
-                ' local TLS handshakes succeeded (' + failCount + ' failed/timed out) - see meshagent-todo.md #1/#2 for known Windows TLS defects');
+                ' local TLS handshakes succeeded (' + failCount + ' failed/timed out)');
             try { srv.close(); } catch (e) { }
             done();
         }
     }
 
     // Per-attempt guard timer, anchored on this outer var so it is not collected before it fires
-    // (meshagent-todo.md #0d). It only catches a silent hang (defect #2). A crash inside the
+    // It only catches a silent hang, the second defect. A crash inside the
     // connect and end() cycle (defect #1) kills the process, which only an external timeout catches.
     var attemptGuard = null;
     function nextAttempt() {
@@ -61,7 +61,7 @@ exports.run = function (check, deepEqual, done) {
             if (settled) { return; }
             settled = true;
             failCount++;
-            console.log('  attempt ' + (attempt + 1) + '/' + TLS_ATTEMPTS + ': TIMEOUT (likely meshagent-todo.md #2)');
+            console.log('  attempt ' + (attempt + 1) + '/' + TLS_ATTEMPTS + ': TIMEOUT');
             attemptDone();
         }, 3000);
 

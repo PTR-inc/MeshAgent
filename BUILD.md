@@ -36,6 +36,7 @@ build/<arch>-debug/           DEBUG=1 build of the same target
 build/<arch>_asan/            ASAN=1 build (phase 7 of test/test-agent.sh)
 build/<arch>_nokvm/           the _nokvm ARCHIDs
 build/win-<x86|x64|ARM64>-<Configuration>/   MSBuild: MeshService*.exe, MeshConsole*.exe, .pdb, obj/
+build/win-<x86|x64|ARM64>-<Configuration>-<toolset>/  the same, for any toolset but the default v143
 ```
 
 `<arch>` is the makefile's `ARCHNAME` (`make list`). The agent only reads `<exe>.msh`/`.db` next
@@ -46,21 +47,33 @@ to itself, so each target keeps its own server config and identity. `make clean`
 
 ```powershell
 msbuild MeshAgent-2022.sln /p:Configuration=Release /p:Platform=x64      # x86 | x64 | ARM64
-msbuild MeshAgent-2022.sln /p:Configuration=Release_NoOpenSSL /p:Platform=x64
+msbuild MeshAgent-2022.sln /p:Configuration=Release_ASAN /p:Platform=x64 # AddressSanitizer
+msbuild MeshAgent-2019.sln /p:Configuration=Release /p:Platform=x64      # legacy, see below
 ```
 
-`MeshAgent.sln` (VS2019, `v142`, x86/x64) and `MeshAgent-2022.sln` (VS2022, `v143`, + ARM64) build the
-same thing; only the toolset differs. All four projects are
+`MeshAgent-2022.sln` is the solution to build. **`MeshAgent-2019.sln` exists only for legacy
+access and should be used only when no newer Visual Studio is available.** It builds the same two
+agents against the v142 toolset, offers `Debug`/`Release` on `x86`/`x64` only (no `ARM64`, no
+`Release_ASAN`), and is equivalent to `/p:MeshToolset=v142` on the 2022 solution, so on any
+machine with VS 2022 or newer prefer that switch over the second set of project files. Nothing in
+CI builds it. `check-vsprojects.sh` fails if the two sets stop building the same sources, which is
+what keeps the legacy set from rotting unnoticed. All four projects are
 thin: they name the exe base, the `MESH_AGENTID` per platform and their own files, and import
 `MeshAgent.Configuration.props` + `MeshAgent.Common.props` from the repo root, which hold the
 shared source list, defines, libs, output layout and hardening for every configuration.
-Configuration axis: `Debug` | `Release`, optionally `_NoOpenSSL` (`MICROSTACK_NOTLS`, BCrypt
-only, no OpenSSL linked). Platform axis: `Win32` (`x86` in the solution) | `x64` | `ARM64` —
+Configuration axis: `Debug` | `Release` | `Release_ASAN`. Platform axis: `Win32` (`x86` in the solution) | `x64` | `ARM64` —
 picks `MESH_AGENTID`, the `libcrypto<32|64|ARM64>MT[d].lib` pair, and the exe suffix
 (`MeshService`, `MeshService64`, `MeshServiceARM64`). Output lands in
-`build\win-<x86|x64|ARM64>-<Configuration>\`. Toolset is `v143` by default (`/p:MeshToolset=v145` selects VS 2026; the v145 CI legs are commented out in windows-build.yml, ready to re-enable); the linker floor is
+`build\win-<x86|x64|ARM64>-<Configuration>\`, with `-<toolset>` appended for anything but the
+default `v143`, so two toolsets never overwrite each other's objects. Toolset is `v143` by default (`/p:MeshToolset=v145` selects VS 2026; the v145 CI legs are commented out in windows-build.yml, ready to re-enable); the linker floor is
 Windows 7 SP1 (`/SUBSYSTEM:CONSOLE,6.01`) on x86/x64 and the `/MT` static UCRT keeps it
-self-contained. Add `/p:EnableASAN=true` for an ASan build (phase 7 of `test\test-agent.ps1`).
+self-contained. `Release_ASAN` sets the toolset's `EnableASAN`, builds as `<target>_asan.exe` into
+`build\win-<platform>-Release_ASAN\` and is what phase 6 of `test\test-agent.ps1` looks for, so
+sanitized objects and binaries never mix with the normal build. The projects ask for
+the newest installed Windows SDK (`10.0`) and `MeshAgent.Common.props` fails the build when that
+resolves below `MeshMinWindowsSDK` (10.0.22621.0). `check-vsprojects.sh` (CI) fails when a
+`.filters` file stops matching the projects and the shared source list, or a solution and its
+projects stop offering the same configurations.
 `openssl\libstatic\build\windows\toolset-check.ps1 -Platform x64 -Toolset v143` (CI runs it before
 every Windows build) parses the committed `libcrypto*`/`libssl*` archives and aborts only on a
 machine-type, CRT (`/MT` vs `/MTd`/`/MD`) or LTCG-build mismatch with the linking toolset; a

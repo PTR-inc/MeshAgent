@@ -24,10 +24,6 @@ bld/
 [Bb]in/
 [Oo]bj/
 [Ll]og/
-Debug_NoOpenSSL/
-Release_NoOpenSSL/
-Library_Debug_NoOpenSSL/
-Library_Release_NoOpenSSL/
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/

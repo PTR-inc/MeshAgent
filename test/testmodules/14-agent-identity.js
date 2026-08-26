@@ -21,7 +21,7 @@ limitations under the License.
 //
 
 exports.name = 'Agent Identity';
-exports.run = function (check, deepEqual, done) {
+exports.run = function (check, deepEqual, done, scratch) {
     var S = 'Identity';
     var fs = require('fs');
     var sha = require('SHA384Stream');
@@ -49,7 +49,7 @@ exports.run = function (check, deepEqual, done) {
             var oneShot = sha.create().syncHash(fs.readFileSync(process.execPath)).toString('hex');
             check(S, h1 == oneShot, 'streamed SHA384 of the binary != syncHash() of the whole file');
 
-            var copy = 'meshagent-stresstest-identity.bin';
+            var copy = scratch('identity.bin');
             try {
                 var src = fs.readFileSync(process.execPath);
                 var pos = Math.floor(src.length / 3);

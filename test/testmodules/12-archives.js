@@ -21,10 +21,10 @@ limitations under the License.
 //
 
 exports.name = 'Archives';
-exports.run = function (check, deepEqual, done) {
+exports.run = function (check, deepEqual, done, scratch) {
     var S = 'Archives';
     var fs = require('fs');
-    var dir = 'meshagent-stresstest-archive';
+    var dir = scratch('archive');
     var zipPath = dir + '.zip';
     // No 0-byte member, because zip-writer silently omits empty files. That is upstream behaviour and not tested.
     var files = [

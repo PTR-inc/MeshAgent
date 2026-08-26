@@ -7,12 +7,20 @@
   <PropertyGroup Label="Configuration">
     <MeshDebug Condition="$(Configuration.StartsWith('Debug'))">true</MeshDebug>
     <MeshDebug Condition="'$(MeshDebug)'==''">false</MeshDebug>
-    <MeshNoTLS Condition="$(Configuration.EndsWith('_NoOpenSSL'))">true</MeshNoTLS>
-    <MeshNoTLS Condition="'$(MeshNoTLS)'==''">false</MeshNoTLS>
+    <!-- EnableASAN is the C++ toolset's own property. A separate configuration keeps the sanitized
+         objects and binary out of the normal build's directories. -->
+    <EnableASAN Condition="$(Configuration.EndsWith('_ASAN'))">true</EnableASAN>
     <ConfigurationType>Application</ConfigurationType>
-    <!-- msbuild /p:MeshToolset=v145 picks VS 2026. The VS2019 projects set v142 after this import. -->
-    <MeshToolset Condition="'$(MeshToolset)'==''">v143</MeshToolset>
+    <!-- msbuild /p:MeshToolset=v145 picks VS 2026, /p:MeshToolset=v142 the VS 2019 toolset. -->
+    <MeshDefaultToolset>v143</MeshDefaultToolset>
+    <MeshToolset Condition="'$(MeshToolset)'==''">$(MeshDefaultToolset)</MeshToolset>
+    <!-- Any other toolset gets its own output directory, or its objects and binary silently
+         overwrite the default toolset's. MeshAgent-2019.sln builds with v142. -->
+    <MeshToolsetSuffix Condition="'$(MeshToolset)'!='$(MeshDefaultToolset)'">-$(MeshToolset)</MeshToolsetSuffix>
     <PlatformToolset>$(MeshToolset)</PlatformToolset>
+    <!-- An x64 host otherwise drives the 32-bit toolchain for Win32, which is slower and runs out
+         of address space under link-time code generation. -->
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
     <CharacterSet>MultiByte</CharacterSet>
     <UseDebugLibraries>$(MeshDebug)</UseDebugLibraries>
     <WholeProgramOptimization Condition="'$(MeshDebug)'=='false'">true</WholeProgramOptimization>

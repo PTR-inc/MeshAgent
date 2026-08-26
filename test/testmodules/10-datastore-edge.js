@@ -21,10 +21,10 @@ limitations under the License.
 //
 
 exports.name = 'Datastore Edge Cases';
-exports.run = function (check, deepEqual, done) {
+exports.run = function (check, deepEqual, done, scratch) {
     var S = 'DatastoreEdge';
     var fs = require('fs');
-    var dbPath = 'meshagent-stresstest-datastore-edge.db';
+    var dbPath = scratch('datastore-edge.db');
     try { if (fs.existsSync(dbPath)) { fs.unlinkSync(dbPath); } } catch (e) { }
 
     function T(x) {   // Trims the trailing NULs the store pads with.

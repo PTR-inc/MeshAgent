@@ -6,7 +6,7 @@
 #   1. -info sanity banner (version, ARCHID, OpenSSL)
 #   2. test/stress-test.js, every testmodule except 06-*   must pass
 #   3. test/stress-test.js, the 06-* sections only          known native crashes (TLS reconnect,
-#                                                           WebSocket teardown), see meshagent-todo.md
+#                                                           WebSocket teardown)
 #   4. the same core run delivered via -b64exec             the meshcore delivery path, must pass
 #   5. connection test against <binary>.msh                 connect, authenticate, launch meshcore,
 #                                                           and persist the identity into <binary>.db
@@ -441,7 +441,7 @@ fi
 
 # --- phase 2: stress test, core sections ----------------------------------------------------
 # The 06-* testmodules are the known native-crash sections (TLS reconnect and WebSocket session
-# teardown, meshagent-todo.md #1 and the net.c:938 use-after-free). They run in phase 3, apart
+# teardown, and the net.c:938 use-after-free). They run in phase 3, apart
 # from the core, so one crash cannot take every other check down with it.
 KNOWN_EXCL="06-"
 CORE_EXCL="$(ls test/testmodules | grep -v '^06-' | sed 's/\.js$//' | paste -sd,)"
@@ -458,7 +458,7 @@ elif [ -z "$TOTAL_LINE" ]; then record "stress (core)" FAIL "$(rcdesc $RC) - no 
 else record "stress (core)" FAIL "$(rcdesc $RC) $TOTAL_LINE"; fi
 
 # --- phase 3: stress test, TLS section only -------------------------------------------------
-head2 "[3/7] stress test - known-crash 06-* sections only (TLS, WebSocket - meshagent-todo.md #1)"
+head2 "[3/7] stress test - known-crash 06-* sections only (TLS, WebSocket)"
 OUT="$TMPDIR_RUN/stress-known.log"
 run_cmd $((60*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" test/stress-test.js \
         --exclude=$CORE_EXCL --watchdog=$((20000*SCALE)); RC=$?

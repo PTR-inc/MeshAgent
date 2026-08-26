@@ -15,10 +15,14 @@
     <MeshAgentId Condition="'$(Platform)'=='ARM64'">$(MeshAgentIdARM64)</MeshAgentId>
     <MeshOpenSSLLibDir>..\openssl\libstatic\windows\</MeshOpenSSLLibDir>
 
-    <!-- Mirrors the makefile's build/<arch>/ output directory. -->
-    <OutDir>$(SolutionDir)build\win-$(PlatformTarget)-$(Configuration)\</OutDir>
+    <!-- Mirrors the makefile's build/<arch>/ output directory. Anchored on this file, not on
+         $(SolutionDir), which resolves to the project folder when a .vcxproj is built alone. -->
+    <OutDir>$(MSBuildThisFileDirectory)build\win-$(PlatformTarget)-$(Configuration)$(MeshToolsetSuffix)\</OutDir>
     <IntDir>$(OutDir)obj\$(MeshTargetBase)$(MeshTargetSuffix)\</IntDir>
     <TargetName>$(MeshTargetBase)$(MeshTargetSuffix)</TargetName>
+    <!-- msbuild /p:EnableASAN=true would otherwise overwrite the normal build. The _asan name is
+         also the one test/test-agent.ps1 discovers for its AddressSanitizer phase. -->
+    <TargetName Condition="'$(EnableASAN)'=='true'">$(MeshTargetBase)$(MeshTargetSuffix)_asan</TargetName>
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
 
@@ -29,34 +33,51 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <ControlFlowGuard>Guard</ControlFlowGuard>
-      <AdditionalIncludeDirectories>..\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalIncludeDirectories Condition="'$(MeshNoTLS)'=='false'">..\openssl\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\openssl\include;..\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>MESH_AGENTID=$(MeshAgentId);WIN32;WINSOCK2;_WINSOCK_DEPRECATED_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CONSOLE;MICROSTACK_NO_STDAFX;MICROSTACK_PROXY;MICROSTACK_TLS_DETECT;NOLMSCOMMANDER;_LINKVM;_REMOTELOGGING;_REMOTELOGGINGSERVER;ILibChain_WATCHDOG_TIMEOUT=600000;DUK_USE_DATE_NOW_WINDOWS;DUK_USE_DEBUGGER_SUPPORT;DUK_USE_INTERRUPT_COUNTER;DUK_USE_DEBUGGER_INSPECT;DUK_USE_DEBUGGER_PAUSE_UNCAUGHT;DUK_USE_DEBUGGER_DUMPHEAP;_MSC_PLATFORM_TOOLSET_$(PlatformToolset);$(MeshProjectDefines);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Platform)'!='Win32'">WIN64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Platform)'=='ARM64'">ARM64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <PreprocessorDefinitions Condition="'$(MeshNoTLS)'=='true'">MICROSTACK_NOTLS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalOptions>/ignore:4099 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalDependencies>SetupAPI.lib;Crypt32.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;ws2_32.lib;$(MeshProjectLibs);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalDependencies Condition="'$(MeshNoTLS)'=='false'">Ncrypt.lib;$(MeshOpenSSLLibDir)libcrypto$(MeshOpenSSLSuffix)MT$(MeshCrtSuffix).lib;$(MeshOpenSSLLibDir)libssl$(MeshOpenSSLSuffix)MT$(MeshCrtSuffix).lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalDependencies Condition="'$(MeshNoTLS)'=='true'">Bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Ncrypt.lib;$(MeshOpenSSLLibDir)libcrypto$(MeshOpenSSLSuffix)MT$(MeshCrtSuffix).lib;$(MeshOpenSSLLibDir)libssl$(MeshOpenSSLSuffix)MT$(MeshCrtSuffix).lib;SetupAPI.lib;Crypt32.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;ws2_32.lib;$(MeshProjectLibs);%(AdditionalDependencies)</AdditionalDependencies>
       <!-- Oldest supported Windows is 7 SP1. ARM64 Windows starts at 10, so the linker refuses 6.01 there. -->
       <MinimumRequiredVersion Condition="'$(Platform)'!='ARM64'">6.01</MinimumRequiredVersion>
       <CETCompat Condition="'$(Platform)'=='x64'">true</CETCompat>
     </Link>
+    <!-- Only regenerate the commit header when the commit actually changed. Rewriting it on every
+         build changes its mtime and forces a rebuild of every source that includes it. The hash
+         covers every value in the file, and is written last so that finding it also proves the
+         file was written completely. -->
     <PreBuildEvent>
       <Command>
         git log -1 &gt; nul 2&gt;&amp;1
         IF %ERRORLEVEL% NEQ 0 exit 0
+        FOR /F "tokens=1" %%F in ('git rev-parse HEAD') do @set MESHCOMMIT=%%F
+        findstr /c:"%MESHCOMMIT%" "$(ProjectDir)..\microscript\ILibDuktape_Commit.h" &gt; nul 2&gt;&amp;1
+        IF %ERRORLEVEL% EQU 0 exit 0
         @echo // This file is auto-generated, any edits may be overwritten &gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.h
-        git log -1 2&gt;nul | FINDSTR /C:"Date:" | FOR /F "tokens=3,4,5,6,7" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_DATE "%%I-%%F-%%G %%H%%J" &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.h
+        git log -1 --format=%%cI | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_DATE "%%F" &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.h
+        git rev-parse --short=12 HEAD | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_HASH_SHORT "%%F" &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.h
+        git log -1 --date=format:"%%y,%%m,%%d,%%H%%M" --format=%25%25cd | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_FILEVERSION %%F &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.h
         git log -1 --format=%%H | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_HASH "%%F" &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.h
       </Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
+
+  <!-- WindowsTargetPlatformVersion selects one exact SDK and fails when it is absent, so the
+       projects ask for the newest installed and the floor is checked here instead. -->
+  <PropertyGroup>
+    <MeshMinWindowsSDK>10.0.22621.0</MeshMinWindowsSDK>
+  </PropertyGroup>
+  <Target Name="MeshCheckWindowsSDK" BeforeTargets="ClCompile">
+    <!-- TargetPlatformVersion is the concrete SDK the 10.0 wildcard resolved to.
+         WindowsTargetPlatformVersion still reads "10.0" here. -->
+    <Error Condition="'$(TargetPlatformVersion)'!='' And $([System.Version]::Parse('$(TargetPlatformVersion)').CompareTo($([System.Version]::Parse('$(MeshMinWindowsSDK)')))) &lt; 0"
+           Text="Windows SDK $(TargetPlatformVersion) is older than this build's floor of $(MeshMinWindowsSDK). Install a newer Windows SDK." />
+  </Target>
 
   <ItemDefinitionGroup Condition="'$(MeshDebug)'=='true'">
     <ClCompile>

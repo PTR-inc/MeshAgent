@@ -1,5 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<!-- VS2019 project for MeshAgent.sln. Uses the same shared sheets as MeshConsole-2022.vcxproj, only the toolset differs. -->
+<!-- Legacy: use MeshConsole-2022.vcxproj unless the machine has no Visual Studio newer than 2019.
+     Same shared sheets, only the v142 toolset differs, and /p:MeshToolset=v142 on the 2022
+     solution does the same thing without a second project file. -->
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -10,14 +12,6 @@
       <Configuration>Debug</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="Debug_NoOpenSSL|Win32">
-      <Configuration>Debug_NoOpenSSL</Configuration>
-      <Platform>Win32</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Debug_NoOpenSSL|x64">
-      <Configuration>Debug_NoOpenSSL</Configuration>
-      <Platform>x64</Platform>
-    </ProjectConfiguration>
     <ProjectConfiguration Include="Release|Win32">
       <Configuration>Release</Configuration>
       <Platform>Win32</Platform>
@@ -26,23 +20,16 @@
       <Configuration>Release</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="Release_NoOpenSSL|Win32">
-      <Configuration>Release_NoOpenSSL</Configuration>
-      <Platform>Win32</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Release_NoOpenSSL|x64">
-      <Configuration>Release_NoOpenSSL</Configuration>
-      <Platform>x64</Platform>
-    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{E377F156-BAED-4086-B534-3CC43164607A}</ProjectGuid>
     <RootNamespace>MeshConsole</RootNamespace>
     <Keyword>Win32Proj</Keyword>
-    <ProjectName>MeshConsole</ProjectName>
+    <ProjectName>MeshConsole-2019</ProjectName>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <!-- What this project tells ..\MeshAgent.Common.props. Everything else is shared with the other agent. -->
     <MeshTargetBase>MeshConsole</MeshTargetBase>
+    <MeshToolset>v142</MeshToolset>
     <MeshAgentIdWin32>1</MeshAgentIdWin32>
     <MeshAgentIdx64>2</MeshAgentIdx64>
     <MeshProjectDefines></MeshProjectDefines>
@@ -50,9 +37,6 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <Import Project="..\MeshAgent.Configuration.props" />
-  <PropertyGroup Label="Configuration">
-    <PlatformToolset>v142</PlatformToolset>
-  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
@@ -60,6 +44,11 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <Import Project="..\MeshAgent.Common.props" />
+  <ItemDefinitionGroup>
+    <Manifest>
+      <AdditionalManifestFiles>$(ProjectDir)longpath.manifest %(AdditionalManifestFiles)</AdditionalManifestFiles>
+    </Manifest>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.c" />
   </ItemGroup>

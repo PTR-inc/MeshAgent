@@ -1,5 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<!-- VS2019 project for MeshAgent.sln. Uses the same shared sheets as MeshService-2022.vcxproj, only the toolset differs. -->
+<!-- Legacy: use MeshService-2022.vcxproj unless the machine has no Visual Studio newer than 2019.
+     Same shared sheets, only the v142 toolset differs, and /p:MeshToolset=v142 on the 2022
+     solution does the same thing without a second project file. -->
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -10,14 +12,6 @@
       <Configuration>Debug</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="Debug_NoOpenSSL|Win32">
-      <Configuration>Debug_NoOpenSSL</Configuration>
-      <Platform>Win32</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Debug_NoOpenSSL|x64">
-      <Configuration>Debug_NoOpenSSL</Configuration>
-      <Platform>x64</Platform>
-    </ProjectConfiguration>
     <ProjectConfiguration Include="Release|Win32">
       <Configuration>Release</Configuration>
       <Platform>Win32</Platform>
@@ -26,23 +20,16 @@
       <Configuration>Release</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="Release_NoOpenSSL|Win32">
-      <Configuration>Release_NoOpenSSL</Configuration>
-      <Platform>Win32</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Release_NoOpenSSL|x64">
-      <Configuration>Release_NoOpenSSL</Configuration>
-      <Platform>x64</Platform>
-    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{CE5AD78C-DBDF-4D81-9A69-41B1DF683115}</ProjectGuid>
     <RootNamespace>MeshService</RootNamespace>
     <Keyword>Win32Proj</Keyword>
-    <ProjectName>MeshService</ProjectName>
+    <ProjectName>MeshService-2019</ProjectName>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <!-- What this project tells ..\MeshAgent.Common.props. Everything else is shared with the other agent. -->
     <MeshTargetBase>MeshService</MeshTargetBase>
+    <MeshToolset>v142</MeshToolset>
     <MeshAgentIdWin32>3</MeshAgentIdWin32>
     <MeshAgentIdx64>4</MeshAgentIdx64>
     <MeshProjectDefines>_WINSERVICE</MeshProjectDefines>
@@ -50,9 +37,6 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <Import Project="..\MeshAgent.Configuration.props" />
-  <PropertyGroup Label="Configuration">
-    <PlatformToolset>v142</PlatformToolset>
-  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
@@ -62,15 +46,8 @@
   <Import Project="..\MeshAgent.Common.props" />
   <ItemDefinitionGroup>
     <Manifest>
-      <AdditionalManifestFiles>$(ProjectDir)dpiaware.manifest %(AdditionalManifestFiles)</AdditionalManifestFiles>
+      <AdditionalManifestFiles>$(ProjectDir)longpath.manifest %(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
-  </ItemDefinitionGroup>
-  <!-- Release builds only. prebuild.ps1 writes the commit date and hash into the MeshService.rc version block. -->
-  <ItemDefinitionGroup Condition="'$(MeshDebug)'=='false'">
-    <PreBuildEvent>
-      <Command>%(Command)
-powershell -ExecutionPolicy Unrestricted $(ProjectDir)prebuild.ps1 $(ProjectDir)..\microscript\ILibDuktape_Commit.h $(ProjectDir)MeshService.rc</Command>
-    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="firewall.cpp" />

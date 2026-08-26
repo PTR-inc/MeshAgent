@@ -20,11 +20,11 @@ limitations under the License.
 //
 
 exports.name = 'IO';
-exports.run = function (check, deepEqual, done) {
+exports.run = function (check, deepEqual, done, scratch) {
     var fs = require('fs');
 
     // --- synchronous read, write, stat, exists and unlink round-trip ---
-    var binPath = 'meshagent-stresstest-io.bin';
+    var binPath = scratch('io.bin');
     try { if (fs.existsSync(binPath)) { fs.unlinkSync(binPath); } } catch (e) { }
 
     var payload = Buffer.alloc(4096);
@@ -48,7 +48,7 @@ exports.run = function (check, deepEqual, done) {
     check('IO', !fs.existsSync(binPath), 'unlinkSync() did not remove the file');
 
     // --- mkdir, rmdir and readdir sanity ---
-    var dirPath = 'meshagent-stresstest-dir';
+    var dirPath = scratch('dir');
     try { if (fs.existsSync(dirPath)) { fs.rmdirSync(dirPath); } } catch (e) { }
     fs.mkdirSync(dirPath);
     check('IO', fs.existsSync(dirPath), 'mkdirSync() did not create the directory');
@@ -58,13 +58,13 @@ exports.run = function (check, deepEqual, done) {
     check('IO', !fs.existsSync(dirPath), 'rmdirSync() did not remove the directory');
 
     // --- streaming IO (async) ---
-    var streamPath = 'meshagent-stresstest-stream.bin';
+    var streamPath = scratch('stream.bin');
     try { if (fs.existsSync(streamPath)) { fs.unlinkSync(streamPath); } } catch (e) { }
     var streamPayload = Buffer.alloc(65536);
     for (var si = 0; si < streamPayload.length; ++si) { streamPayload.writeUInt8((si * 7) & 0xFF, si); }
 
     // Round-trips the payload with the default flags and again with explicit binary flags, because
-    // on Windows the defaults "w" and "r" are text mode (meshagent-todo.md #0m). Each round-trip gets
+    // on Windows the defaults "w" and "r" are text mode. Each round-trip gets
     // its own file, because Windows refuses to unlink a file whose read stream is still open.
     var streamFiles = [];
     function streamRoundTrip(label, path, wopts, ropts, next) {
