@@ -1,32 +1,18 @@
 #!/bin/bash
-# Build smaller, streamable archives of the cross toolchains already fetched
-# into $BUILDROOT/toolchains (by fetch-toolchains.sh), for upload to
-# PTR-inc/meshagent-toolchains's TC/ folder - same idea as
-# build-bsd-sysroot-archives.sh's SR/ archives, but for whole toolchains.
+# Repacks the cross toolchains under $BUILDROOT/toolchains into smaller archives for
+# the TC/ folder of PTR-inc/meshagent-toolchains. Only share/ extras and unneeded ELF
+# symbols can go, since the toolchain is the compiler, so expect a 10-20% reduction. See ISSUES.md.
 #
-# Unlike the BSD sysroots (which are just headers+libs consumed by an
-# external compiler), a cross toolchain IS the compiler - bin/, libexec/,
-# lib/ and the target sysroot are all load-bearing and can't be dropped.
-# What's actually safe to cut: gdb/locale/man/doc/info under share/, and the
-# unused ELF symbol tables in the toolchain's own binaries (`strip
-# --strip-unneeded` - keeps dynamic symbols the binaries need to run, drops
-# the rest). Expect a modest reduction (order 10-20%), not the 70%+ seen on
-# the BSD sysroots, plus whatever xz -9 buys on top.
-#
-# Every archive is smoke-tested after trimming (compiles+links a tiny C
-# program with the trimmed copy's gcc) before it's kept - a stripped cc1
-# that no longer runs is worse than not shipping an archive at all.
+# Every archive is smoke-tested with its own gcc before it is kept, because a
+# stripped cc1 that no longer runs is worse than shipping no archive at all.
 #
 #   ./build-toolchain-archives.sh                                   # every toolchain in $BR_TOOLCHAINS
 #   ./build-toolchain-archives.sh riscv64-lp64d--musl--stable-2025.08-1
 #   ./build-toolchain-archives.sh riscv64-lp64d--musl--stable-2025.08-1 mips32el--uclibc--stable-2025.08-1
 #
-#   # macOS SDK from an Xcode .xip under $BR_DOWNLOADS (Xcode_<version>_Universal.xip).
-#   # This is Apple's proprietary SDK, not redistributable to the public
-#   # meshagent-toolchains mirror the way every other archive here is - the
-#   # flag is a deliberate, explicit acknowledgement of that, required every
-#   # time. Lands in $BUILDROOT/private/, for a private/access-controlled
-#   # destination only (then point OSXCROSS_SDK_URL at it for other hosts).
+#   # An Xcode_<version>_Universal.xip under $BR_DOWNLOADS yields Apple's proprietary SDK,
+#   # which must not go to the public mirror. The flag is a required acknowledgement of that,
+#   # and the archive lands in $BUILDROOT/private/ for OSXCROSS_SDK_URL on a private host.
 #   ./build-toolchain-archives.sh --i-have-rights-to-redistribute-this Xcode_26.6_Universal.xip
 
 set -euo pipefail
@@ -36,18 +22,16 @@ export BUILDROOT="${BUILDROOT:-/opt/buildroot}"
 
 log() { echo "[$1] $2"; }
 
-# Packs $2 (a directory of file args, relative to $1) as .tar.xz. Measured
-# against zstd -19 on the largest archives here: zstd compressed ~25-30%
-# faster but produced files 30-90% BIGGER, and both formats decompress in
-# under 2s regardless - xz wins outright for this content, so it's the only
-# format shipped.
+# xz is the only format shipped because, measured against zstd -19 on the largest
+# archives here, zstd compressed ~25-30% faster but produced files 30-90% bigger,
+# and both decompress in under 2s.
 pack_xz() {
     local workdir="$1" out_base="$2"; shift 2
     (cd "$workdir" && tar cf - "$@" | xz -T0 -9 -c) > "$out_base.tar.xz"
 }
 
-# Finds the toolchain's own C compiler under bin/ (or, for a repacked OpenWrt
-# SDK, staging_dir/toolchain-*/bin), e.g. riscv64-...-gcc.
+# A repacked OpenWrt SDK keeps its compiler under staging_dir/toolchain-*/bin
+# rather than bin/, so both locations are searched.
 find_gcc() {
     find "$1/bin" "$1"/staging_dir/toolchain-*/bin -maxdepth 1 -name '*-gcc' -not -name '*.br_real' 2>/dev/null | head -1
 }
@@ -59,12 +43,9 @@ trim_and_pack() {
     local work; work=$(mktemp -d)
     trap 'rm -rf "$work"' RETURN
 
-    # OpenWrt SDKs are a whole buildroot-style source tree (dl/, build_dir/,
-    # package/, target/ kernel sources...) - only staging_dir/toolchain-* is
-    # the actual compiler. Its gcc wrapper also `exec`s staging_dir/host's own
-    # ld-linux/libc (a hermetic host runtime, independent of this machine's
-    # glibc) via a relative ../../host/lib path, so that has to ship too - a
-    # toolchain-only archive fails at gcc invocation, not link time.
+    # An OpenWrt SDK is a whole source tree, and only staging_dir/toolchain-* is the compiler.
+    # Its gcc wrapper execs staging_dir/host's own ld-linux and libc via a relative
+    # ../../host/lib path, so host must ship too or gcc itself fails to start.
     local toolchain_subdir; toolchain_subdir=$(find "$src/staging_dir" -maxdepth 1 -name 'toolchain-*' 2>/dev/null | head -1)
     if [ -n "$toolchain_subdir" ]; then
         log "$name" "OpenWrt SDK detected - packing staging_dir/{$(basename "$toolchain_subdir"),host}"
@@ -98,15 +79,9 @@ trim_and_pack() {
 }
 
 # --- macOS SDK, extracted from an Xcode .xip -------------------------------
-#
-# This is proprietary Apple content (the Xcode/macOS SDK license agreement),
-# not something PTR-inc owns or can redistribute outside Apple's own channels
-# - unlike every other toolchain here. It is packed into $BUILDROOT/private/
-# (never the same directory as the redistributable archives, so a blanket
-# upload of $BUILDROOT/*.tar.xz cannot sweep it onto the public TC/ mirror),
-# and only when the caller explicitly acknowledges that with
-# --i-have-rights-to-redistribute-this. Without the flag an Xcode_*.xip name
-# on the command line fails instead of silently packing Apple's SDK.
+# The SDK is proprietary Apple content that PTR-inc cannot redistribute, so it is packed
+# into $BUILDROOT/private/ where a blanket upload of $BUILDROOT/*.tar.xz cannot sweep it
+# onto the public TC/ mirror, and only with --i-have-rights-to-redistribute-this given.
 REDISTRIBUTE_OK=0
 args=()
 for a in "$@"; do
@@ -117,15 +92,9 @@ for a in "$@"; do
 done
 set -- "${args[@]}"
 
-# Extracts the macOS SDK(s) from an Xcode .xip with osxcross's own
-# tools/gen_sdk_package_pbzx.sh (build-env.sh's osxcross_extract_sdk: clones
-# osxcross into $OSXCROSS_DIR and pipes the cpio stream through
-# openssl/libstatic/build/xip-sdk-cpio.py - SDK subtree only, hard-link
-# placeholders resolved; unrestricted extraction needs ~45GB scratch and a
-# real run here hit ENOSPC at 11GB free). Output goes to
-# $BUILDROOT/private/, NOT next to the redistributable archives, and the
-# SDK tarball fetch-toolchains.sh osxcross consumes is dropped in $BR_DOWNLOADS
-# so the same machine can build osxcross from it without a second extraction.
+# Uses build-env.sh's osxcross_extract_sdk, which pipes tools/gen_sdk_package_pbzx.sh through
+# openssl/libstatic/build/xip-sdk-cpio.py because unrestricted extraction needs ~45GB scratch.
+# The SDK tarball is also dropped in $BR_DOWNLOADS so fetch-toolchains.sh osxcross needs no second extraction.
 pack_xcode_sdk() {
     local xip_name="$1" xip="$BR_DOWNLOADS/$1"
     [ -f "$xip" ] || { log "$xip_name" "FAILED (not found under $BR_DOWNLOADS)"; return 1; }
@@ -151,7 +120,7 @@ pack_xcode_sdk() {
     [ -e "${sdks[0]}" ] || { log "$name" "FAILED (no MacOSX*.sdk.tar.xz produced)"; return 1; }
     log "$name" "produced $(basename -a "${sdks[@]}" | tr '\n' ' ')"
 
-    # Keep a local copy of the SDK the pinned osxcross build wants, if the xip has it.
+    # The pinned osxcross build wants this one SDK, so keep a local copy when the xip has it.
     if [ -f "$work/$name/$(basename "$OSXCROSS_SDK_TARBALL")" ]; then
         cp -f "$work/$name/$(basename "$OSXCROSS_SDK_TARBALL")" "$OSXCROSS_SDK_TARBALL"
         log "$name" "copied $(basename "$OSXCROSS_SDK_TARBALL") to $BR_DOWNLOADS (for ./fetch-toolchains.sh osxcross)"

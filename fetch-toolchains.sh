@@ -1,9 +1,7 @@
 #!/bin/bash
-# Download+verify+extract every cross toolchain, sysroot and source with a
-# stable public URL into $BUILDROOT; prints manual instructions for the rest
-# (see openssl/libstatic/build/README.md's "Sources"). Also wires two OpenWrt
-# toolchains the makefile needs (ARCHID 28/40), which is why this lives at the
-# repo root rather than under openssl/. Safe to re-run.
+# Fetches, verifies and extracts every toolchain, sysroot and source that has a stable
+# public URL into $BUILDROOT, and prints manual instructions for the rest. It lives at the
+# repo root because it also wires the OpenWrt toolchains for ARCHID 28 and 40. See openssl/libstatic/build/README.md.
 #
 #   ./fetch-toolchains.sh                   # everything fetchable
 #   ./fetch-toolchains.sh list              # show status, fetch nothing
@@ -12,8 +10,8 @@
 #   ./fetch-toolchains.sh freebsd openbsd   # named components only
 #   ./fetch-toolchains.sh -y                # answer the apt-get prompts yes
 
-# Where the multi-GB toolchains/sysroots/downloads land. env.sh carries the
-# same fallback; set BUILDROOT in the environment to override both.
+# build-env.sh carries the same fallback. Set BUILDROOT in the
+# environment to override both at once.
 export BUILDROOT="${BUILDROOT:-/opt/buildroot}"
 
 . "$(dirname "$(readlink -f "$0")")/build-env.sh"
@@ -22,8 +20,8 @@ STATUS_LOG="$(mktemp)"
 trap 'rm -f "$STATUS_LOG"' EXIT
 log_status() { echo "$1: $2" | tee -a "$STATUS_LOG" >&2; }
 
-# True if dest reads clean as an archive (xz/gzip's own checksum) - catches a
-# truncated download that a checksum-less fetch can't. Unknown ext = pass.
+# The archive format's own checksum catches a truncated download that a
+# checksum-less fetch cannot. An unknown extension passes.
 archive_ok() {
     case "$1" in
         *.tar.zst|*.zst)      zstd -t "$1"  >/dev/null 2>&1 ;;
@@ -34,8 +32,8 @@ archive_ok() {
     esac
 }
 
-# download URL sha256 dest_file - skips if dest already matches sha256, or
-# (no sha256 published) passes archive_ok; else deleted and re-fetched.
+# Skips the download when dest already matches the sha256, or passes archive_ok
+# when no sha256 is published. Anything else is deleted and fetched again.
 fetch() {
     local url="$1" sha="$2" dest="$3"
     if [ -f "$dest" ]; then
@@ -61,8 +59,8 @@ fetch() {
 }
 
 # ---------------------------------------------------------------- OpenSSL ----
-# URL, release tag and sha256 lookup all live in build-env.sh so CI and the
-# Windows scripts resolve them the same way - nothing is pinned by hand here.
+# The URL, release tag and sha256 lookup live in build-env.sh so CI and the
+# Windows scripts resolve them the same way. Nothing is pinned by hand here.
 p_openssl() {
     local sha; sha=$(openssl_sha256_lookup "$OPENSSL_VERSION") \
         || { log_status openssl "FAILED (couldn't look up sha256 for $OPENSSL_VERSION from openssl.org)"; return 1; }
@@ -70,7 +68,7 @@ p_openssl() {
         && log_status openssl "OK ($OPENSSL_VERSION, sha256 looked up from openssl.org)" || { log_status openssl "FAILED"; return 1; }
 }
 
-# True if $1 (a cross-gcc) can actually compile, not just exist - a truncated
+# Checks that the cross-gcc $1 can actually compile, because a truncated
 # tarball can extract a working bin/*-gcc wrapper while cc1 is still empty.
 toolchain_smoke_ok() {
     [ -x "$1" ] || return 1
@@ -78,7 +76,7 @@ toolchain_smoke_ok() {
 }
 
 # -------------------------------------------------------------- OpenWrt SDKs -
-# No published checksum for the SDKs - verified via toolchain_smoke_ok instead.
+# OpenWrt publishes no checksum for the SDKs, so toolchain_smoke_ok verifies them instead.
 p_openwrt() {
     local name="$1" wtarget="$2" wsubtarget="$3" destvar="$4" ccbin="$5" variant="$6"
     local file="openwrt-sdk-${_OWRT}-${wtarget}-${wsubtarget}_gcc-${_OWRT_GCC}_musl${variant}.Linux-x86_64.tar.zst"
@@ -94,15 +92,11 @@ p_openwrt() {
 }
 
 # --------------------------------------------------------------- BSD sysroots
-# Pre-trimmed sysroots (usr/include + usr/lib + lib, built by
-# build-bsd-sysroot-archives.sh) are mirrored at PTR-inc/meshagent-toolchains
-# so a fetch is one small file instead of the ~200-600MB upstream release
-# tarball. Falls back to fetching+trimming from the real upstream release if
-# the mirror doesn't have this OS release yet.
-# $MESHAGENT_TOOLCHAINS_RAW comes from build-env.sh - one definition, shared
-# with every workflow that falls back to the mirror.
+# Sysroots pre-trimmed by build-bsd-sysroot-archives.sh are mirrored at PTR-inc/meshagent-toolchains
+# so a fetch is one small file instead of the ~200-600MB upstream release. When the mirror lacks
+# this OS release, the real upstream release is fetched and trimmed. $MESHAGENT_TOOLCHAINS_RAW comes from build-env.sh.
 
-# name sysroot_dir url -> 0 and extracts if the mirror has it, 1 if not (not fatal)
+# Takes name, sysroot directory and url. Extracts and returns 0 when the mirror has it, otherwise returns 1, which is not fatal.
 fetch_sysroot_mirror() {
     local name="$1" sysroot="$2" url="$3"
     local dest="$BR_DOWNLOADS/$(basename "$url")"
@@ -116,7 +110,7 @@ fetch_sysroot_mirror() {
     return 0
 }
 
-# usr/include + usr/lib + lib/ - usr/lib's libfoo.so symlinks need that last one.
+# lib/ is included as well because the libfoo.so symlinks in usr/lib point into it.
 p_freebsd() {
     [ -d "$SYSROOT_FREEBSD/usr/include" ] && { log_status freebsd "already present"; return 0; }
     fetch_sysroot_mirror freebsd "$SYSROOT_FREEBSD" "$MESHAGENT_TOOLCHAINS_RAW/SR/freebsd-$FREEBSD_REL-sysroot.tar.xz" && return 0
@@ -131,8 +125,8 @@ p_freebsd() {
         || { log_status freebsd "FAILED (extract)"; return 1; }
 }
 
-# OpenBSD splits base79.tgz (runtime) from comp79.tgz (headers/crt objects) -
-# base79 alone has an EMPTY usr/include, so both sets are fetched here.
+# OpenBSD keeps the headers and crt objects in comp79.tgz, not base79.tgz, and
+# base79 alone has an empty usr/include, so both sets are fetched.
 p_openbsd() {
     [ -d "$SYSROOT_OPENBSD/usr/include" ] && { log_status openbsd "already present"; return 0; }
     fetch_sysroot_mirror openbsd "$SYSROOT_OPENBSD" "$MESHAGENT_TOOLCHAINS_RAW/SR/openbsd-$OPENBSD_REL-sysroot.tar.xz" && return 0
@@ -153,11 +147,9 @@ p_openbsd() {
 }
 
 # ------------------------------------------------------- vendor toolchains ----
-# T-Head/Xuantie C906 riscv64-unknown-linux-musl - no public upstream URL (the
-# XuanTie repo only ships source; a prebuilt needs their account-gated OCC
-# portal, or a from-source build - see docs/meshagent-riscv64-cross-compile.md).
-# Mirrored at PTR-inc/meshagent-toolchains/TC instead, same LFS setup as the
-# BSD sysroots above. Not fatal if missing - ARCH_45 stays bring-your-own.
+# The T-Head Xuantie C906 riscv64-unknown-linux-musl toolchain has no public upstream URL,
+# since a prebuilt needs their account-gated OCC portal, so it is mirrored at
+# PTR-inc/meshagent-toolchains/TC. A miss is not fatal, ARCH_45 stays bring-your-own. See ISSUES.md.
 p_riscv64_xthead() {
     local destdir="$TC_RISCV64_XTHEAD" url="$MESHAGENT_TOOLCHAINS_RAW/TC/riscv64-linux-musl-xthead.tar.xz"
     toolchain_smoke_ok "$destdir/bin/riscv64-unknown-linux-musl-gcc" && { log_status riscv64-xthead "already present"; return 0; }
@@ -172,8 +164,8 @@ p_riscv64_xthead() {
 }
 
 # ------------------------------------------------------------ musl.cc cross ----
-# Prebuilt musl cross toolchains (~100MB each). No published checksum, so each
-# is gated on a real smoke compile rather than a hash.
+# Prebuilt musl cross toolchains of ~100MB each. musl.cc publishes no checksum,
+# so each is gated on a real smoke compile rather than a hash.
 p_muslcc() {
     local name="$1" destvar="$2"
     local destdir="${!destvar}" base; base="$(basename "$destdir")"
@@ -188,10 +180,9 @@ p_muslcc() {
 }
 
 # ------------------------------------------------------------ Bootlin cross --
-# Pinned-release glibc/uClibc cross toolchains (~100MB each). No published
-# checksum, so each is gated on a real smoke compile rather than a hash. Pinned
-# (not "latest") so the glibc/uClibc floor these toolchains produce is a
-# deliberate, reproducible choice - see meshagent-archid-glibc-floor.md.
+# Bootlin glibc and uClibc cross toolchains of ~100MB each. No checksum is published,
+# so each is gated on a smoke compile. The release is pinned rather than "latest"
+# so the libc floor is a deliberate, reproducible choice. See ISSUES.md.
 p_bootlin() {
     local name="$1" family="$2" destvar="$3" ccname="$4"
     local destdir="${!destvar}" base; base="$(basename "$destdir")"
@@ -207,19 +198,16 @@ p_bootlin() {
         || { log_status "$name" "FAILED (extracted, but $destdir/bin/$ccname fails a smoke compile)"; return 1; }
 }
 
-# Bootlin's oldest releases (2017.05, the earliest for x86/x86-64) extract to
-# <family>--glibc--stable with no release suffix, unlike every later release
-# where the top-level dir matches the tarball basename - rename it into place
-# so destdir (TC_*_BOOTLIN, or p_bootlin_pinned's version-suffixed alias)
-# resolves either way.
+# Bootlin's 2017.05 releases extract to <family>--glibc--stable with no release
+# suffix, unlike every later release, so the directory is renamed into place
+# for destdir to resolve either way.
 bootlin_fixup_extracted_dirname() {
     local family="$1" destdir="$2" nosuffix="$BR_TOOLCHAINS/$family--glibc--stable"
     [ -d "$destdir" ] || [ ! -d "$nosuffix" ] || mv "$nosuffix" "$destdir"
 }
 
-# Same as p_bootlin, but for an explicit GLIBCVER= pin instead of the shared
-# $_BOOTLIN default. Lands in its own versioned dir/alias (<alias>-<glibcver>)
-# so it can't collide with, or silently move, a target still on the shared pin.
+# Like p_bootlin but for an explicit GLIBCVER= pin. It lands in its own <alias>-<glibcver>
+# directory so it cannot collide with, or silently move, a target still on the shared pin.
 p_bootlin_pinned() {
     local name="$1" family="$2" ccname="$3" glibcver="$4" alias="$5"
     local rel; rel="$(bootlin_release_for_glibc "$glibcver")" || {
@@ -245,21 +233,14 @@ p_bootlin_pinned() {
 }
 
 # ---------------------------------------------------------------- osxcross --
-# Builds osxcross (clang cross toolchain for macOS) in $OSXCROSS_DIR - part of
-# the default run, skipped (not failed) there when no SDK is available. The
-# compiler itself is open source; the macOS SDK it needs is Apple-licensed and
-# is NOT downloaded from anywhere public. In order, the SDK comes from:
-#   1. $OSXCROSS_SDK_TARBALL already in $BR_DOWNLOADS (e.g. produced by
-#      build-toolchain-archives.sh from an Xcode .xip, or copied from a Mac);
-#   2. an Xcode_<ver>_Universal.xip in $BR_DOWNLOADS, extracted here;
-#   3. $OSXCROSS_SDK_URL, a private/access-controlled URL you set yourself.
-# On Darwin nothing is built - Xcode's clang is used directly.
+# Builds osxcross in $OSXCROSS_DIR. The default run skips it, without failing, when no SDK
+# is available, because the SDK is Apple-licensed and never downloaded from anywhere public.
+# The SDK is taken from $OSXCROSS_SDK_TARBALL, then an Xcode_<ver>_Universal.xip in $BR_DOWNLOADS, then $OSXCROSS_SDK_URL. See BUILD.md.
 OSXCROSS_APT="clang llvm-dev libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev cmake patch cpio git python3"
 osxcross_cc() { ls "$OSXCROSS_BIN"/aarch64-apple-darwin*-clang 2>/dev/null | head -1; }
-# Compiles against the SDK's libc headers, not just `typedef int x;` - a broken
-# SDK (NULLcanary headers) still passes a header-free probe.
-# ...and LINKS it, with $OSXCROSS_BIN on PATH the way the makefile runs it:
-# clang finds <triple>-ld only through PATH, else it falls back to host ld.
+# The probe includes the SDK's libc headers because a broken SDK with NULLcanary headers
+# still passes a header-free compile. It also links, with $OSXCROSS_BIN on PATH the way
+# the makefile runs it, because clang only finds <triple>-ld through PATH and otherwise uses host ld.
 osxcross_smoke_ok() {
     [ -n "$1" ] || return 1
     local o; o=$(mktemp)
@@ -274,9 +255,8 @@ p_osxcross() {
         log_status osxcross "already present ($cc)"; return 0
     fi
     [ -n "$cc" ] && echo "  $cc exists but cannot compile a <stdio.h>/<pthread.h> program - rebuilding"
-    # A tarball made by the old pattern-only extraction is full of NULLcanary
-    # placeholder headers (build-env.sh osxcross_patch_pbzx) - quarantine it
-    # and extract again rather than build a toolchain that can't compile hello.c.
+    # A tarball from the old pattern-only extraction is full of NULLcanary placeholder
+    # headers, so quarantine it and extract again rather than build a toolchain that cannot compile hello.c.
     if [ -f "$OSXCROSS_SDK_TARBALL" ] && ! osxcross_sdk_ok "$OSXCROSS_SDK_TARBALL"; then
         echo "  $OSXCROSS_SDK_TARBALL has NULLcanary placeholder headers - moving to .broken, re-extracting"
         mv -f "$OSXCROSS_SDK_TARBALL" "$OSXCROSS_SDK_TARBALL.broken"
@@ -295,13 +275,12 @@ p_osxcross() {
     [ -z "$miss" ] || offer_apt "osxcross build prerequisites" "$miss" || { log_status osxcross "FAILED (missing:$miss)"; return 1; }
     osxcross_clone || { log_status osxcross "FAILED (clone)"; return 1; }
     mkdir -p "$OSXCROSS_DIR/tarballs"
-    # Only the pinned SDK goes in: build.sh picks whichever tarballs/ holds.
+    # Only the pinned SDK goes in, because build.sh picks whichever tarballs/ holds.
     cmp -s "$OSXCROSS_SDK_TARBALL" "$OSXCROSS_DIR/tarballs/$(basename "$OSXCROSS_SDK_TARBALL")" \
         || cp -f "$OSXCROSS_SDK_TARBALL" "$OSXCROSS_DIR/tarballs/"
-    # SDK_VERSION/BUILD_FLAVOR must be explicit or build.sh prompts (and, under
-    # set -e, dies silently on EOF); UNATTENDED skips its final confirmation.
-    # build.sh re-extracts the SDK and rebuilds cctools/ld64 every run (~15 min,
-    # no incremental mode of its own) and tests every wrapper at the end.
+    # SDK_VERSION and BUILD_FLAVOR must be explicit or build.sh prompts and, under set -e,
+    # dies silently on EOF. UNATTENDED skips its final confirmation. Every run rebuilds
+    # cctools and ld64 from scratch, about 15 minutes, since build.sh has no incremental mode.
     echo "  building/configuring/testing the osxcross environment (SDK $OSXCROSS_SDK_VER, cctools, ld64, clang wrappers)"
     echo "  log: $OSXCROSS_DIR/build.log"
     ( cd "$OSXCROSS_DIR" && SDK_VERSION="$OSXCROSS_SDK_VER" BUILD_FLAVOR=latest UNATTENDED=1 \
@@ -314,8 +293,8 @@ p_osxcross() {
 }
 
 # --------------------------------------------------------------- rcodesign --
-# apple-codesign's rcodesign: signs the macOS agents on Linux and macOS alike
-# (build-env.sh macos_sign). Checksum from the release's own .sha256 sidecar.
+# rcodesign from apple-codesign signs the macOS agents on Linux and macOS alike through
+# build-env.sh's macos_sign. The checksum comes from the release's own .sha256 sidecar.
 p_rcodesign() {
     if [ -x "$RCODESIGN" ] && "$RCODESIGN" --version 2>/dev/null | grep -q "$APPLE_CODESIGN_VER"; then
         log_status rcodesign "already present ($APPLE_CODESIGN_VER)"; return 0
@@ -333,9 +312,9 @@ p_rcodesign() {
 }
 
 # ---------------------------------------------------------- not fetchable ----
-# No stable public URL for these - genuinely bring-your-own, reported only.
+# These have no stable public URL, so they are genuinely bring-your-own and only reported.
 
-# apt package list, shared between check_host_deps's message and print_manual.
+# Shared between check_host_deps's message and print_manual so the two never drift apart.
 APT_PACKAGES="gcc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi gcc-arm-linux-gnueabihf gcc-mips-linux-gnu gcc-mipsel-linux-gnu gcc-riscv64-linux-gnu libc6-dev-i386 lib32gcc-14-dev musl-tools clang lld make perl curl tar xz-utils zstd libx11-dev libxext-dev libxtst-dev libxrandr-dev"
 
 print_manual() {
@@ -352,16 +331,16 @@ print_manual() {
     echo "  without the metapackage-level conflict.)"
 }
 
-# Commands this script itself needs, and the apt package carrying each where
-# the two names differ.
+# Commands this script itself needs. apt_pkg_for maps a command to its
+# apt package where the two names differ.
 HOST_DEPS="curl tar xz zstd bzip2 perl"
-# A macOS host only ever fetches the OpenSSL tarball (its cross toolchains are
-# Linux-only), so don't demand the Linux-side extractors there.
+# A macOS host only ever fetches the OpenSSL tarball, since the cross toolchains
+# are Linux-only, so the Linux-side extractors are not demanded there.
 [ "$(uname -s)" = Darwin ] && HOST_DEPS="curl tar perl"
 apt_pkg_for() { case "$1" in xz) echo xz-utils ;; *) echo "$1" ;; esac; }
 
-# Echoes the subset of $* that dpkg doesn't have installed. Silent (nothing
-# missing) if there's no dpkg-query to ask.
+# Echoes the subset of $* that dpkg does not have installed. Stays silent,
+# meaning nothing missing, when there is no dpkg-query to ask.
 missing_apt_packages() {
     command -v dpkg-query >/dev/null 2>&1 || return 0
     local pkg out=""
@@ -371,8 +350,8 @@ missing_apt_packages() {
     echo "$out"
 }
 
-# apt-get install $2, prompting first (default yes) unless -y was given.
-# Returns 1 if nothing was installed - callers decide whether that's fatal.
+# Prompts before apt-get install, defaulting to yes, unless -y was given.
+# Returns 1 when nothing was installed and lets the caller decide whether that is fatal.
 offer_apt() {
     local what="$1" pkgs="$2" sudo="" reply
     if ! command -v apt-get >/dev/null 2>&1; then
@@ -400,9 +379,8 @@ offer_apt() {
         || { echo "ERROR: apt-get failed - install manually:$pkgs" >&2; return 1; }
 }
 
-# Needs curl (fetch), tar/xz/zstd (extract) and perl (OpenSSL's Configure) -
-# checked upfront instead of failing halfway with a bare "command not found".
-# Fatal: without these the script can't do anything.
+# curl, tar, xz, zstd and perl are checked upfront instead of failing halfway
+# with a bare "command not found". Without them the script can do nothing, so this is fatal.
 check_host_deps() {
     local missing="" cmd pkgs=""
     for cmd in $HOST_DEPS; do
@@ -421,7 +399,7 @@ check_host_deps() {
     [ -z "$missing" ] || { echo "ERROR: still missing after install:$missing" >&2; exit 1; }
 }
 
-# Per-package installed/MISSING table - what check_cross_prereqs decides on.
+# Prints the per-package installed or MISSING table that check_cross_prereqs decides on.
 print_dep_status() {
     local pkg n=0 miss=0
     echo "Host commands this script needs:"
@@ -441,8 +419,8 @@ print_dep_status() {
     echo "  ($((n-miss))/$n installed)"
 }
 
-# The cross-compilers and friends the openssl build scripts need later. This
-# script doesn't use them, so declining is non-fatal - just noted in the summary.
+# The cross-compilers are only needed later by the openssl build scripts, not by
+# this script, so declining is non-fatal and just noted in the summary.
 check_cross_prereqs() {
     local pkgs; pkgs="$(missing_apt_packages $APT_PACKAGES)"
     local total; total=$(set -- $APT_PACKAGES; echo $#)
@@ -459,7 +437,7 @@ check_cross_prereqs() {
 }
 
 # ---------------------------------------------------------- makefile wiring -
-# Symlinks the OpenWrt toolchains `make ARCHID=28`/`36`/`40` need; others aren't.
+# Symlinks only the OpenWrt toolchains that `make ARCHID=28`, `36` and `40` need.
 wire_makefile_toolchains() {
     local tc_dir; tc_dir="$(cd "$REPO/.." && pwd)/ToolChains"
     mkdir -p "$tc_dir"
@@ -471,17 +449,16 @@ wire_makefile_toolchains() {
                 "toolchain-arm_cortex-a15+neon-vfpv4_gcc-${_OWRT_GCC}_musl_eabi:$TC_OWRT_ARMVIRT32"; do
         name="${pair%%:*}"; src="${pair#*:}"
         if [ -d "$src" ]; then
-            # Versioned name plus a version-less alias - point the makefile at the
-            # alias so the next gcc bump is not also a makefile edit.
+            # The makefile points at the version-less alias so the next
+            # gcc bump is not also a makefile edit.
             ln -sfn "$src" "$tc_dir/$name"
             ln -sfn "$src" "$tc_dir/$(echo "$name" | sed -E 's/_gcc-[0-9.]+_musl(_eabi)?$/_musl\1/')"
             log_status "makefile-wiring:$name" "-> $src (enables agent ARCHID build)"
         fi
     done
-    # musl.cc / Bootlin toolchains -> a version-less alias each, so a pin bump
-    # (env.sh's _BOOTLIN, or a musl.cc rename) is a one-line env.sh edit, not a
-    # makefile edit. ARCHID 35 (armada370-hf) reuses the same musl.cc armhf
-    # toolchain OpenSSL is already built with - see meshagent-archid-glibc-floor.md.
+    # Each musl.cc and Bootlin toolchain gets a version-less alias so a pin bump is a
+    # one-line build-env.sh edit, not a makefile edit. ARCHID 35 reuses the same musl.cc
+    # armhf toolchain OpenSSL is already built with. See ISSUES.md.
     for pair in "armv5-eabi-glibc:$TC_ARMV5_BOOTLIN" \
                 "armv7-eabihf-glibc:$TC_ARMV7HF_BOOTLIN" \
                 "aarch64-glibc:$TC_AARCH64_BOOTLIN" \
@@ -545,25 +522,25 @@ EOF
     print_manual
 }
 
-# -y answers the "install missing host deps?" prompt up front.
+# -y answers the "install missing host deps?" prompt up front so CI never blocks on it.
 ASSUME_YES="${ASSUME_YES:-0}"
 case "$1" in -y|--yes) ASSUME_YES=1; shift ;; esac
 
 case "$1" in
     help|-h|--help) usage; exit 0 ;;
-    # Both read-only: report status without demanding the fetch/extract tools.
+    # Both are read-only, so they report status without demanding the fetch and extract tools.
     deps) print_dep_status; exit 0 ;;
     list) print_dep_status; echo; br_check; exit $? ;;
 esac
 
 check_host_deps
-# Only the "fetch everything" run offers to install the full cross-compiler set;
-# `fetch-toolchains.sh freebsd` (or a CI call for one target) must not.
+# Only the "fetch everything" run offers to install the full cross-compiler set.
+# A single-component call such as `fetch-toolchains.sh freebsd` or a CI call for one target must not.
 [ $# -eq 0 ] && check_cross_prereqs
 mkdir -p "$BR_DOWNLOADS" "$BR_SYSROOTS" "$BR_TOOLCHAINS"
 
 # GLIBCVER=<version> routes a bootlin-* component to p_bootlin_pinned instead
-# of the shared $_BOOTLIN default - see env.sh's bootlin_release_for_glibc.
+# of the shared $_BOOTLIN default. See bootlin_release_for_glibc in build-env.sh.
 GLIBCVER="${GLIBCVER:-}"
 bootlin_dispatch() {
     local name="$1" family="$2" destvar="$3" ccname="$4" alias="$5"

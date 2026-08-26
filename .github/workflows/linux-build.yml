@@ -4,10 +4,9 @@ on:
   push:
   pull_request:
 
-# The ARCHID list is not written here - it comes from `make print-archids`,
-# so a new ARCH_ block in the makefile is picked up by CI automatically and an
-# OBSOLETE one drops out. Toolchains come from each block's own FETCH/APTPKG
-# fields via `make print-toolchain` and ./fetch-toolchains.sh. See BUILD.md.
+# The ARCHID list comes from `make print-archids` so that a new ARCH_ block is
+# picked up automatically and an OBSOLETE one drops out. Toolchains come from each
+# block's FETCH and APTPKG fields via `make print-toolchain`. See BUILD.md.
 jobs:
   resolve:
     runs-on: ubuntu-24.04
@@ -35,14 +34,13 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          # KVM=1 targets need only the X11 headers (real calls are dlopen()'d);
-          # the makefile's KVMINC adds them with -idirafter for every target.
+          # KVM=1 targets need only the X11 headers, because the real calls are
+          # dlopen()'d at runtime. The makefile's KVMINC adds them with -idirafter.
           sudo apt-get install -y build-essential \
             libx11-dev libxtst-dev libxext-dev libxrandr-dev libjpeg62-dev \
             linux-libc-dev:i386 libc6-dev-i386 libjpeg62-dev:i386
-      # YES=1 makes the makefile's ensure_toolchain provision the compiler
-      # itself, from the block's own FETCH component or APTPKG - no toolchain
-      # names live in this file.
+      # YES=1 lets the makefile's ensure_toolchain provision the compiler from the
+      # block's own FETCH component or APTPKG, so no toolchain names live here.
       - name: Build ARCHID ${{ matrix.archid }}
         run: make -j4 linux ARCHID=${{ matrix.archid }} YES=1
       - name: Upload artifacts

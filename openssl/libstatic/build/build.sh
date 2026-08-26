@@ -1,25 +1,14 @@
 #!/bin/bash
-# Build one or more OpenSSL targets and stage the archives into the repo.
-#
-#   openssl/libstatic/build/build.sh riscv64
-#   openssl/libstatic/build/build.sh all
-#   openssl/libstatic/build/build.sh list      # targets, toolchains, ARCHIDs
-#   BUILDROOT=/some/other/buildroot openssl/libstatic/build/build.sh mips
-#   BR_JOBS=4 openssl/libstatic/build/build.sh all      # 4 targets built concurrently
-#   BR_FETCH=1 openssl/libstatic/build/build.sh mips    # provision the toolchain first (T_FETCH)
-#
-# Nothing here is staged unless it passes: right version, right object count
-# (per-target, see targets.sh), and - for non-glibc targets (T_LIBC) - no
-# glibc-only and no ucontext symbol references. All three gates read targets.sh;
-# there is no second list of "which targets are musl" anywhere.
+# Builds one or more OpenSSL targets and stages the archives into the repo. Usage is
+# build.sh <target|all|list>, with BUILDROOT, MAKE_JOBS and BR_FETCH=1 as optional knobs.
+# Nothing is staged unless it passes the gates that targets.sh defines. See openssl/libstatic/build/README.md.
 . "$(dirname "$(readlink -f "$0")")/../../../build-env.sh"
 . "$BR_SCRIPTS/targets.sh"
 
 [ $# -ge 1 ] || { echo "usage: $(basename $0) <target|all|list> [target...]"; echo "targets: $BR_ALL_TARGETS"; exit 2; }
 
-# Maps "openssl/libstatic/<dir>" -> the ARCHIDs whose agent links it, asking
-# the makefile rather than second-guessing its target table. Empty if there's
-# no makefile (or no make) to ask.
+# Asks the makefile which ARCHIDs link each openssl/libstatic directory, so its
+# target table is never duplicated here. Prints nothing when make or the makefile is absent.
 archid_map() {
     [ -f "$REPO/makefile" ] && command -v make >/dev/null 2>&1 || return 0
     make -s -C "$REPO" list 2>/dev/null | awk 'NR>1{print $1}' | while read -r id; do
@@ -28,7 +17,7 @@ archid_map() {
     done
 }
 
-# One line per target: can this host build it, who consumes it, where it lands.
+# Prints one line per target so a reader can see what this host can build and who consumes it.
 print_target_list() {
     local map ready=0 total=0
     map="$(archid_map)"
@@ -37,7 +26,7 @@ print_target_list() {
         br_target "$t" || continue
         total=$((total+1))
         local cc="${T_CC%% *}" st ids="" d
-        # Empty T_CC (poky64) means "host's native gcc" - always ready, not MISSING.
+        # An empty T_CC (poky64) means the host's native gcc, so it must count as ready.
         if [ -z "$T_CC" ] || command -v "$cc" >/dev/null 2>&1 || [ -x "$cc" ]; then st=ready; ready=$((ready+1)); else st=MISSING; fi
         for d in $T_DEST; do
             ids="$ids$(echo "$map" | awk -v d="$d" '$1==d{printf "%s%s", (n++?",":""), $2}')"
@@ -56,18 +45,13 @@ list="$*"; [ "$1" = all ] && list="$BR_ALL_TARGETS"
 mkdir -p "$BR_WORK"
 : > "$BR_WORK/build.status"
 
-# BR_JOBS targets build concurrently (default 1 = old one-at-a-time behavior).
-# Cores are split across slots (MAKE_JOBS = nproc / BR_JOBS) instead of every
-# slot claiming `make -j$(nproc)` and oversubscribing the machine.
-BR_JOBS="${BR_JOBS:-1}"
-[ "$BR_JOBS" -ge 1 ] 2>/dev/null || BR_JOBS=1
+# Targets build one after another. Each OpenSSL make gets every core unless MAKE_JOBS says otherwise.
 ncpu=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
-MAKE_JOBS="${MAKE_JOBS:-$((ncpu / BR_JOBS))}"
+MAKE_JOBS="${MAKE_JOBS:-$ncpu}"
 [ "$MAKE_JOBS" -ge 1 ] 2>/dev/null || MAKE_JOBS=1
 
-# Runs one target end to end, output buffered into a per-target log/status
-# file under $BR_WORK so concurrent runs (BR_JOBS>1) don't interleave. Main
-# loop below replays each in listed order, not completion order.
+# Runs one target end to end. Output streams to the terminal and is kept in a per-target log
+# under $BR_WORK. The one-line verdict goes to a status file that the summary loop reads.
 build_one() {
     local t="$1" src status_file log_file
     status_file="$BR_WORK/$t.status"
@@ -115,8 +99,8 @@ build_one() {
     if [ "$v" != "OpenSSL $OPENSSL_VERSION" ] || [ "$n" -ne "$T_OBJS" ]; then
         echo "$t: REJECTED (version=$v objects=$n)" > "$status_file"; return 1
     fi
-    # Gates derived from T_LIBC, never from a second hand-kept target list.
-    # glibc-only symbols: fatal for musl AND uClibc agents.
+    # The gates come from T_LIBC so there is never a second hand-kept target list.
+    # A glibc-only symbol is fatal for both musl and uClibc agents.
     case "$T_LIBC" in
       musl|uclibc)
         if [ "$g" -ne 0 ]; then
@@ -125,8 +109,8 @@ build_one() {
             return 1
         fi ;;
     esac
-    # ucontext: musl implements it on no arch; uClibc's libc.so does, so it is
-    # fatal only for musl.
+    # ucontext is fatal only for musl, because musl implements it on no architecture
+    # while uClibc's libc.so does.
     if [ "$T_LIBC" = musl ] && [ "$u" -ne 0 ]; then
         echo "$t: REJECTED - $u ucontext refs; musl implements none, the agent link will fail" > "$status_file"
         "$t_nm" --undefined-only "$src/libcrypto.a" | awk '{print $NF}' | grep -E "$UCONTEXT_RE" | sort -u | sed 's/^/      /'
@@ -139,13 +123,12 @@ build_one() {
         echo "  staged -> openssl/libstatic/$d"
     done
     echo "$t: OK $v objs=$n libc=$T_LIBC glibc=$g ucontext=$u" > "$status_file"
-    } > "$log_file" 2>&1
+    } 2>&1 | tee "$log_file"
 }
 
-# Provisions this target's toolchain from its T_FETCH tokens (a
-# fetch-toolchains.sh component, or apt:<pkg>). Only runs with BR_FETCH=1 -
-# CI sets it; locally the makefile's own prompt or `list` output tells you what
-# to run. One provisioning table (targets.sh), used by both.
+# Provisions the toolchain from the target's T_FETCH tokens, which are either a
+# fetch-toolchains.sh component or an apt package. It only runs with BR_FETCH=1, which CI
+# sets, so a local run is never surprised by a package install.
 BR_FETCH="${BR_FETCH:-0}"
 br_provision() {
     local tok apt_pkgs="" comps=""
@@ -165,22 +148,12 @@ br_provision() {
     fi
 }
 
-# Slot-throttled fan-out: never more than BR_JOBS running at once. `wait -n`
-# needs bash 4.3+, which macOS's /bin/bash (3.2) is not - so the default
-# BR_JOBS=1 path stays plain sequential and works everywhere.
-if [ "$BR_JOBS" -eq 1 ]; then
-    for t in $list; do build_one "$t"; done
-else
-    for t in $list; do
-        build_one "$t" &
-        while [ "$(jobs -rp | wc -l)" -ge "$BR_JOBS" ]; do wait -n; done
-    done
-    wait
-fi
+for t in $list; do build_one "$t"; done
 
+echo
+echo "Summary:"
 rc=0
 for t in $list; do
-    cat "$BR_WORK/$t.log"
     status_line=$(cat "$BR_WORK/$t.status" 2>/dev/null)
     echo "$status_line" | tee -a "$BR_WORK/build.status"
     case "$status_line" in

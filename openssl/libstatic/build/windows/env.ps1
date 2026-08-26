@@ -1,28 +1,25 @@
-# MeshAgent OpenSSL Windows build environment - vendored copy, tracked in git.
-#
-# Dot-source this, do not run it directly:  . openssl\libstatic\build\windows\env.ps1
-#
-# Native sibling of openssl/libstatic/build/env.sh: MSVC's Configure targets
-# and nmake need a real MSVC developer environment, not just Git Bash.
+# MeshAgent OpenSSL Windows build environment. This is a vendored copy tracked in git.
+# Dot-source it rather than running it:  . openssl\libstatic\build\windows\env.ps1
+# It is the native sibling of openssl/libstatic/build/env.sh, because MSVC's Configure targets and nmake need a real developer environment, not Git Bash.
 
 $script:BrWindowsDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:BrScripts = Split-Path -Parent $BrWindowsDir
 $script:Repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $BrScripts))
 
-# The version is read out of build-env.sh, not restated here - that file is the
-# single pin. Override for one session with $env:OPENSSL_VERSION.
+# The version is read out of build-env.sh so that file stays the single pin.
+# Override it for one session with $env:OPENSSL_VERSION.
 $script:OpenSslVersion = if ($env:OPENSSL_VERSION) { $env:OPENSSL_VERSION } else {
     $m = Select-String -Path (Join-Path $script:Repo 'build-env.sh') `
                        -Pattern 'OPENSSL_VERSION:-([0-9][^}"]*)' -ErrorAction SilentlyContinue
     if ($m) { $m.Matches[0].Groups[1].Value } else { throw "couldn't read OPENSSL_VERSION from build-env.sh" }
 }
-# 1.x releases are tagged OpenSSL_1_1_1w; 3.x and later, openssl-3.5.7. Same
-# rule as build-env.sh's openssl_release_tag.
+# 1.x releases are tagged like OpenSSL_1_1_1w, and 3.x and later like openssl-3.5.7.
+# This is the same rule as openssl_release_tag in build-env.sh.
 $script:OpenSslTag = if ($script:OpenSslVersion -like '1.*') { "OpenSSL_" + ($script:OpenSslVersion -replace '\.', '_') } else { "openssl-$($script:OpenSslVersion)" }
 $script:OpenSslUrl = "https://github.com/openssl/openssl/releases/download/$($script:OpenSslTag)/openssl-$($script:OpenSslVersion).tar.gz"
 
-# No hand-pinned checksum: openssl.org publishes a <tarball>.sha256 sidecar for
-# every release, looked up at download time exactly as build-env.sh does.
+# There is no hand-pinned checksum because openssl.org publishes a <tarball>.sha256
+# sidecar for every release. It is looked up at download time exactly as build-env.sh does.
 function Get-OpenSslSha256 {
     param([string]$Version = $script:OpenSslVersion)
     $body = (Invoke-WebRequest -UseBasicParsing -Uri "https://www.openssl.org/source/openssl-$Version.tar.gz.sha256").Content
@@ -31,14 +28,13 @@ function Get-OpenSslSha256 {
     return $sha
 }
 
-# The default lives under the user profile; override by setting BUILDROOT before
-# dot-sourcing, or answer Install-BuildRootWindows's prompt for this session.
+# The default lives under the user profile. Override it by setting BUILDROOT before
+# dot-sourcing, or answer the Install-BuildRootWindows prompt for this session.
 $script:BuildRootDefault = Join-Path $env:LOCALAPPDATA 'meshagent-buildroot'
 
 function Resolve-BrPath {
-    # Normalise a hand-typed path: strip stray quotes, expand %VARS% and ~, and
-    # make it absolute, so a relative answer cannot quietly produce a buildroot
-    # somewhere else once a later step changes directory.
+    # Normalise a hand-typed path by stripping stray quotes, expanding %VARS% and ~, and making
+    # it absolute, so a relative answer cannot quietly land the buildroot elsewhere after a later cd.
     param([Parameter(Mandatory)][string]$Path)
 
     $p = [Environment]::ExpandEnvironmentVariables($Path.Trim().Trim('"'))
@@ -54,10 +50,9 @@ function Resolve-BrPath {
 }
 
 function Set-BuildRoot {
-    # Repoint $BUILDROOT and everything derived from it in one place. The
-    # derived paths are fixed at dot-source time, so setting $env:BUILDROOT on
-    # its own would leave BR_DOWNLOADS and the tarball path addressing the old
-    # tree while BUILDROOT claimed otherwise.
+    # Repoint $BUILDROOT and everything derived from it in one place. The derived paths
+    # are fixed at dot-source time, so setting $env:BUILDROOT on its own would leave
+    # BR_DOWNLOADS and the tarball path pointing at the old tree.
     param([Parameter(Mandatory)][string]$Path)
 
     $env:BUILDROOT = $Path
@@ -69,17 +64,13 @@ function Set-BuildRoot {
 
 Set-BuildRoot $(if ($env:BUILDROOT) { $env:BUILDROOT } else { $script:BuildRootDefault })
 
-# Same flags.txt build-env.sh reads - single source of truth for both. Per-
-# target deltas live in build.ps1's $Targets (Asm) and targets.sh, not in
-# separate override files.
+# This is the same flags.txt that build-env.sh reads, so both have one source of truth.
+# Per-target deltas live in the $Targets table in build.ps1 and in targets.sh, not in override files.
 $script:OsslFlags = (Get-Content (Join-Path $BrScripts 'flags.txt')) -join ' '
 
-# Prerequisites Install-BuildRootWindows can provision, pinned the same way the
-# OpenSSL tarball is - fixed version, URL and SHA-256 - so an unattended install
-# can never pick up a substituted archive. Both are portable ZIPs: no installer,
-# no admin rights, no PATH edits, everything under $BUILDROOT\tools. The URLs are
-# literal rather than built from the versions - Strawberry's release tag
-# (SP_5380_5361) does not derive from its version string.
+# Prerequisites Install-BuildRootWindows can provision. Each is pinned by version, URL and SHA-256
+# like the OpenSSL tarball, so an unattended install can never pick up a substituted archive. Both are
+# portable ZIPs under $BUILDROOT\tools. The URLs are literal because Strawberry's release tag SP_5380_5361 does not derive from its version string.
 $script:PerlVersion = '5.38.0.1'
 $script:PerlUrl = 'https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_5380_5361/strawberry-perl-5.38.0.1-64bit-portable.zip'
 $script:PerlSha256 = 'ca6402a466939d5d658cc0d09a20dc59635ae68f6903a92a747a802539e40908'
@@ -92,32 +83,26 @@ $script:VsWhereDir = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio
 function Get-VsInstallPath {
     $vswhere = Join-Path $script:VsWhereDir 'vswhere.exe'
     if (-not (Test-Path $vswhere)) { return $null }
-    # VS 2026 (v18) version-stamped the x86/x64 toolset component id -
-    # Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64 - where 2017-2022
-    # used a fixed Microsoft.VisualStudio.Component.VC.Tools.x86.x64. The
-    # wildcard matches both ("Tools" is just another segment), but -requires
-    # only understands wildcards in vswhere 2.6.7+, so try the fixed id first:
-    # on 2017-2022 that hits regardless of how old the installer is.
+    # VS 2026 (v18) version-stamped the x86 and x64 toolset component id as
+    # Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64, where 2017-2022 used the fixed
+    # Microsoft.VisualStudio.Component.VC.Tools.x86.x64. Only vswhere 2.6.7+ accepts wildcards in -requires, so try the fixed id first.
     foreach ($req in @('Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
                        'Microsoft.VisualStudio.Component.VC.*.x86.x64')) {
         $path = & $vswhere -latest -products * -requires $req -property installationPath 2>$null
         if ($LASTEXITCODE -eq 0 -and $path) { return ($path | Select-Object -First 1) }
     }
-    # Last resort - an installer too old for wildcards paired with a VS too new
-    # for the fixed id. Get-VcToolsetVersion still gates on a real toolset being
-    # on disk, so a C++-less install is reported as such rather than half-used.
+    # Last resort for an installer too old for wildcards paired with a VS too new for the fixed id.
+    # Get-VcToolsetVersion still requires a real toolset on disk, so an install without C++ is
+    # reported as such rather than half-used.
     $path = & $vswhere -latest -products * -property installationPath 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $path) { return $null }
     return ($path | Select-Object -First 1)
 }
 
 function Get-VcEnvScript {
-    # The batch file that puts cl/nmake/lib on PATH. vcvarsall.bat is the usual
-    # one, but it is not guaranteed: a v18 install carrying only the versioned
-    # v143 toolset packages had no vcvarsall.bat anywhere, while VsDevCmd.bat -
-    # which every VS since 2017 ships - was present and worked. Prefer
-    # vcvarsall.bat, fall back to VsDevCmd.bat, and record which one we found
-    # because the two take different arguments.
+    # Find the batch file that puts cl, nmake and lib on PATH. vcvarsall.bat is not guaranteed: a v18
+    # install carrying only the versioned v143 packages had none, while VsDevCmd.bat, which every VS
+    # since 2017 ships, worked. Prefer vcvarsall.bat and record which one was found, since they take different arguments.
     $vs = Get-VsInstallPath
     if (-not $vs) { return $null }
     $vcvarsall = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
@@ -128,12 +113,9 @@ function Get-VcEnvScript {
 }
 
 function Get-VcToolsetVersion {
-    # An installed MSVC toolset folder is not proof of a usable toolset. Both
-    # failure modes have been seen on real installs: a props-only version folder
-    # carrying no compiler at all, which the product's own default resolution
-    # still pointed at (leaving an unpinned vcvars call with no cl.exe), and a
-    # newest-installed toolset with an incomplete arm64 lib set - present dir,
-    # missing setargv.obj/CRT. Pick the newest that is complete for $Arch.
+    # An installed toolset folder is not proof of a usable toolset. Real installs have shown a
+    # props-only version folder with no compiler that the default resolution still pointed at, and
+    # a newest toolset missing setargv.obj and the CRT for arm64. Pick the newest that is complete for $Arch.
     param([ValidateSet('x86', 'x64', 'x64_arm64')][string]$Arch)
 
     $vs = Get-VsInstallPath
@@ -154,18 +136,15 @@ function Get-VcToolsetVersion {
         Select-Object -First 1
     if (-not $best) { return $null }
 
-    # -vcvars_ver wants Major.Minor (e.g. "14.44"), not the full three-part
-    # folder name (e.g. "14.44.35207").
+    # -vcvars_ver wants Major.Minor such as "14.44", not the full folder name such as "14.44.35207".
     if ($best.Name -match '^(\d+\.\d+)') { return $Matches[1] }
     return $null
 }
 
 function Get-WindowsSdkVersion {
-    # A usable MSVC toolset is only half the environment: stdlib.h, windows.h
-    # and the import libs all live in the Windows SDK, which the individual
-    # VC.Tools components do NOT pull in. Without this check a build gets a
-    # working cl.exe and then dies on "Cannot open include file: 'stdlib.h'".
-    # Returns the newest SDK complete for $Arch, or $null.
+    # A usable toolset is only half the environment. stdlib.h, windows.h and the import libs live in
+    # the Windows SDK, which the VC.Tools components do NOT pull in, so without this check cl.exe runs
+    # and then dies on "Cannot open include file: 'stdlib.h'". Returns the newest SDK complete for $Arch, or $null.
     param(
         [ValidateSet('x86', 'x64', 'x64_arm64')][string]$Arch,
         [string]$KitsRoot
@@ -192,8 +171,8 @@ function Get-WindowsSdkVersion {
         if (-not (Test-Path $incRoot)) { continue }
         foreach ($dir in (Get-ChildItem $incRoot -Directory -ErrorAction SilentlyContinue)) {
             $v = $dir.Name
-            # Headers and import libs both, for this target arch - an SDK can
-            # be installed for one architecture and not another.
+            # Check headers and import libs both for this target arch, because an SDK
+            # can be installed for one architecture and not another.
             $required = @(
                 (Join-Path $dir.FullName 'ucrt\stdlib.h')
                 (Join-Path $dir.FullName 'um\windows.h')
@@ -210,22 +189,22 @@ function Get-WindowsSdkVersion {
 }
 
 function Get-VcEnvCall {
-    # The `call "..."` line that enters the developer environment for $Arch,
-    # in whichever dialect the installed VS speaks. Callers append their own
-    # redirection. $Arch uses vcvarsall's naming even on the VsDevCmd path.
+    # Build the call line that enters the developer environment for $Arch in whichever dialect
+    # the installed VS speaks. Callers append their own redirection. $Arch uses vcvarsall's
+    # naming even on the VsDevCmd path.
     param([ValidateSet('x86', 'x64', 'x64_arm64')][string]$Arch)
 
     $vcEnv = Get-VcEnvScript
     if (-not $vcEnv) { return $null }
 
-    # Always pin the toolset: the default is unusable on VS 2026, and pinning
+    # Always pin the toolset, because the default is unusable on VS 2026 and pinning
     # keeps the object-count gate reproducible everywhere else.
     $ver = Get-VcToolsetVersion -Arch $Arch
     $verArg = if ($ver) { " -vcvars_ver=$ver" } else { '' }
 
     if ($vcEnv.Kind -eq 'vsdevcmd') {
-        # vcvarsall packs host and target into one token; VsDevCmd takes them
-        # separately and, unasked, cd's to the VS default directory.
+        # vcvarsall packs host and target into one token. VsDevCmd takes them
+        # separately and, unasked, changes directory to the VS default directory.
         $archArgs = @{
             'x86'       = '-arch=x86 -host_arch=x86'
             'x64'       = '-arch=amd64 -host_arch=amd64'
@@ -247,8 +226,8 @@ function Get-NasmPath {
 }
 
 function Get-PerlPath {
-    # OpenSSL's Configure refuses a Cygwin perl - Git for Windows' bundled
-    # perl.exe is exactly that, so skip it even though it's usually on PATH.
+    # OpenSSL's Configure refuses a Cygwin perl, and Git for Windows' bundled perl.exe
+    # is exactly that, so skip it even though it is usually on PATH.
     $portable = Join-Path $env:BR_TOOLS 'strawberry-perl\perl\bin\perl.exe'
     if (Test-Path $portable) { return $portable }
 
@@ -261,9 +240,8 @@ function Get-PerlPath {
 }
 
 function Save-BrDownload {
-    # Download once into $BR_DOWNLOADS and gate on SHA-256. A file that fails
-    # the check is deleted rather than left in place, so a retry re-fetches
-    # instead of failing forever on a truncated download.
+    # Download once into $BR_DOWNLOADS and gate on SHA-256. A file that fails the check is
+    # deleted rather than left in place, so a retry re-fetches instead of failing forever on a truncated download.
     param(
         [Parameter(Mandatory)][string]$Url,
         [Parameter(Mandatory)][string]$Path,
@@ -305,10 +283,9 @@ function Save-BrDownload {
 }
 
 function Expand-BrZip {
-    # Unpack into a staging dir and swap it into place, so an interrupted
-    # extract never leaves a half-populated tools dir that the probes would
-    # then treat as a working install. A ZIP with one top-level folder (nasm)
-    # is flattened; one that unpacks flat (strawberry) is taken as-is.
+    # Unpack into a staging dir and swap it into place, so an interrupted extract never leaves a
+    # half-populated tools dir that the probes would treat as a working install. A ZIP with one
+    # top-level folder (nasm) is flattened, and one that unpacks flat (strawberry) is taken as-is.
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][string]$Destination
@@ -329,16 +306,13 @@ function Expand-BrZip {
 }
 
 function Get-VcComponentId {
-    # Component id to hand the VS installer's --add, read from the installer's
-    # own catalog of what this product offers. The catalog lists every component
-    # whether or not it is installed, so this still resolves when the C++
-    # workload has been removed outright - deriving it from the *installed*
-    # packages instead would go blind exactly when it is needed most.
+    # Component id for the VS installer's --add, read from the installer's own catalog. The catalog
+    # lists every component whether or not it is installed, so this still resolves after the C++
+    # workload was removed, which is exactly when deriving it from installed packages would go blind.
     param([ValidateSet('x64', 'arm64', 'sdk')][string]$Arch)
 
-    # x86 and x64 come from one component; arm64 is its own. The Windows SDK is
-    # a separate component again - installing only VC.Tools yields a cl.exe with
-    # no stdlib.h, so it has to be asked for by name.
+    # x86 and x64 come from one component and arm64 is its own. The Windows SDK is a separate
+    # component again, and installing only VC.Tools yields a cl.exe with no stdlib.h, so it must be asked for by name.
     $suffix = switch ($Arch) { 'arm64' { 'ARM64' } 'sdk' { $null } default { 'x86.x64' } }
     $fixed = if ($suffix) { "Microsoft.VisualStudio.Component.VC.Tools.$suffix" } else { $null }
 
@@ -349,15 +323,14 @@ function Get-VcComponentId {
         Join-Path $env:ProgramData "Microsoft\VisualStudio\Packages\_Instances\$instanceId\components.json"
     } else { $null }
 
-    # No catalog to consult: the fixed id is correct for every VS that shipped
-    # vcvarsall.bat, so offer that rather than nothing. The SDK id is versioned
-    # with no fixed alias, so it cannot be guessed without the catalog.
+    # With no catalog to consult, the fixed id is correct for every VS that shipped vcvarsall.bat,
+    # so offer that rather than nothing. The SDK id is versioned with no fixed alias, so it cannot be guessed.
     if (-not $catalog -or -not (Test-Path $catalog)) { return $fixed }
 
     $text = Get-Content $catalog -Raw
 
     if ($Arch -eq 'sdk') {
-        # Newest Windows SDK this VS offers, e.g. Windows11SDK.26100.
+        # Newest Windows SDK this VS offers, such as Windows11SDK.26100.
         $rx = [regex]'"Microsoft\.VisualStudio\.Component\.Windows\d+SDK\.(\d+)"'
         $best = $rx.Matches($text) |
             Sort-Object { [int]$_.Groups[1].Value } -Descending |
@@ -366,8 +339,8 @@ function Get-VcComponentId {
         return $best.Value.Trim('"')
     }
 
-    # Prefer the fixed "latest toolset" id - 2017-2022 and v18 all offer it, and
-    # it keeps tracking the newest toolset across VS updates.
+    # Prefer the fixed "latest toolset" id. 2017-2022 and v18 all offer it, and it
+    # keeps tracking the newest toolset across VS updates.
     if ($text.Contains('"' + $fixed + '"')) { return $fixed }
 
     $rx = [regex]('"Microsoft\.VisualStudio\.Component\.VC\.(\d[\d.]*)\.' + [regex]::Escape($suffix) + '"')
@@ -379,9 +352,8 @@ function Get-VcComponentId {
     return "Microsoft.VisualStudio.Component.VC.$best.$suffix"
 }
 
-# Provisioning half of Test-BuildRootWindows: fetch and unpack whatever that
-# report lists as missing. Everything lands under $BUILDROOT - nothing is
-# installed system-wide, added to PATH, or left behind outside it.
+# Provisioning half of Test-BuildRootWindows. It fetches and unpacks whatever that report
+# lists as missing. Everything lands under $BUILDROOT, and nothing is installed system-wide or added to PATH.
 function Install-BuildRootWindows {
     [CmdletBinding()]
     param(
@@ -393,10 +365,9 @@ function Install-BuildRootWindows {
         [switch]$Force
     )
 
-    # Settle where this is all going before writing anything. -BuildRoot wins
-    # outright; otherwise ask, with Enter taking the current default. A session
-    # that cannot answer (non-interactive, or -Force) keeps the default rather
-    # than blocking on a prompt nobody is there to see.
+    # Settle where this is all going before writing anything. -BuildRoot wins outright, otherwise
+    # ask, with Enter taking the current default. A session that cannot answer, because it is
+    # non-interactive or -Force was given, keeps the default rather than blocking on a prompt nobody sees.
     if ($BuildRoot) {
         Set-BuildRoot (Resolve-BrPath $BuildRoot)
     } elseif (-not $Force) {
@@ -404,14 +375,13 @@ function Install-BuildRootWindows {
             $answer = Read-Host "  buildroot path [$env:BUILDROOT]"
             if ($answer -and $answer.Trim()) { Set-BuildRoot (Resolve-BrPath $answer.Trim()) }
         } catch {
-            # Non-interactive host - Read-Host cannot return an answer here.
+            # Non-interactive host, so Read-Host cannot return an answer here.
         }
     }
     Write-Host "  buildroot: $env:BUILDROOT"
 
-    # A bare call provisions everything that needs no admin rights.
-    # -VsComponents is never implied: it drives the Visual Studio installer,
-    # needs elevation, and changes an install this script does not own.
+    # A bare call provisions everything that needs no admin rights. -VsComponents is never implied,
+    # because it drives the Visual Studio installer, needs elevation, and changes an install this script does not own.
     if (-not ($Tarball -or $Perl -or $Nasm -or $VsComponents)) {
         $Tarball = $true; $Perl = $true; $Nasm = $true
     }
@@ -459,13 +429,13 @@ function Install-BuildRootWindows {
 
     if ($VsComponents) {
         Write-Host "  MSVC build tools"
-        # Only ask for what is actually absent, so re-running this is a no-op
-        # rather than a needless trip through the installer.
+        # Only ask for what is actually absent, so re-running this is a no-op rather
+        # than a needless trip through the installer.
         $need = @()
         if (-not (Get-VcToolsetVersion -Arch x64))       { $need += Get-VcComponentId -Arch x64 }
         if (-not (Get-VcToolsetVersion -Arch x64_arm64)) { $need += Get-VcComponentId -Arch arm64 }
-        # The SDK ships separately from the toolset - ask for it whenever no
-        # target has one, or the install ends up with a cl.exe and no headers.
+        # The SDK ships separately from the toolset, so ask for it whenever no target
+        # has one, or the install ends up with a cl.exe and no headers.
         if (-not (Get-WindowsSdkVersion -Arch x64))      { $need += Get-VcComponentId -Arch sdk }
         $need = @($need | Where-Object { $_ })
 
@@ -479,15 +449,12 @@ function Install-BuildRootWindows {
         } else {
             $setupArgs = @('modify', '--installPath', "`"$vs`"")
             foreach ($id in $need) { $setupArgs += @('--add', $id) }
-            # --passive is not optional decoration: the installer rejects
-            # --norestart on its own ("requires either --quiet or --passive")
-            # and answers with its usage dialog instead of doing anything. It
-            # also keeps the progress UI visible, which a multi-GB component
-            # install wants.
+            # --passive is required because the installer rejects --norestart on its own
+            # ("requires either --quiet or --passive") and shows its usage dialog instead of doing
+            # anything. It also keeps the progress UI visible, which a multi-GB component install wants.
             $setupArgs += @('--passive', '--norestart')
             Write-Host "    `"$setup`" $($setupArgs -join ' ')"
-            # Elevating into someone's Visual Studio install is not a call this
-            # script makes unattended.
+            # Elevating into someone's Visual Studio install is not a call this script makes unattended.
             $approved = [bool]$Force
             if (-not $approved) {
                 try {
@@ -495,8 +462,7 @@ function Install-BuildRootWindows {
                         "Run the Visual Studio installer elevated to add $($need -join ', ')?",
                         'Modify the Visual Studio installation')
                 } catch {
-                    # A non-interactive host cannot answer, and silently
-                    # elevating is the wrong way to resolve that.
+                    # A non-interactive host cannot answer, and silently elevating is the wrong way to resolve that.
                     Write-Host "    cannot prompt in a non-interactive session - re-run with -Force to proceed"
                     $approved = $false
                 }
@@ -510,15 +476,14 @@ function Install-BuildRootWindows {
                 Write-Host "    arm64   : $(if ($armGot) { $armGot } else { 'not present yet' })"
                 Write-Host "    sdk     : $(if ($sdkGot) { $sdkGot } else { 'not present yet' })"
                 if (-not $x64Got -or -not $armGot -or -not $sdkGot) {
-                    # setup.exe hands the real work to a child process and can
-                    # exit before it finishes, so this is "not done yet", not
-                    # proof the install failed.
+                    # setup.exe hands the real work to a child process and can exit before it
+                    # finishes, so this means not done yet, not proof that the install failed.
                     Write-Host "    if the Visual Studio installer is still running, re-run Test-BuildRootWindows once it finishes"
                     $ok = $false
                 }
             } else {
-                # Declining is a valid choice, but the toolset is still absent -
-                # don't report a provisioned buildroot to a caller checking this.
+                # Declining is a valid choice, but the toolset is still absent, so do not
+                # report a provisioned buildroot to a caller checking this.
                 Write-Host "    skipped - run the command above yourself when ready"
                 $ok = $false
             }
@@ -529,8 +494,8 @@ function Install-BuildRootWindows {
     return $ok
 }
 
-# Read-only report - confirms every input this build needs is present,
-# without building anything. Mirrors env.sh's br_check().
+# Read-only report that confirms every input this build needs is present without
+# building anything. Mirrors br_check() in env.sh.
 function Test-BuildRootWindows {
     $ok = $true
 
@@ -545,7 +510,7 @@ function Test-BuildRootWindows {
     if ($vcEnv) {
         Write-Host "  msvc env script : $($vcEnv.Path)"
 
-        # Report per-target toolsets, not just "a VS exists" - a complete
+        # Report per-target toolsets, not just that a VS exists, because a complete
         # install for x64 can still be missing the arm64 target's lib set.
         foreach ($a in @('x86', 'x64', 'x64_arm64')) {
             $ver = Get-VcToolsetVersion -Arch $a

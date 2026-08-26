@@ -1,11 +1,7 @@
 #!/bin/bash
-# Anti-drift gate. Fails when the build system's four sources of truth stop
-# agreeing with each other, or when a pinned constant gets copied into a place
-# that should be asking for it instead. Read-only; run it anywhere.
-#
-#   openssl/libstatic/build/consistency.sh
-#
-# See BUILD.md for what each source of truth owns.
+# Read-only drift check. It fails when the build system's sources of truth stop agreeing,
+# or when a pinned constant is copied somewhere that should ask for it instead.
+# BUILD.md says what each source of truth owns.
 
 . "$(dirname "$(readlink -f "$0")")/../../../build-env.sh" >/dev/null || exit 1
 . "$BR_SCRIPTS/targets.sh" || exit 1
@@ -61,9 +57,8 @@ done
 [ $rc -eq 0 ] && ok "targets.sh --names linux + macos == BR_ALL_TARGETS"
 
 echo "== 5. the Windows target names parse the same with and without pwsh ======="
-# build-openssl-job.yml greps build.ps1's $Targets directly so the matrix can be
-# resolved on a runner (or under `act`) with no PowerShell. Assert that parse
-# still agrees with build.ps1's own --names-json wherever pwsh is available.
+# build-openssl-job.yml greps build.ps1's $Targets so the matrix resolves without PowerShell.
+# Where pwsh exists, check that this grep still agrees with build.ps1 --names-json.
 WIN_NAMES=$(grep -oE "Name *= *'[^']+'" "$BR_SCRIPTS/windows/build.ps1" | sed "s/.*'\(.*\)'/\1/")
 [ -n "$WIN_NAMES" ] || fail "could not parse any Name from windows/build.ps1's \$Targets"
 if command -v pwsh >/dev/null 2>&1; then
@@ -76,9 +71,8 @@ else
 fi
 
 echo "== 6. no pinned constant is restated in CI or scripts ====================="
-# Each of these has exactly one home (build-env.sh, or the makefile's ARCH_
-# blocks). Anything else that spells the literal out is drift waiting to happen:
-# ask for the value instead (`. build-env.sh`, `make print-bsdrel`, targets.sh).
+# Each constant has exactly one home, either build-env.sh or the makefile's ARCH_ blocks.
+# Any other file spelling out the literal will drift, so it should ask for the value instead.
 guard() {
     local what="$1" pat="$2" hits
     hits=$(grep -rlE "$pat" --include='*.yml' --include='*.yaml' --include='*.ps1' \

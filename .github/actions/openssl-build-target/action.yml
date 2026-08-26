@@ -42,9 +42,9 @@ runs:
       shell: bash
       run: ./fetch-toolchains.sh -y openssl
 
-    # BR_FETCH=1 makes build.sh provision from the target's own T_FETCH tokens -
-    # the same table `make list` and fetch-toolchains.sh use. No per-target
-    # toolchain installation steps live in YAML.
+    # BR_FETCH=1 lets build.sh provision its own toolchain from the target's T_FETCH
+    # tokens, the same table `make list` and fetch-toolchains.sh read. That is why no
+    # per-target toolchain installation step lives in YAML.
     - name: Build ${{ inputs.target }}
       if: steps.check.outputs.skip != 'true'
       shell: bash

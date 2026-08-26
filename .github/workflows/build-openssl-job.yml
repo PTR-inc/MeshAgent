@@ -1,15 +1,9 @@
 name: Build OpenSSL static libs
 run-name: Build ${{ inputs.jobname }}${{ inputs.force == true && ' (force)' || '' }}${{ inputs.version_suffix == true && format(' [suffix -{0}]', inputs.version) || '' }}
 
-# Every per-target decision (Configure target, compiler, asm, extra flags, libc
-# family, toolchain provisioning, object count) comes from
-# openssl/libstatic/build/targets.sh - and on Windows, from windows/build.ps1's
-# own $Targets. This file only decides WHICH targets to dispatch and on what
-# runner (T_CI: linux -> ubuntu, macos -> a macOS runner with Xcode's clang, the
-# same host detection `make macos` does); it restates no recipe, no version, no
-# URL and no checksum. The eight
-# per-family openssl-*.yml workflows this replaced each carried their own copy
-# and drifted from targets.sh repeatedly - see BUILD.md.
+# This file only decides which targets to dispatch and on which runner. Every
+# per-target recipe lives in openssl/libstatic/build/targets.sh (on Windows, in
+# windows/build.ps1's own $Targets), because copies here drifted. See BUILD.md.
 on:
   workflow_dispatch:
     inputs:
@@ -26,8 +20,8 @@ on:
         required: true
         default: false
         type: boolean
-      # Suffixed archives are inert: the makefile and the .vcxproj files link the
-      # unsuffixed names, so this stages a copy without changing any build.
+      # Suffixed archives are inert because the makefile and the .vcxproj files
+      # link the unsuffixed names, so staging a copy changes no build.
       version_suffix:
         description: "Name the outputs libcrypto-<version>.a / libcrypto64MT-<version>.lib instead of overwriting the standard names"
         required: true
@@ -62,16 +56,16 @@ jobs:
             || { echo "::error::'$v' does not resolve to a published OpenSSL release"; exit 1; }
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
-          # One row per unix target: "<name> <runner>", runner chosen by T_CI.
+          # One row per unix target, name then runner, with the runner chosen by T_CI.
           rows=$(for t in $(openssl/libstatic/build/targets.sh --names); do
                    case "$(openssl/libstatic/build/targets.sh --field "$t" CI)" in
                      macos) echo "$t macos-latest" ;;
                      *)     echo "$t ubuntu-24.04" ;;
                    esac
                  done)
-          # Windows names come from build.ps1's own $Targets - grepped, not run,
-          # so this job needs no pwsh (act's image has none). consistency.sh
-          # check 5 asserts this parse agrees with `build.ps1 --names-json`.
+          # Windows names are grepped out of build.ps1's $Targets rather than run,
+          # because act's image has no pwsh. consistency.sh check 5 asserts this
+          # parse agrees with `build.ps1 --names-json`.
           win=$(grep -oE "Name *= *'[^']+'" openssl/libstatic/build/windows/build.ps1 | sed "s/.*'\(.*\)'/\1/")
 
           sel="${{ inputs.jobname }}"
@@ -103,8 +97,8 @@ jobs:
       SFX: ${{ inputs.version_suffix && format('-{0}', needs.resolve.outputs.version) || '' }}
     steps:
       - uses: actions/checkout@v4
-      # On a macos runner targets.sh picks the native clang/ar/ranlib; on Linux
-      # it cross-compiles - same composite action, same build.sh either way.
+      # The same composite action and build.sh serve both runner kinds, because
+      # targets.sh picks native clang on macOS and cross-compiles on Linux.
       - uses: ./.github/actions/openssl-build-target
         with:
           target: ${{ matrix.target }}
@@ -121,8 +115,8 @@ jobs:
   windows:
     needs: resolve
     if: needs.resolve.outputs.windows != '[]'
-    # arm64 is cross-built with the x64_arm64 MSVC toolset (build.ps1's VcVars),
-    # so one x64 runner covers every Windows target.
+    # One x64 runner covers every Windows target, because arm64 is cross-built
+    # with the x64_arm64 MSVC toolset that build.ps1's VcVars selects.
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -146,9 +140,9 @@ jobs:
           if (-not (Save-BrDownload -Url $script:OpenSslUrl -Path $script:OpenSslTarball -Sha256 (Get-OpenSslSha256))) {
             throw "could not fetch $($script:OpenSslUrl)"
           }
-      # build.ps1 owns the recipe, the .lib naming and the version/object-count
-      # gates - this step only invokes it. force is irrelevant here: build.ps1
-      # always rebuilds, and the collect step below uploads only what changed.
+      # This step only invokes build.ps1, which owns the recipe, the .lib naming
+      # and the version and object-count gates. The force input is irrelevant here
+      # because build.ps1 always rebuilds and the collect step uploads only changes.
       - name: Build ${{ matrix.target }}
         shell: pwsh
         run: |
@@ -182,7 +176,8 @@ jobs:
         with: { path: artifacts }
       - name: Overlay this run's freshly built archives onto the checkout
         run: |
-          # download-artifact nests under artifacts/<name>/ with multiple artifacts, flat with one - search instead of assuming depth.
+          # Search rather than assume depth, because download-artifact nests under
+          # artifacts/<name>/ with several artifacts but stays flat with one.
           find artifacts -type d -path '*/openssl/libstatic' -print0 |
             while IFS= read -r -d '' d; do cp -rf "$d"/. openssl/libstatic/; done
       - name: Audit every archive - version, object count, libc symbol gates

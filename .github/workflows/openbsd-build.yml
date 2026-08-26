@@ -7,10 +7,9 @@ on:
 jobs:
   openbsd-build-x86-64:
     name: OpenBSD x86_64 (ARCHID=37)
-    # Cross-compiled (clang + a base+comp sysroot, no OpenBSD VM). The release,
-    # the sysroot location and the mirror-with-fallback fetch all come from
-    # ARCH_37's BSDREL / build-env.sh / fetch-toolchains.sh - nothing is
-    # restated here. See BUILD.md.
+    # Cross-compiled with clang and a base plus comp sysroot, so no OpenBSD VM is needed.
+    # The release, sysroot location and mirror fallback come from ARCH_37's BSDREL,
+    # build-env.sh and fetch-toolchains.sh, so nothing is restated here. See BUILD.md.
     runs-on: ubuntu-24.04
     env:
       BUILDROOT: ${{ github.workspace }}/br

@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Shared by meshconsole\MeshConsole-2022.vcxproj and meshservice\MeshService-2022.vcxproj.
-  Imported between Microsoft.Cpp.Default.props and Microsoft.Cpp.props: everything the C++
-  toolset needs to know before it loads. Per-cell settings live in MeshAgent.Common.props.
-  Configuration axis: Debug | Release, optionally suffixed _NoOpenSSL (BCrypt only, no TLS).
+  Shared by all agent projects. Imported before Microsoft.Cpp.props because the toolset reads
+  these while loading. The rest of the shared settings are in MeshAgent.Common.props.
+
+  _NoOpenSSL is DISABLED. microscript/ILibDuktape_net.c:901 (and :2169) call SSL_get_servername and
+  TLSEXT_NAMETYPE_host_name unconditionally, not guarded by MICROSTACK_NOTLS, and MeshNoTLS drops the
+  openssl\include dir from AdditionalIncludeDirectories, so the file fails to compile. See BUILD.md.
+  This matches the Linux NOTLS=1 build, which the makefile disables for the same reason.
 -->
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup Label="Configuration">
@@ -12,7 +15,9 @@
     <MeshNoTLS Condition="$(Configuration.EndsWith('_NoOpenSSL'))">true</MeshNoTLS>
     <MeshNoTLS Condition="'$(MeshNoTLS)'==''">false</MeshNoTLS>
     <ConfigurationType>Application</ConfigurationType>
-    <PlatformToolset>v143</PlatformToolset>
+    <!-- msbuild /p:MeshToolset=v145 picks VS 2026. The VS2019 projects set v142 after this import. -->
+    <MeshToolset Condition="'$(MeshToolset)'==''">v143</MeshToolset>
+    <PlatformToolset>$(MeshToolset)</PlatformToolset>
     <CharacterSet>MultiByte</CharacterSet>
     <UseDebugLibraries>$(MeshDebug)</UseDebugLibraries>
     <WholeProgramOptimization Condition="'$(MeshDebug)'=='false'">true</WholeProgramOptimization>

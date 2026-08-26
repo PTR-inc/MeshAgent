@@ -56,7 +56,7 @@
     <Keyword>Win32Proj</Keyword>
     <ProjectName>MeshService-2022</ProjectName>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
-    <!-- Inputs for ..\MeshAgent.Common.props; everything else is shared with the other agent project. -->
+    <!-- What this project tells ..\MeshAgent.Common.props. Everything else is shared with the other agent. -->
     <MeshTargetBase>MeshService</MeshTargetBase>
     <MeshAgentIdWin32>3</MeshAgentIdWin32>
     <MeshAgentIdx64>4</MeshAgentIdx64>
@@ -78,7 +78,7 @@
       <AdditionalManifestFiles>$(ProjectDir)dpiaware.manifest %(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
   </ItemDefinitionGroup>
-  <!-- Release only: prebuild.ps1 stamps the commit date/hash into MeshService.rc's version block. -->
+  <!-- Release builds only. prebuild.ps1 writes the commit date and hash into the MeshService.rc version block. -->
   <ItemDefinitionGroup Condition="'$(MeshDebug)'=='false'">
     <PreBuildEvent>
       <Command>%(Command)

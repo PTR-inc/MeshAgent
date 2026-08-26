@@ -1,9 +1,9 @@
 name: Build system checks
 run-name: Anti-drift gate + committed archive audit
 
-# Replaces verify-openssl-libs.yml. Runs on ANY change to a build-system file,
-# not just openssl/libstatic - the old path filter listed a single workflow, so
-# edits to the other seven openssl workflows skipped the audit entirely.
+# Replaces verify-openssl-libs.yml. It runs on any build-system file change,
+# because the old path filter named a single workflow and edits to the other
+# seven openssl workflows skipped the audit entirely.
 on:
   push:
     paths:

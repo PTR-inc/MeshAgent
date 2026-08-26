@@ -1,9 +1,7 @@
 #!/bin/bash
-# Build small, streamable FreeBSD/OpenBSD sysroot archives from the full
-# upstream release tarballs, containing only what the makefile's CROSS=1 BSD
-# builds actually need (usr/include, usr/lib, and for FreeBSD also lib).
-# Output lands at the root of $BUILDROOT so it can be uploaded elsewhere and
-# fetched by fetch-toolchains.sh/env.sh in a later step. Safe to re-run.
+# Builds small FreeBSD and OpenBSD sysroot archives holding only what the makefile's
+# CROSS=1 BSD builds need: usr/include, usr/lib, and for FreeBSD also lib. Output lands
+# at the root of $BUILDROOT for upload to the mirror that fetch-toolchains.sh reads. Safe to re-run.
 #
 #   ./build-bsd-sysroot-archives.sh                  # both
 #   ./build-bsd-sysroot-archives.sh freebsd           # one only
@@ -16,11 +14,9 @@ export BUILDROOT="${BUILDROOT:-/opt/buildroot}"
 
 log() { echo "[$1] $2"; }
 
-# Packs $2 (a directory of file args, relative to $1) as .tar.xz. Measured
-# against zstd -19 on the largest archives here: zstd compressed ~25-30%
-# faster but produced files 30-90% BIGGER, and both formats decompress in
-# under 2s regardless - xz wins outright for this content, so it's the only
-# format shipped.
+# xz is the only format shipped because, measured against zstd -19 on the largest
+# archives here, zstd compressed ~25-30% faster but produced files 30-90% bigger,
+# and both decompress in under 2s.
 pack_xz() {
     local workdir="$1" out_base="$2"; shift 2
     (cd "$workdir" && tar cf - "$@" | xz -T0 -9 -c) > "$out_base.tar.xz"

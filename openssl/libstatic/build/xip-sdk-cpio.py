@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""Filter an Xcode .xip cpio stream (pbzx -n Content | this | cpio -id) down to the
-macOS SDK subtree, without breaking Apple's hard-link placeholders.
+"""Filters the cpio stream of an Xcode .xip down to the macOS SDK subtree without
+breaking Apple's hard-link placeholders. It sits between pbzx and cpio in the pipeline.
 
-Why not plain `cpio -id '<pattern>'`: Apple writes every hard-linked file (nlink>1)
-once per link at full size, but only ONE link carries the bytes - the others are a
-"NULLcanary" + NUL fill. The real copy usually sits under another platform's SDK
-(iPhoneOS, XROS...), so a pattern-restricted cpio extracts the canary and the SDK
-ends up with ~25% of its headers reading `NULLcanary`. Unrestricted extraction
-needs ~45 GB of scratch. This filter keeps the restriction and resolves the
-placeholders: wanted canary entries are held by inode, and the data-carrying link
-- wherever it appears - is re-emitted under each wanted name.
+A plain pattern-restricted cpio is not enough because Apple writes only one link of each
+hard-linked file with real bytes, and the others are a "NULLcanary" plus NUL fill. The real
+copy usually sits under another platform's SDK, so about 25% of the SDK headers would read
+`NULLcanary`, while an unrestricted extraction needs about 45 GB of scratch.
 
-odc ("070707") cpio only; that is what xip payloads use.
+Only odc ("070707") cpio is handled, because that is what xip payloads use.
 """
 import sys
 import fnmatch
@@ -23,7 +19,7 @@ WANTED = [
     "*/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/share/man/*",
 ]
 CANARY = b"NULLcanary"
-HDR = 76  # odc header length
+HDR = 76  # The odc header is always 76 bytes.
 
 inp = sys.stdin.buffer
 out = sys.stdout.buffer
@@ -40,21 +36,20 @@ def read_exact(n):
 
 
 def emit(hdr, name, data):
-    # namesize/filesize fields are rewritten for the (possibly renamed) entry.
+    # The namesize and filesize fields are rewritten because the entry may have been renamed.
     nb = name + b"\0"
     h = hdr[:59] + b"%06o" % len(nb) + b"%011o" % len(data)
     out.write(h + nb + data)
 
 
-# Hard-link groups are keyed by (dev, ino). The bytes travel with the FIRST
-# link in the stream (often another platform's SDK); every later link is a
-# canary. Data for open groups is parked on disk, not in RAM, and released once
-# all nlink members have passed.
+# Hard-link groups are keyed by device and inode. The bytes travel with the first link in
+# the stream and every later link is a canary, so the data for open groups is parked on
+# disk rather than in RAM and released once all nlink members have passed.
 import os, tempfile
 spool = tempfile.mkdtemp(prefix="xip-sdk-cpio.")
-seen = {}      # key -> links seen so far
-nlinks = {}    # key -> nlink
-pending = {}   # key -> [(hdr, name)] wanted canaries still waiting for bytes
+seen = {}      # How many links of each group have passed so far.
+nlinks = {}    # The nlink count of each group.
+pending = {}   # Wanted canary entries of each group that are still waiting for their bytes.
 kept = dropped = fixed = 0
 
 

@@ -1,34 +1,58 @@
 name: Windows Build
 
-run-name: Build Windows versions of MeshAgent
+run-name: Build Windows versions of MeshAgent (${{ inputs.configuration || 'Release' }})
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: 'MSBuild configuration'
+        type: choice
+        default: Release
+        options: [Release, Debug]
+
+env:
+  # Pushes and pull requests always build Release, so only manual runs choose.
+  CONFIGURATION: ${{ inputs.configuration || 'Release' }}
 
 jobs:
   windows-build:
-    runs-on: ${{ matrix.platform == 'ARM64' && 'windows-11-arm' || 'windows-2022' }}
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.toolset == 'v145' }}
     strategy:
       fail-fast: false
       matrix:
-        platform: [x64, x86, ARM64]
+        include:
+          - { platform: x64,   toolset: v143, runner: windows-2022 }
+          - { platform: x86,   toolset: v143, runner: windows-2022 }
+          - { platform: ARM64, toolset: v143, runner: windows-11-arm }
+          # - { platform: x64,   toolset: v145, runner: windows-2025-vs2026 }
+          # - { platform: x86,   toolset: v145, runner: windows-2025-vs2026 }
+          # - { platform: ARM64, toolset: v145, runner: windows-11-vs2026-arm }
     steps:
     - uses: actions/checkout@v7
     - name: Setup Visual Studio
       uses: microsoft/setup-msbuild@v3
-    - name: Build ${{ matrix.platform }}
-      run: msbuild MeshAgent-2022.sln /p:Configuration=Release /p:Platform=${{ matrix.platform }}
+    - name: Check OpenSSL archives against the ${{ matrix.toolset }} toolset
+      # Fails the build only for a wrong machine type, a wrong CRT or an LTCG mismatch.
+      shell: pwsh
+      run: openssl/libstatic/build/windows/toolset-check.ps1 -Platform ${{ matrix.platform }} -Toolset ${{ matrix.toolset }}
+    - name: Build ${{ matrix.platform }} ${{ env.CONFIGURATION }} (${{ matrix.toolset }})
+      run: msbuild MeshAgent-2022.sln /p:Configuration=${{ env.CONFIGURATION }} /p:Platform=${{ matrix.platform }} /p:MeshToolset=${{ matrix.toolset }}
     - name: Upload ${{ matrix.platform }} artifacts
       if: ${{ !env.ACT }}
       uses: actions/upload-artifact@v7
       with:
-        name: meshagent-windows-${{ matrix.platform }}
-        path: build/win-*/*.exe
+        name: meshagent-windows-${{ matrix.platform }}${{ env.CONFIGURATION != 'Release' && format('-{0}', env.CONFIGURATION) || '' }}${{ matrix.toolset != 'v143' && format('-{0}', matrix.toolset) || '' }}
+        # Debug builds also upload the .pdb files so crashes can be symbolised.
+        path: |
+          build/win-*/*.exe
+          ${{ startsWith(env.CONFIGURATION, 'Debug') && 'build/win-*/*.pdb' || '' }}
     - name: Upload ${{ matrix.platform }} artifacts (act)
       if: ${{ env.ACT }}
       uses: actions/upload-artifact@v3
       with:
-        name: meshagent-windows-${{ matrix.platform }}
+        name: meshagent-windows-${{ matrix.platform }}${{ env.CONFIGURATION != 'Release' && format('-{0}', env.CONFIGURATION) || '' }}${{ matrix.toolset != 'v143' && format('-{0}', matrix.toolset) || '' }}
         path: build/win-*/*.exe
-

@@ -1,19 +1,14 @@
 # Build one or more Windows OpenSSL targets and stage the archives into the repo.
-#
-#   openssl\libstatic\build\windows\build.ps1 x64
-#   openssl\libstatic\build\windows\build.ps1 all
-#   openssl\libstatic\build\windows\build.ps1 --names-json   # CI matrix source
-#
-# Mirrors build.sh's contract (version + object-count gate before staging)
-# and the CI `windows` job's recipe, so local and CI builds match.
+# Run it as build.ps1 x64, build.ps1 all, or build.ps1 --names-json to print the CI matrix.
+# The version and object-count gate before staging matches build.sh, so local and CI builds agree.
 
 param(
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$TargetNames
 )
 
-# One entry per staged target. Asm: x86/x64 only (CPUID-gated); ARM64 has no
-# asm path in OpenSSL 1.1.1's VC-WIN64-ARM config. ObjCount via `lib /list`.
+# One entry per staged target. Asm is only enabled for x86 and x64 because OpenSSL 1.1.1's
+# VC-WIN64-ARM config has no asm path. ObjCount is what lib /list reports for a good build.
 $Targets = @(
     @{ Name = 'x86';       VcVars = 'x86';       VcConf = 'VC-WIN32';     Suffix = '32';    MtTag = 'MT'; Asm = $true;  Debug = $false; ObjCount = 566 }
     @{ Name = 'x86-debug'; VcVars = 'x86';       VcConf = 'VC-WIN32';     Suffix = '32';    MtTag = 'MT'; Asm = $true;  Debug = $true;  ObjCount = 566 }
@@ -23,7 +18,7 @@ $Targets = @(
     @{ Name = 'arm64-debug'; VcVars = 'x64_arm64'; VcConf = 'VC-WIN64-ARM'; Suffix = 'ARM64'; MtTag = 'MT'; Asm = $false; Debug = $true;  ObjCount = 553 }
 )
 
-# The CI matrix is generated from $Targets above, never restated in YAML.
+# The CI matrix is generated from $Targets above so it is never restated in YAML.
 if ($TargetNames -and $TargetNames[0] -eq '--names-json') {
     Write-Output (($Targets.Name | ForEach-Object { '"' + $_ + '"' }) -join ',' | ForEach-Object { "[$_]" })
     exit 0
@@ -53,16 +48,15 @@ $perl = Get-PerlPath
 if (-not $perl) { Write-Host "MISSING: perl.exe - Configure cannot run without it"; exit 1 }
 $perlDir = Split-Path -Parent $perl
 
-# Refuse up front rather than after a Configure run: an incomplete toolset for
-# a target only shows up as a link failure deep into nmake. See
-# Get-VcToolsetVersion.
+# Refuse up front, because an incomplete toolset for a target only shows up as a
+# link failure deep into nmake. See Get-VcToolsetVersion.
 foreach ($vcArch in ($list.VcVars | Select-Object -Unique)) {
     if (-not (Get-VcToolsetVersion -Arch $vcArch)) {
         Write-Host "MISSING: no complete MSVC toolset for $vcArch - see README.md for the required VS components"
         exit 1
     }
-    # A toolset without an SDK compiles nothing: cl.exe runs, then fails on
-    # stdlib.h. Catch it here rather than 40 lines into nmake output.
+    # A toolset without a Windows SDK gives a working cl.exe that then fails on stdlib.h.
+    # Catch it here rather than 40 lines into the nmake output.
     if (-not (Get-WindowsSdkVersion -Arch $vcArch)) {
         Write-Host "MISSING: no Windows SDK for $vcArch - the VC.Tools components do not include one (Install-BuildRootWindows -VsComponents)"
         exit 1
@@ -78,8 +72,8 @@ foreach ($t in $list) {
 
     $src = Join-Path $env:BR_WORK $name
     if (Test-Path $src) {
-        # OpenSSL's makefile can leave a literal file named NUL - a reserved
-        # device name Remove-Item can't touch without the \\?\ prefix.
+        # OpenSSL's makefile can leave a literal file named NUL, a reserved device
+        # name that Remove-Item cannot touch without the \\?\ prefix.
         $nulFile = "\\?\$src\NUL"
         if (Test-Path -LiteralPath $nulFile) { Remove-Item -LiteralPath $nulFile -Force -ErrorAction SilentlyContinue }
         Remove-Item -Recurse -Force $src -ErrorAction SilentlyContinue
@@ -99,11 +93,11 @@ foreach ($t in $list) {
     $debugFlag = if ($t.Debug) { '--debug' } else { '' }
     $mdPattern = if ($t.Debug) { '/MDd\b' } else { '/MD\b' }
     $mtReplacement = if ($t.Debug) { '/MTd' } else { '/MT' }
-    # release: drop /Zi and nasm -g, which VC-common forces even in release.
+    # Release builds drop /Zi and nasm -g, which VC-common forces even in release.
     $stripDbg = if ($t.Debug) { '' } else { " -replace '/Zi /Fdossl_static\.pdb ','' -replace 'ASFLAGS=-g','ASFLAGS='" }
 
-    # One cmd.exe session per target - the vcvars script only mutates its own
-    # process. Extend PATH before calling it, so its own vswhere.exe call finds it.
+    # Each target gets its own cmd.exe session because the vcvars script only mutates its
+    # own process. PATH is extended before the call so its own vswhere.exe lookup succeeds.
     $vswhereDir = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
     $extraPath = @($nasmDir, $perlDir, $vswhereDir) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
     $cmdLines = @()

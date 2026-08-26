@@ -4,11 +4,9 @@ on:
   push:
   pull_request:
 
-# Deliberately native: macOS runners with Xcode's clang, which is what the
-# makefile picks on Darwin (osxcross is only the Linux developer-machine path -
-# its Apple-licensed SDK can't be provisioned in public CI). The two ARCHIDs
-# need different runners, so the pairing below is curated - `guard` asserts it
-# still covers exactly what the makefile calls CLASS=macos.
+# Deliberately native on macOS runners, because osxcross needs an Apple-licensed
+# SDK that public CI cannot provision. The two ARCHIDs need different runners, so
+# the pairing is curated and `guard` checks it still matches CLASS=macos.
 jobs:
   guard:
     runs-on: ubuntu-24.04

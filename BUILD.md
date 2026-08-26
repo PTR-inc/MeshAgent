@@ -1,5 +1,7 @@
 # Building MeshAgent
 
+[ISSUES.md](ISSUES.md) is the list of open issues, limitations, decisions and history for the build system.
+
 Routing table for the build system. **Where to make a change**, not how the code
 works. If you are about to write a version number, a URL, a toolchain path or a
 target list into a file, check this page first — it probably belongs somewhere
@@ -10,7 +12,7 @@ else, and `openssl/libstatic/build/consistency.sh` will fail the PR if it does.
 ```sh
 ./fetch-toolchains.sh                      # provision every fetchable toolchain into $BUILDROOT
 make list                                  # every ARCHID, its class, and whether it can build here
-make linux ARCHID=6                        # build one agent
+make ARCHID=6                              # build one agent (the ARCHID picks the OS recipe)
 openssl/libstatic/build/build.sh list      # every OpenSSL target, its libc, who links it
 openssl/libstatic/build/build.sh x86-64    # rebuild one OpenSSL archive and stage it
 openssl/libstatic/verify                   # audit every committed archive
@@ -19,6 +21,11 @@ openssl/libstatic/build/consistency.sh     # the anti-drift gate CI runs
 
 `$BUILDROOT` (default `/opt/buildroot`) holds the multi-GB toolchains, sysroots
 and downloads. Everything in the repo is small and tracked.
+
+`NOTLS=1` (TLS compiled out) is disabled on Linux (`make` errors out immediately) — pre-existing
+break: `microscript/ILibDuktape_net.c:901` references `TLSEXT_NAMETYPE_host_name` (an OpenSSL
+macro) without an `MICROSTACK_NOTLS` guard, so the file fails to compile once OpenSSL headers are
+dropped. Not yet fixed; the Windows `_NoOpenSSL` configuration is unaffected.
 
 ## Build output layout
 
@@ -53,12 +60,20 @@ thin: they name the exe base, the `MESH_AGENTID` per platform and their own file
 `MeshAgent.Configuration.props` + `MeshAgent.Common.props` from the repo root, which hold the
 shared source list, defines, libs, output layout and hardening for every configuration.
 Configuration axis: `Debug` | `Release`, optionally `_NoOpenSSL` (`MICROSTACK_NOTLS`, BCrypt
-only, no OpenSSL linked). Platform axis: `Win32` (`x86` in the solution) | `x64` | `ARM64` —
+only, no OpenSSL linked) — **currently disabled**, MSBuild errors out before compiling: same
+`microscript/ILibDuktape_net.c:901`/`:2169` unguarded `SSL_get_servername`/
+`TLSEXT_NAMETYPE_host_name` break as the Linux `NOTLS=1` build (see above), and `MeshNoTLS=true`
+also drops `openssl\include` from the include path, so it can't even find the declaration. Not
+yet fixed. Platform axis: `Win32` (`x86` in the solution) | `x64` | `ARM64` —
 picks `MESH_AGENTID`, the `libcrypto<32|64|ARM64>MT[d].lib` pair, and the exe suffix
 (`MeshService`, `MeshService64`, `MeshServiceARM64`). Output lands in
-`build\win-<x86|x64|ARM64>-<Configuration>\`. Toolset is `v143` everywhere; the linker floor is
+`build\win-<x86|x64|ARM64>-<Configuration>\`. Toolset is `v143` by default (`/p:MeshToolset=v145` selects VS 2026; the v145 CI legs are commented out in windows-build.yml, ready to re-enable); the linker floor is
 Windows 7 SP1 (`/SUBSYSTEM:CONSOLE,6.01`) on x86/x64 and the `/MT` static UCRT keeps it
 self-contained. Add `/p:EnableASAN=true` for an ASan build (phase 7 of `test\test-agent.ps1`).
+`openssl\libstatic\build\windows\toolset-check.ps1 -Platform x64 -Toolset v143` (CI runs it before
+every Windows build) parses the committed `libcrypto*`/`libssl*` archives and aborts only on a
+machine-type, CRT (`/MT` vs `/MTd`/`/MD`) or LTCG-build mismatch with the linking toolset; a
+different compiler build is only a warning.
 
 ## Dependencies
 

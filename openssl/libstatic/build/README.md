@@ -26,7 +26,7 @@ openssl/
       orphans.txt                archive dirs kept but built by nothing
       flags.txt                  shared Configure flags, single source of truth
       windows/                    native-Windows sibling (MSVC/nmake, PowerShell)
-        env.ps1, build.ps1, verify.ps1
+        env.ps1, build.ps1, verify.ps1, toolset-check.ps1
 build-env.sh                     repo root - shared env, sourced by every path-2 script + CI
 fetch-toolchains.sh              repo root - provisions $BUILDROOT (see "Provisioning" below)
 ```
@@ -71,21 +71,12 @@ Override the buildroot location if you keep it somewhere other than `/opt/buildr
 BUILDROOT=/somewhere/else . build-env.sh
 ```
 
-### Building targets concurrently
+### Build order and cores
 
-`build.sh` builds one target at a time by default (`BR_JOBS=1`). Set `BR_JOBS` to build that many
-targets at once:
-
-```sh
-BR_JOBS=4 openssl/libstatic/build/build.sh all
-```
-
-Each target's own `make -j` still wants multiple cores, so raising `BR_JOBS` splits the host's
-cores across the concurrent slots (`MAKE_JOBS = nproc / BR_JOBS`) instead of every slot
-independently claiming `make -j$(nproc)` and oversubscribing the machine `BR_JOBS`-fold. Override
-`MAKE_JOBS` directly for a different split. Per-target output and pass/fail status are buffered
-per target and replayed in the order you listed the targets, so a `BR_JOBS>1` run reads the same
-as a sequential one, just faster on a multi-core box.
+`build.sh` builds the listed targets one after another and gives each OpenSSL `make` every core
+(`MAKE_JOBS`, defaulting to `nproc`). Output streams live and is also kept per target in
+`$BR_WORK/<target>.log`, and a one-line verdict per target lands in `$BR_WORK/<target>.status`
+and in the summary printed at the end. Set `MAKE_JOBS` to use fewer cores.
 
 ## What every script does
 
@@ -442,6 +433,7 @@ Install-BuildRootWindows                       # fetches whatever that reported 
 openssl\libstatic\build\windows\build.ps1 x64
 openssl\libstatic\build\windows\build.ps1 all
 openssl\libstatic\build\windows\verify.ps1      # read-only report over whatever's already staged
+openssl\libstatic\build\windows\toolset-check.ps1 -Platform x64 -Toolset v143   # machine/CRT/LTCG vs the linking toolset; exit 1 only on a fatal mismatch
 ```
 
 ### Prerequisites

@@ -1,27 +1,17 @@
 #!/bin/bash
-#
-# Read-only audit of every committed OpenSSL static archive: version, object
-# count, architecture, and the symbol gates that matter for the target's libc.
-#
-# Every "which targets are musl/uClibc" decision comes from targets.sh's T_LIBC
-# - there is no second list here. Exits non-zero only on a symbol-gate failure
-# (an unambiguous bug regardless of OpenSSL version); version and object count
-# are reported, not gated, since archives are legitimately rebuilt piecemeal.
-#
-# Usage: [SFX=-<suffix>] openssl/libstatic/verify [dir ...]
-#   With no args, checks every libcrypto*.a under linux/, macos/, bsd/ - that
-#   includes suffixed archives (libcrypto-3.0.16.a). SFX narrows it to one
-#   suffix; SFX= (empty) to the unsuffixed archives only.
+# Read-only audit of every committed OpenSSL static archive. Every libc decision comes from
+# targets.sh's T_LIBC, so there is no second list here. Usage is [SFX=-<suffix>] verify [dir ...],
+# where SFX narrows the run to one archive suffix and an empty SFX means the unsuffixed archives only.
 
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 . "$HERE/../../build-env.sh" >/dev/null || exit 1
 . "$BR_SCRIPTS/targets.sh" || exit 1
 cd "$HERE" || exit 1
 
-# Dirs deliberately kept but built by nothing - see build/orphans.txt.
+# Directories deliberately kept but built by nothing are listed in build/orphans.txt.
 ORPHANS=$(sed 's/#.*//' "$BR_SCRIPTS/orphans.txt" 2>/dev/null | tr -s '[:space:]' ' ')
 
-# dir-under-libstatic -> "T_LIBC T_OBJS", built from targets.sh's own T_DEST.
+# Looks up a directory's T_LIBC and T_OBJS from targets.sh's own T_DEST, so nothing is restated here.
 libc_for_dir() {
 	local t d
 	for t in $BR_ALL_TARGETS; do
@@ -45,8 +35,8 @@ for f in $files; do
 	[ -f "$f" ] || { echo "  MISSING: $f" >&2; rc=1; continue; }
 	d=$(dirname "$f")
 	set -- $(libc_for_dir "$d"); libc=$1; want=${2:-}
-	# Label suffixed archives (libcrypto-3.0.16.a) so rows for the same target
-	# dir stay distinguishable; $d stays bare for the libc lookup above.
+	# Suffixed archives such as libcrypto-3.0.16.a get their own label so rows for the same
+	# directory stay distinguishable. $d stays bare because the libc lookup needs the plain directory.
 	t=$d; b=$(basename "$f" .a)
 	[ "$b" = libcrypto ] || t="$d ${b#libcrypto}"
 	v=$(strings "$f" | grep -oE 'OpenSSL [0-9]+\.[0-9]+\.[0-9]+[a-z-]*' | sort -u | head -1)
@@ -59,22 +49,22 @@ for f in $files; do
 	rm -rf "$tmp"
 	printf '%-32s %-7s %-9s %-5s %-6s %-9s %s\n' "$t" "$libc" "${v#OpenSSL }" "$n" "$g" "$u" "$a"
 
-	# Object count is the recipe's fingerprint: a miss means the archive was
-	# built with different Configure options than targets.sh says (asm, nistp...).
+	# The object count is the recipe's fingerprint. A mismatch means the archive was built
+	# with different Configure options than targets.sh says.
 	[ -n "$want" ] && [ "$n" != "$want" ] && \
 		{ echo "  REJECT: $d has $n objects, targets.sh expects $want - rebuilt with a different recipe" >&2; rc=1; }
 	case "$libc" in
 	musl|uclibc)
-		# glibc-only symbols: the agent links but won't start on the device.
+		# A glibc-only symbol means the agent links but will not start on the device.
 		[ "$g" -gt 0 ] && { echo "  REJECT: $d references $g glibc-only symbol(s) but its agent is $libc" >&2; rc=1; } ;;
 	unknown)
 		case " $ORPHANS " in
-			*" $d "*) ;;   # known, documented in build/orphans.txt
+			*" $d "*) ;;   # A known orphan, documented in build/orphans.txt.
 			*) echo "  REJECT: $d is the T_DEST of no target in targets.sh - add the target, or list the dir in build/orphans.txt" >&2; rc=1 ;;
 		esac ;;
 	esac
-	# ucontext: musl implements it on no architecture, so the agent link fails
-	# outright. uClibc's libc.so does implement it - not a gate there.
+	# ucontext is gated only for musl, which implements it on no architecture, so the agent
+	# link would fail outright. uClibc's libc.so does implement it.
 	[ "$libc" = musl ] && [ "$u" -gt 0 ] && \
 		{ echo "  REJECT: $d references $u ucontext symbol(s); musl implements none - agent link will fail" >&2; rc=1; }
 done

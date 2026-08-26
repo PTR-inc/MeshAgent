@@ -1,14 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  Shared by meshconsole\MeshConsole-2022.vcxproj and meshservice\MeshService-2022.vcxproj,
-  imported after Microsoft.Cpp.props. Relative paths here resolve against the importing
-  project's directory (MSBuild rule), so both projects must sit one level below the repo root.
-
-  A project supplies: MeshTargetBase (exe base name), MeshAgentIdWin32/x64/ARM64, and
-  optionally MeshProjectDefines / MeshProjectLibs. Everything else derives from
-  $(Configuration) (Debug|Release[_NoOpenSSL]) and $(Platform) (Win32|x64|ARM64).
--->
+<!-- Shared by all agent projects, imported after Microsoft.Cpp.props. Relative paths resolve
+     from the importing project, so every project must sit one directory below the repo root.
+     A project only sets MeshTargetBase, MeshAgentId*, MeshProjectDefines and MeshProjectLibs. -->
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Target Name="MeshNoTLSDisabledCheck" BeforeTargets="ClCompile">
+    <Error Condition="'$(MeshNoTLS)'=='true'"
+           Text="_NoOpenSSL configurations are disabled: microscript/ILibDuktape_net.c:901/:2169 call SSL_get_servername/TLSEXT_NAMETYPE_host_name unconditionally (not guarded by MICROSTACK_NOTLS), and this configuration drops the openssl\include dir, so the file fails to compile. See BUILD.md." />
+  </Target>
   <PropertyGroup>
     <MeshTargetSuffix Condition="'$(Platform)'=='x64'">64</MeshTargetSuffix>
     <MeshTargetSuffix Condition="'$(Platform)'=='ARM64'">ARM64</MeshTargetSuffix>
@@ -21,7 +19,7 @@
     <MeshAgentId Condition="'$(Platform)'=='ARM64'">$(MeshAgentIdARM64)</MeshAgentId>
     <MeshOpenSSLLibDir>..\openssl\libstatic\windows\</MeshOpenSSLLibDir>
 
-    <!-- Same layout as the makefile's build/<arch>/: build\win-<x86|x64|ARM64>-<Configuration>\ -->
+    <!-- Mirrors the makefile's build/<arch>/ output directory. -->
     <OutDir>$(SolutionDir)build\win-$(PlatformTarget)-$(Configuration)\</OutDir>
     <IntDir>$(OutDir)obj\$(MeshTargetBase)$(MeshTargetSuffix)\</IntDir>
     <TargetName>$(MeshTargetBase)$(MeshTargetSuffix)</TargetName>
@@ -49,7 +47,7 @@
       <AdditionalDependencies>SetupAPI.lib;Crypt32.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;ws2_32.lib;$(MeshProjectLibs);%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalDependencies Condition="'$(MeshNoTLS)'=='false'">Ncrypt.lib;$(MeshOpenSSLLibDir)libcrypto$(MeshOpenSSLSuffix)MT$(MeshCrtSuffix).lib;$(MeshOpenSSLLibDir)libssl$(MeshOpenSSLSuffix)MT$(MeshCrtSuffix).lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalDependencies Condition="'$(MeshNoTLS)'=='true'">Bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <!-- Supported floor: Windows 7 SP1 (x86/x64). ARM64 Windows starts at 10, the linker rejects 6.01 there. -->
+      <!-- Oldest supported Windows is 7 SP1. ARM64 Windows starts at 10, so the linker refuses 6.01 there. -->
       <MinimumRequiredVersion Condition="'$(Platform)'!='ARM64'">6.01</MinimumRequiredVersion>
       <CETCompat Condition="'$(Platform)'=='x64'">true</CETCompat>
     </Link>
@@ -88,7 +86,7 @@
     </Link>
   </ItemDefinitionGroup>
 
-  <!-- The agent proper - identical for both executables. main.c / ServiceMain.c stay in the project. -->
+  <!-- The agent itself, the same for both executables. main.c and ServiceMain.c stay in the projects. -->
   <ItemGroup>
     <ClCompile Include="..\meshcore\agentcore.c" />
     <ClCompile Include="..\meshcore\KVM\Windows\input.c" />
