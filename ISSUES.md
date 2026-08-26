@@ -8,11 +8,6 @@ Several entries name a document under `~/.claude/docs/` (for example `meshagent-
 
 ## Open issues
 
-### NOTLS=1 and the Windows `_NoOpenSSL` configurations are disabled
-- Where: `makefile:87`, `MeshAgent.Configuration.props:6`, `MeshAgent.Common.props:8`
-- What: `microscript/ILibDuktape_net.c:901` and `:2169` call `SSL_get_servername` and reference `TLSEXT_NAMETYPE_host_name` without a `MICROSTACK_NOTLS` guard, so the file fails to compile once OpenSSL headers are dropped. On Linux the makefile errors out immediately for `NOTLS=1`. On Windows `MeshNoTLS=true` also removes `openssl\include` from `AdditionalIncludeDirectories`, so the declaration cannot even be found, and `MeshAgent.Common.props` raises an MSBuild error before compiling. Full description in [BUILD.md](BUILD.md#quick-start) and the Windows section of the same page.
-- Status: disabled
-
 ### Wrong crypto results from the `linux-armv4` archives (armhf, armhf2, linux-armada370-hf)
 - Where: `openssl/libstatic/build/targets.sh:48`, `openssl/libstatic/build/targets.sh:94`
 - What: with asm enabled, the `linux-armv4` build produced wrong crypto results under qemu-arm (non-deterministic SHA-384/512 hashes, and `RSA.verify()` rejecting its own fresh signature). asm is therefore disabled for these targets. Reverting to `-no-asm` did not fix it, so the bug is unrelated to asm itself and remains unresolved. Do not re-enable asm without root-causing first, and do not trust any RSA or SHA-384/512 operation on these three targets. The per-target table in [openssl/libstatic/build/README.md](openssl/libstatic/build/README.md#per-target-status) carries the same warning.

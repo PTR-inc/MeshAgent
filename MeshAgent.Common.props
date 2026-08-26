@@ -3,10 +3,6 @@
      from the importing project, so every project must sit one directory below the repo root.
      A project only sets MeshTargetBase, MeshAgentId*, MeshProjectDefines and MeshProjectLibs. -->
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Target Name="MeshNoTLSDisabledCheck" BeforeTargets="ClCompile">
-    <Error Condition="'$(MeshNoTLS)'=='true'"
-           Text="_NoOpenSSL configurations are disabled: microscript/ILibDuktape_net.c:901/:2169 call SSL_get_servername/TLSEXT_NAMETYPE_host_name unconditionally (not guarded by MICROSTACK_NOTLS), and this configuration drops the openssl\include dir, so the file fails to compile. See BUILD.md." />
-  </Target>
   <PropertyGroup>
     <MeshTargetSuffix Condition="'$(Platform)'=='x64'">64</MeshTargetSuffix>
     <MeshTargetSuffix Condition="'$(Platform)'=='ARM64'">ARM64</MeshTargetSuffix>

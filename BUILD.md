@@ -22,11 +22,6 @@ openssl/libstatic/build/consistency.sh     # the anti-drift gate CI runs
 `$BUILDROOT` (default `/opt/buildroot`) holds the multi-GB toolchains, sysroots
 and downloads. Everything in the repo is small and tracked.
 
-`NOTLS=1` (TLS compiled out) is disabled on Linux (`make` errors out immediately) — pre-existing
-break: `microscript/ILibDuktape_net.c:901` references `TLSEXT_NAMETYPE_host_name` (an OpenSSL
-macro) without an `MICROSTACK_NOTLS` guard, so the file fails to compile once OpenSSL headers are
-dropped. Not yet fixed; the Windows `_NoOpenSSL` configuration is unaffected.
-
 ## Build output layout
 
 Everything a build produces lands under `build/` (gitignored), one directory per target and
@@ -60,11 +55,7 @@ thin: they name the exe base, the `MESH_AGENTID` per platform and their own file
 `MeshAgent.Configuration.props` + `MeshAgent.Common.props` from the repo root, which hold the
 shared source list, defines, libs, output layout and hardening for every configuration.
 Configuration axis: `Debug` | `Release`, optionally `_NoOpenSSL` (`MICROSTACK_NOTLS`, BCrypt
-only, no OpenSSL linked) — **currently disabled**, MSBuild errors out before compiling: same
-`microscript/ILibDuktape_net.c:901`/`:2169` unguarded `SSL_get_servername`/
-`TLSEXT_NAMETYPE_host_name` break as the Linux `NOTLS=1` build (see above), and `MeshNoTLS=true`
-also drops `openssl\include` from the include path, so it can't even find the declaration. Not
-yet fixed. Platform axis: `Win32` (`x86` in the solution) | `x64` | `ARM64` —
+only, no OpenSSL linked). Platform axis: `Win32` (`x86` in the solution) | `x64` | `ARM64` —
 picks `MESH_AGENTID`, the `libcrypto<32|64|ARM64>MT[d].lib` pair, and the exe suffix
 (`MeshService`, `MeshService64`, `MeshServiceARM64`). Output lands in
 `build\win-<x86|x64|ARM64>-<Configuration>\`. Toolset is `v143` by default (`/p:MeshToolset=v145` selects VS 2026; the v145 CI legs are commented out in windows-build.yml, ready to re-enable); the linker floor is

@@ -2,11 +2,6 @@
 <!--
   Shared by all agent projects. Imported before Microsoft.Cpp.props because the toolset reads
   these while loading. The rest of the shared settings are in MeshAgent.Common.props.
-
-  _NoOpenSSL is DISABLED. microscript/ILibDuktape_net.c:901 (and :2169) call SSL_get_servername and
-  TLSEXT_NAMETYPE_host_name unconditionally, not guarded by MICROSTACK_NOTLS, and MeshNoTLS drops the
-  openssl\include dir from AdditionalIncludeDirectories, so the file fails to compile. See BUILD.md.
-  This matches the Linux NOTLS=1 build, which the makefile disables for the same reason.
 -->
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup Label="Configuration">

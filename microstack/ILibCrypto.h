@@ -75,6 +75,7 @@ typedef struct BCRYPT_CTX
 #define SHA256_CTX BCRYPT_CTX
 #define SHA_CTX BCRYPT_CTX
 #define MD5_CTX BCRYPT_CTX
+#define MD5_DIGEST_LENGTH UTIL_MD5_HASHSIZE
 
 void BCRYPT_INIT(BCRYPT_CTX* ctx, void* alg);
 void BCRYPT_UPDATE(BCRYPT_CTX* ctx, void* data, size_t dataLen);
@@ -102,6 +103,7 @@ void BCRYPT_FINAL(char *h, BCRYPT_CTX* ctx);
 
 #define SHA256_CTX SHA256Context
 #define SHA512_CTX SHA512Context
+#define MD5_DIGEST_LENGTH UTIL_MD5_HASHSIZE
 
 #define SHA256_Init(ctx) SHA256Reset (ctx)
 #define SHA256_Update(ctx, data, len) SHA256Input(ctx, (uint8_t*)data, len)

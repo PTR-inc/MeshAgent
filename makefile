@@ -83,9 +83,6 @@
 #	MEMTRACK                 1 = Enable memory tracking                     : Default is disabled
 #	NET_SEND_FORCE_FRAGMENT  1 = net.send() fragments sends                 : Default is normal send operation
 #	NOTLS                    1 = TLS Support Compiled Out                   : Default is TLS Support Compiled In
-#	                           Disabled for Linux (make linux) because microscript/ILibDuktape_net.c:901 references
-#	                           TLSEXT_NAMETYPE_host_name without a MICROSTACK_NOTLS guard, so the build fails
-#	                           without OpenSSL headers. See BUILD.md.
 #	NOTURBOJPEG              1 = Don't use Turbo JPEG                       : Default is USE TurboJPEG
 #	NOWEBRTC                 1 = WebRTC Compiled Out                        : Default is WebRTC Compiled In
 #	SSL_EXPORTABLE_KEYS      1 = Export SSL Keys for debugging              : Default is DO NOT export SSL keys
@@ -735,9 +732,6 @@ CWATCHDOG := -DILibChain_WATCHDOG_TIMEOUT=$(WatchDog)
 endif
 
 ifeq ($(NOTLS),1)
-$(error NOTLS=1 is disabled for Linux builds: microscript/ILibDuktape_net.c:901 uses \
-  TLSEXT_NAMETYPE_host_name unguarded by MICROSTACK_NOTLS and fails to compile without OpenSSL \
-  headers. See ISSUES.md.)
 SOURCES += microstack/nossl/sha384-512.c microstack/nossl/sha224-256.c microstack/nossl/md5.c microstack/nossl/sha1.c
 CFLAGS += -DMICROSTACK_NOTLS
 LINUXSSL =
