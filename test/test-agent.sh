@@ -456,7 +456,7 @@ fi
 # teardown, and the net.c:938 use-after-free). They run in phase 3, apart
 # from the core, so one crash cannot take every other check down with it.
 KNOWN_EXCL="06-"
-CORE_EXCL="$(ls test/testmodules | grep -v '^06-' | sed 's/\.js$//' | paste -sd,)"
+CORE_EXCL="$(ls test/testmodules | grep -v '^06-' | sed 's/\.js$//' | tr '\n' ',' | sed 's/,$//')"
 head2 "[2/7] stress test - every testmodule except the known-crash 06-* sections"
 OUT="$TMPDIR_RUN/stress-core.log"
 run_cmd $((120*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" test/stress-test.js \
@@ -495,7 +495,10 @@ run_cmd $((90*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" -b64exec "$B64";
 emit "$OUT" 30
 B64_TOTAL="$(grep -o 'TOTAL: .*' "$OUT" | tail -1)"
 B64_FAILED="$(printf '%s' "$B64_TOTAL" | sed -n 's/.*passed, \([0-9]*\) failed.*/\1/p')"
-if [ $RC -eq 0 ] && [ "${B64_FAILED:-1}" = "0" ] && [ "$B64_TOTAL" = "$TOTAL_LINE" ]; then record "stress (-b64exec)" PASS "$B64_TOTAL"
+# Only the check count "(of N)" must match phase 2. The KNOWN split varies between runs.
+B64_OF="$(printf '%s' "$B64_TOTAL" | sed -n 's/.*(of \([0-9]*\)).*/\1/p')"
+CORE_OF="$(printf '%s' "$TOTAL_LINE" | sed -n 's/.*(of \([0-9]*\)).*/\1/p')"
+if [ $RC -eq 0 ] && [ "${B64_FAILED:-1}" = "0" ] && [ -n "$B64_OF" ] && [ "$B64_OF" = "$CORE_OF" ]; then record "stress (-b64exec)" PASS "$B64_TOTAL"
 elif [ $RC -eq 0 ] && [ "${B64_FAILED:-1}" = "0" ]; then record "stress (-b64exec)" FAIL "passed, but ran a different check count than phase 2: '$B64_TOTAL' vs '$TOTAL_LINE'"
 elif [ -z "$B64_TOTAL" ]; then record "stress (-b64exec)" FAIL "$(rcdesc $RC) - no TOTAL line, the run did not finish"
 else record "stress (-b64exec)" FAIL "$(rcdesc $RC) $B64_TOTAL"; fi
