@@ -2,9 +2,23 @@ name: Windows Build
 
 run-name: Build Windows versions of MeshAgent (${{ inputs.configuration || 'Release' }})
 
+# A build workflow only runs when something it builds from changed, so a documentation or
+# workflow-only push does not rebuild every platform. Its own file counts, the other workflows do not.
 on:
   push:
+    paths:
+      - '**'
+      - '!**/*.md'
+      - '!docs/**'
+      - '!.github/**'
+      - '.github/workflows/windows-build.yml'
   pull_request:
+    paths:
+      - '**'
+      - '!**/*.md'
+      - '!docs/**'
+      - '!.github/**'
+      - '.github/workflows/windows-build.yml'
   workflow_dispatch:
     inputs:
       configuration:
