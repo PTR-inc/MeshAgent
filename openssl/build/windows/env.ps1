@@ -27,8 +27,10 @@ $script:OpenSslUrl = "https://github.com/openssl/openssl/releases/download/$($sc
 # sidecar for every release. It is looked up at download time exactly as build-env.sh does.
 function Get-OpenSslSha256 {
     param([string]$Version = $script:OpenSslVersion)
-    $body = (Invoke-WebRequest -UseBasicParsing -Uri "https://www.openssl.org/source/openssl-$Version.tar.gz.sha256").Content
-    # The sidecar has been seen with a leading space, which -split turns into an empty first field.
+    $resp = Invoke-WebRequest -UseBasicParsing -Uri "https://www.openssl.org/source/openssl-$Version.tar.gz.sha256"
+    # The sidecar redirects to a GitHub release asset served as octet-stream, which pwsh 7 hands
+    # back as bytes, and its text starts with a space that -split would turn into an empty field.
+    $body = if ($resp.Content -is [byte[]]) { [System.Text.Encoding]::ASCII.GetString($resp.Content) } else { [string]$resp.Content }
     $sha = ($body.Trim() -split '\s+')[0]
     if ($sha -notmatch '^[0-9a-f]{64}$') { throw "openssl-$Version.tar.gz.sha256 did not parse to a sha256" }
     return $sha
