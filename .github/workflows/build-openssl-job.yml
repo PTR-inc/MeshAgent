@@ -27,6 +27,11 @@ on:
         required: true
         default: false
         type: boolean
+      commit:
+        description: "Commit the rebuilt archives straight to the branch this run was started from (no other workflow is triggered by that push)"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -182,6 +187,29 @@ jobs:
             fail=1
           done
           exit $fail
+      # A push made with GITHUB_TOKEN never starts another workflow, so the platform builds do
+      # not run on the new archives until the next ordinary push. A pull request avoids that.
+      - name: Commit the rebuilt archives to ${{ github.ref_name }}
+        if: inputs.commit
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          JOBNAME: ${{ inputs.jobname }}
+          FORCE: ${{ inputs.force }}
+          REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -- "openssl/$VERSION"
+          if git diff --cached --quiet; then
+            echo "the rebuilt prefixes are byte-identical to what is committed, nothing to push"
+            exit 0
+          fi
+          git commit -q -m "openssl: install prefixes for $VERSION ($JOBNAME)" \
+            -m "Automated rebuild via $GITHUB_WORKFLOW run $GITHUB_RUN_ID (jobname=$JOBNAME, force=$FORCE), audited by openssl/build/verify." \
+            -m "Switching the agent to these prefixes is a separate edit of openssl/VERSION."
+          git push origin "HEAD:$REF"
+          git log -1 --stat | head -40
       - name: Open a pull request with the rebuilt archives
         if: inputs.create_pr
         uses: peter-evans/create-pull-request@v7
