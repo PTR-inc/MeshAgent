@@ -2,8 +2,8 @@ name: Windows Builder
 
 run-name: Build Windows versions of MeshAgent (${{ inputs.configuration || 'Release' }})
 
-# Started by build.yml when a push to a mainline branch touches one of this platform's inputs, which are
-# listed in .github/build-inputs.txt. Run it alone from the Actions tab with workflow_dispatch.
+# Called by build.yml (manual, one platform or all) or run alone from the Actions tab with
+# workflow_dispatch. What this platform is built from is listed in .github/build-inputs.txt.
 on:
   workflow_call:
     inputs:

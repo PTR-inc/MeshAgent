@@ -1,9 +1,9 @@
 # What each platform's agent binaries are built from, the OS they target rather than the CI
-# runner. build.yml's `changes` job runs .github/scripts/build-changes.sh over the files a push
-# or pull request touched and starts only the platforms that match. One "platform: glob" per
-# line. `*` does not cross a `/`, `**` does, `**/` also matches no directory. "all" is every
-# platform. consistency.sh check 8 asserts the makefile's source trees and every OpenSSL target
-# are listed here.
+# runner. build.yml is run by hand and takes its platform list from here (build-changes.sh
+# --list); `git diff --name-only | build-changes.sh` tells which platforms a change touches.
+# One "platform: glob" per line. `*` does not cross a `/`, `**` does, `**/` also matches no
+# directory. "all" is every platform. consistency.sh check 8 asserts the makefile's source
+# trees and every OpenSSL target are listed here.
 
 # Shared by every agent binary
 all: makefile

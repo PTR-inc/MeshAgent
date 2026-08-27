@@ -106,7 +106,7 @@ for d in openssl/$OPENSSL_VERSION/*/; do
 done
 [ $rc -eq 0 ] && ok "every prefix carries its generated opensslconf.h"
 
-echo "== 8. build.yml is the only push trigger and build-inputs.txt covers every input ="
+echo "== 8. build.yml offers every platform and build-inputs.txt covers every input ====="
 SEL=.github/scripts/build-changes.sh
 if [ -x "$SEL" ]; then
     bad=0
@@ -126,7 +126,7 @@ if [ -x "$SEL" ]; then
         esac
         case " $platforms" in *" $want "*) ;; *) fail "openssl/<version>/$t/ does not start the $want platform (got '${platforms:-nothing}')"; bad=1 ;; esac
     done
-    # Only build.yml may react to a push or pull request, and it must call every platform.
+    # No platform workflow may react to a push on its own, and build.yml must call every platform.
     for w in .github/workflows/*.yml; do
         # Not platforms: the anti-drift gate lists its own inputs, code scanning runs on every master push.
         case "$w" in .github/workflows/build.yml|.github/workflows/build-system-checks.yml|.github/workflows/codeql-analysis.yml) continue ;; esac
@@ -135,10 +135,12 @@ if [ -x "$SEL" ]; then
     for f in $("$SEL" --list); do
         grep -qE "^  $f:" .github/workflows/build.yml || { fail "platform $f is in build-inputs.txt but build.yml has no job for it"; bad=1; }
     done
+    DDP=$(sed -n '/^      platforms:/,/^      [a-z_]*:$/p' .github/workflows/build.yml | sed -n 's/^          - //p')
+    [ "$(echo "$DDP" | sort)" = "$( (echo all; "$SEL" --list) | sort)" ] || { fail "build.yml's platforms options ($(echo $DDP)) differ from 'all' + build-changes.sh --list"; bad=1; }
     for u in $(grep -oE 'uses: \./\.github/workflows/[^ ]+' .github/workflows/build.yml | sed 's/uses: \.\///'); do
         [ -f "$u" ] || { fail "build.yml calls $u, which does not exist"; bad=1; }
     done
-    [ $bad -eq 0 ] && ok "$(echo $trees | wc -w) source trees and $(echo $BR_ALL_TARGETS | wc -w) targets map to a platform, build.yml is the only push trigger"
+    [ $bad -eq 0 ] && ok "$(echo $trees | wc -w) source trees and $(echo $BR_ALL_TARGETS | wc -w) targets map to a platform, build.yml offers each and nothing else pushes"
 else
     fail "$SEL is missing or not executable"
 fi

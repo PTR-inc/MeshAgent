@@ -1,30 +1,32 @@
 name: Build Meshagent
-# The platforms a push selects are only known once the `changes` job has run, after this name is
-# fixed, so a push run is named by its commit and only a manual run can name its platforms.
-run-name: "Build MeshAgent ${{ github.event_name == 'workflow_dispatch' && (inputs.platforms || 'all platforms') || format('- {0}', github.event.head_commit.message || github.event.pull_request.title) }}"
+run-name: "Build MeshAgent (${{ inputs.platforms }})"
 
-# The one entry point for CI on the mainline branches. The `changes` job maps the files a push or pull request
-# touched to platforms through .github/build-inputs.txt, and only those platforms run. The
-# platform workflows below have no push trigger of their own, so nothing bypasses this gate.
-# A manual run, or a push whose parent is unknown, runs every platform.
+# Manual only, like build-openssl-job.yml: a push starts nothing, so a run is a decision, not a
+# side effect. The platforms input picks one platform or all of them; the list of what each
+# platform is built from stays in .github/build-inputs.txt for consistency.sh check 8.
 on:
-  push:
-    branches: [overmakefile, master]
-  pull_request:
-    branches: [overmakefile, master]
   workflow_dispatch:
     inputs:
       platforms:
-        description: "Space-separated platforms to run (empty: all). See .github/build-inputs.txt"
-        required: false
-        default: ""
+        # consistency.sh check 8 fails if this list and build-changes.sh --list drift apart.
+        description: "Platform to build, or all"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - freebsd
+          - linux
+          - macos
+          - openbsd
+          - windows
 
 permissions:
   contents: read
 
 jobs:
   changes:
-    name: Which platforms did this change touch
+    name: Which platforms to build
     runs-on: ubuntu-24.04
     outputs:
       platforms: ${{ steps.sel.outputs.platforms }}
@@ -37,26 +39,12 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - id: sel
         env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           WANT: ${{ inputs.platforms }}
         run: |
           set -euo pipefail
-          sel=.github/scripts/build-changes.sh
-          if [ "$EVENT" = workflow_dispatch ]; then
-            platforms=${WANT:-$($sel --list | tr '\n' ' ')}
-          elif [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
-            echo "no parent commit to compare against, running everything"
-            platforms=$($sel --list | tr '\n' ' ')
-          else
-            # The compare API needs no history in the checkout, which is 400 MB of archives.
-            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$BASE...$HEAD" --jq '.files[].filename')
-            printf '%s\n' "$files" | sed 's/^/  changed: /'
-            platforms=$(printf '%s\n' "$files" | $sel | tr '\n' ' ')
-          fi
-          echo "platforms: ${platforms:-(none)}"
+          if [ "$WANT" = all ]; then platforms=$(.github/scripts/build-changes.sh --list | tr '\n' ' ')
+          else platforms=$WANT; fi
+          echo "platforms: $platforms"
           echo "platforms= $platforms " >> "$GITHUB_OUTPUT"
 
 
