@@ -303,8 +303,9 @@ p_rcodesign() {
     local sha; sha=$(curl -sSL --fail "$(rcodesign_url "$asset.sha256")" | awk '{print $1}')
     echo "$sha" | grep -qE '^[0-9a-f]{64}$' || { log_status rcodesign "FAILED (couldn't fetch $asset.sha256)"; return 1; }
     fetch "$(rcodesign_url "$asset")" "$sha" "$BR_DOWNLOADS/$asset" || { log_status rcodesign "FAILED (download)"; return 1; }
+    # The member is named explicitly because macOS bsdtar has no --wildcards.
     mkdir -p "$BUILDROOT/bin" \
-        && tar xzf "$BR_DOWNLOADS/$asset" -C "$BUILDROOT/bin" --strip-components=1 --wildcards '*/rcodesign' \
+        && tar xzf "$BR_DOWNLOADS/$asset" -C "$BUILDROOT/bin" --strip-components=1 "${asset%.tar.gz}/rcodesign" \
         && chmod +x "$RCODESIGN" \
         && "$RCODESIGN" --version >/dev/null 2>&1 \
         && log_status rcodesign "OK ($APPLE_CODESIGN_VER -> $RCODESIGN)" \
