@@ -143,6 +143,23 @@ else
     fail "$SEL is missing or not executable"
 fi
 
+echo "== 9. the dispatch dropdown offers exactly the targets targets.sh knows ===="
+# build-openssl-job.yml's jobname is a choice input, so its options are written out by hand.
+# The four group values are the ones its resolve step's case statement handles.
+WF=.github/workflows/build-openssl-job.yml
+DD=$(sed -n '/^      jobname:/,/^      [a-z_]*:$/p' "$WF" | sed -n 's/^          - //p')
+if [ -z "$DD" ]; then
+    fail "could not parse any option from $WF's jobname input"
+else
+    want=$(printf 'all\nlinux\nmacos\nwindows\n'; print_target_names)
+    if [ "$(echo "$DD" | sort)" = "$(echo "$want" | sort)" ]; then
+        ok "$(echo "$DD" | wc -w) dropdown options, jobname and targets.sh agree"
+    else
+        fail "$WF's jobname options differ from 'all linux macos windows' + targets.sh --names:"
+        diff <(echo "$want" | sort) <(echo "$DD" | sort) | sed 's/^/          /' >&2
+    fi
+fi
+
 echo
 [ $rc -eq 0 ] && echo "CONSISTENT" || echo "DRIFT DETECTED - see the FAIL lines above" >&2
 exit $rc

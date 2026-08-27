@@ -14,9 +14,43 @@ on:
         required: false
         default: ""
       jobname:
-        description: "Target to build: 'all', a family, or a single targets.sh target name"
+        # The options are the four group values plus every targets.sh target, in its order.
+        # consistency.sh check 9 fails if this list and targets.sh --names drift apart.
+        description: "Target to build: a group, or a single target"
         required: true
         default: "all"
+        type: choice
+        options:
+          - all
+          - linux
+          - macos
+          - windows
+          - linux-x86_64-glibc
+          - linux-i686-glibc
+          - linux-x86_64-musl
+          - linux-aarch64-glibc
+          - linux-aarch64-musl
+          - linux-armv6hf-glibc
+          - linux-armv7hf-glibc
+          - linux-armv7hf-musl
+          - linux-armv5-glibc
+          - linux-mipsel-uclibc
+          - linux-mipsel-musl
+          - linux-mips-musl
+          - linux-riscv64-musl
+          - linux-riscv32-musl
+          - linux-sparc64-glibc
+          - linux-ppc64le-glibc
+          - freebsd-x86_64
+          - openbsd-x86_64
+          - macos-arm64
+          - macos-x86_64
+          - windows-x86
+          - windows-x86-debug
+          - windows-x64
+          - windows-x64-debug
+          - windows-arm64
+          - windows-arm64-debug
       force:
         description: "Rebuild and overwrite even if the installed prefix already matches this version"
         required: true
