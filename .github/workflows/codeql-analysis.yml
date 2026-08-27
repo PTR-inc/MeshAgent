@@ -1,12 +1,12 @@
 name: "Code scanning - action"
 
-# Kept outside build.yml's platform selection on purpose: code scanning runs on every push to
-# master and weekly, whatever the push touched.
+# Kept outside build.yml's platform selection on purpose: code scanning runs on every push to a
+# mainline branch and weekly, whatever the push touched.
 on:
   push:
-    branches: [master]
+    branches: [overmakefile, master]
   pull_request:
-    branches: [master]
+    branches: [overmakefile, master]
   schedule:
     - cron: '0 1 * * 1'
 

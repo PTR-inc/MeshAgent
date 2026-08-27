@@ -1,6 +1,6 @@
 name: OpenBSD Builder
 run-name: Build OpenBSD versions of MeshAgent
-# Started by build.yml when a push to master touches one of this platform's inputs, which are
+# Started by build.yml when a push to a mainline branch touches one of this platform's inputs, which are
 # listed in .github/build-inputs.txt. Run it alone from the Actions tab with workflow_dispatch.
 on:
   workflow_call:

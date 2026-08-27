@@ -2,11 +2,11 @@ name: Build system checks
 run-name: Anti-drift gate + committed archive audit
 
 # The anti-drift gate (openssl/build/consistency.sh) and the audit of every committed OpenSSL
-# prefix (openssl/build/verify). Runs on any build-system file change pushed to master. It is
+# prefix (openssl/build/verify). Runs on any build-system file change pushed to a mainline branch. It is
 # not a platform, so it stays outside build.yml's selection and lists its inputs here.
 on:
   push:
-    branches: [master]
+    branches: [overmakefile, master]
     paths:
       - 'openssl/**'
       - 'build-env.sh'
@@ -22,7 +22,7 @@ on:
       - 'check-vsprojects.sh'
       - '.github/**'
   pull_request:
-    branches: [master]
+    branches: [overmakefile, master]
     paths:
       - 'openssl/**'
       - 'build-env.sh'

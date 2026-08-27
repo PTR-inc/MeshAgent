@@ -1,5 +1,5 @@
 name: Build OpenSSL static libs
-run-name: Build ${{ inputs.jobname }}${{ inputs.version != '' && format(' (OpenSSL {0})', inputs.version) || '' }}${{ inputs.force == true && ' (force)' || '' }}
+run-name: Build OpenSSL for ${{ inputs.jobname }}${{ inputs.version != '' && format(' (OpenSSL {0})', inputs.version) || '' }}${{ inputs.force == true && ' (force)' || '' }}
 
 # This file only decides which targets to dispatch and on which runner. Every
 # per-target recipe lives in openssl/build/targets.sh (on Windows, the MSVC details

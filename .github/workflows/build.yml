@@ -1,16 +1,17 @@
 name: Build Meshagent
-run-name: Build MeshAgent (${{ github.event_name }})
+# The platforms a push selects are only known once the `changes` job has run, after this name is
+# fixed, so a push run is named by its commit and only a manual run can name its platforms.
+run-name: "Build MeshAgent ${{ github.event_name == 'workflow_dispatch' && (inputs.platforms || 'all platforms') || format('- {0}', github.event.head_commit.message || github.event.pull_request.title) }}"
 
-# The one entry point for CI on master. The `changes` job maps the files a push or pull request
+# The one entry point for CI on the mainline branches. The `changes` job maps the files a push or pull request
 # touched to platforms through .github/build-inputs.txt, and only those platforms run. The
 # platform workflows below have no push trigger of their own, so nothing bypasses this gate.
 # A manual run, or a push whose parent is unknown, runs every platform.
 on:
   push:
-    # TEMPORARY: overmakefile is listed only to prove the selection before merging. Remove it.
-    branches: [master, overmakefile]
+    branches: [overmakefile, master]
   pull_request:
-    branches: [master]
+    branches: [overmakefile, master]
   workflow_dispatch:
     inputs:
       platforms:
