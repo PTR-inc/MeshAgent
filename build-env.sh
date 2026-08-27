@@ -195,6 +195,7 @@ export TC_AARCH64_A53_MUSL="$BR_TOOLCHAINS/aarch64-linux-musl-cross"
 export TC_ARMV7_MUSL_HF="$BR_TOOLCHAINS/arm-linux-musleabihf-cross"
 export TC_X86_64_MUSL="$BR_TOOLCHAINS/x86_64-linux-musl-cross"
 export TC_RISCV64_MUSL="$BR_TOOLCHAINS/riscv64-linux-musl-cross"
+export TC_RISCV32_MUSL="$BR_TOOLCHAINS/riscv32-linux-musl-cross"
 # The T-Head Xuantie C906 vendor toolchain has no public upstream URL, so it is
 # mirrored. See p_riscv64_xthead in fetch-toolchains.sh and ARCH_45 in the makefile.
 export TC_RISCV64_XTHEAD="$BR_TOOLCHAINS/riscv64-linux-musl-xthead"
@@ -279,7 +280,7 @@ br_check() {
     for p in "$OPENSSL_TARBALL" "$SYSROOT_FREEBSD" "$SYSROOT_OPENBSD" \
              "$TC_OWRT_MIPS24KC" "$TC_OWRT_MIPSEL24KC" "$TC_OWRT_X86_64" \
              "$TC_OWRT_AARCH64_A53" "$TC_OWRT_ARMVIRT32" \
-             "$TC_AARCH64_A53_MUSL" "$TC_ARMV7_MUSL_HF" "$TC_X86_64_MUSL" "$TC_RISCV64_MUSL" \
+             "$TC_AARCH64_A53_MUSL" "$TC_ARMV7_MUSL_HF" "$TC_X86_64_MUSL" "$TC_RISCV64_MUSL" "$TC_RISCV32_MUSL" \
              "$TC_ARMV5_BOOTLIN" "$TC_ARMV7HF_BOOTLIN" "$TC_AARCH64_BOOTLIN" "$TC_MIPSEL_UCLIBC_BOOTLIN" \
              "$TC_X86_BOOTLIN" "$TC_X86_64_BOOTLIN" "$TC_RISCV64_XTHEAD"; do
         [ -e "$p" ] || { echo "  MISSING: $p"; missing=1; }

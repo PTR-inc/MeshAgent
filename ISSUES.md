@@ -6,9 +6,35 @@ Companion documents: [BUILD.md](BUILD.md) (the routing table, the four sources o
 
 ## Open issues
 
-### Wrong crypto results from the `linux-armv4` archives (armhf, armhf2, linux-armada370-hf)
-- Where: `openssl/libstatic/build/targets.sh:48`, `openssl/libstatic/build/targets.sh:94`
+### `check-vsprojects.sh` is tracked without the executable bit, breaking its CI job on real GitHub Actions (found and fixed in the working tree 2026-08-27)
+- Where: `check-vsprojects.sh`, `.github/workflows/build-system-checks.yml:55`
+- What: `git ls-files --stage check-vsprojects.sh` showed mode `100644` (no executable bit), while every other script a workflow invokes directly (`openssl/libstatic/verify`, `openssl/libstatic/build/consistency.sh`, `fetch-toolchains.sh`, `build-env.sh`, `openssl/libstatic/build/build.sh`, `build-toolchain-archives.sh`, `build-bsd-sysroot-archives.sh`) is `100755`. `build-system-checks.yml`'s `vsprojects` job runs it as `./check-vsprojects.sh` (not `bash check-vsprojects.sh`), so `actions/checkout` restores the tracked non-executable mode and the job fails with `Permission denied` - confirmed both locally (`act push -W .github/workflows/build-system-checks.yml`) and by direct reasoning: this is a real git-tracked file mode, so it fails identically on a real `ubuntu-24.04` GitHub Actions runner, not just under act. The "Build scripts parse" job in the same workflow does not catch this because it runs every script through `bash -n "$f"`, which does not require the executable bit. `chmod +x check-vsprojects.sh` was applied in the working tree and the script then runs clean (all 5 of its own checks pass) - the mode change is unstaged, per this session's instruction not to commit/stage automatically; it needs to be committed (`git add --chmod=+x check-vsprojects.sh` or an equivalent commit that records the mode bit) for the CI job to actually pick it up.
+- Status: fixed in working tree, needs a commit
+
+### `openssl/libstatic/verify` misreads Mach-O archives with the host's GNU `ar`/`nm`, false-REJECTing valid macOS archives (found 2026-08-27)
+- Where: `openssl/libstatic/verify:44`, `openssl/libstatic/verify:46`
+- What: `openssl/libstatic/build/build.sh`'s `build_one` correctly uses each target's own `${T_AR:-ar}`/`${T_NM:-nm}` (the osxcross-prefixed Mach-O-aware tools for `osx-arm-64`/`osx-x86-64`) when it counts objects at build/stage time, but `openssl/libstatic/verify` always calls the bare host `ar`/`nm`, with no per-target override. GNU `ar t` silently omits a Mach-O archive's `__.SYMDEF SORTED` symbol-table pseudo-member from its listing (confirmed by diffing `ar t` against the real `aarch64-apple-darwin25.5-ar t` on the same archive: the osxcross tool lists 565 members, host `ar` lists 564, and the only difference is that one line). Since `verify`'s object-count gate compares against `targets.sh`'s `T_OBJS` (565 for osx-arm-64, 577 for osx-x86-64, both counted the Mach-O-aware way), it always undercounts by exactly 1 and REJECTs every valid, freshly-built macOS archive: `REJECT: macos/osx-arm-64 has 564 objects, targets.sh expects 565`. This is not a rebuild defect - a from-scratch `openssl/libstatic/build/build.sh all` rebuild on 2026-08-27 staged both macOS archives cleanly (`build.sh`'s own gate passed, objs=565/577 as expected), and only the separate `verify` script (also run by `.github/workflows/build-system-checks.yml`'s `verify-archives` job and `build-openssl-job.yml`'s `verify-summary` step) misreports them. Any real CI run that touches the committed macOS archives currently fails this audit for a false reason. Fix direction: `verify` should resolve `T_AR`/`T_NM` per archive the same way `build.sh` does (source `targets.sh`, call `br_target` for the owning target, use its `T_AR`/`T_NM` if set) instead of the bare `ar`/`nm`.
+- Status: open
+
+### `test/test-agent.sh`'s "newest wins" qemu sysroot heuristic picks the wrong uClibc generation for ARCHID 7, causing a silent SIGSEGV instead of a test result (found 2026-08-27)
+- Where: `test/test-agent.sh:234`, `test/test-agent.sh:241`
+- What: ARCHID 7 (mips, vendor uClibc) is built and linked against the toolchain the makefile's `../ToolChains/mips32el-uclibc` symlink resolves to, which on this host is `/opt/buildroot/toolchains/mips32el--uclibc--stable-2020.08-1`. A second, newer uClibc toolchain generation also exists on this host, `mips32el--uclibc--stable-2025.08-1` (fetched separately, see [[meshagent-crosscompile-buildroot]]). `test-agent.sh`'s qemu-sysroot auto-detection (documented under "qemu-user sysroot search for cross-built test binaries" below) picks the newest matching sysroot by `sort -V`, which selects the 2025.08-1 tree and hands the binary a `ld-uClibc.so.0` loader and libc from five years after the one it was actually linked against. uClibc's dynamic linker does not fail this cleanly: instead of an "Error relocating" message (musl's behavior in the analogous OpenWrt-SDK case this heuristic was originally built for), it segfaults before the agent prints anything, so `-info`, the stress run and the connection test all report a bare `qemu: uncaught target signal 11` with no diagnostic. Confirmed by re-running the identical binary with `--qemu "qemu-mipsel -L .../mips32el--uclibc--stable-2020.08-1/mipsel-buildroot-linux-uclibc/sysroot"` (the build-time toolchain's own sysroot): `-info` then prints its banner and exits 0. The "newest wins" rule is correct when only one toolchain generation is actually present for a given libc/arch pair, which is the common case, but breaks silently the moment a second, newer one is fetched for unrelated reasons (as happened here). Not yet fixed, since a general fix (matching the sysroot to the toolchain that actually produced the binary, which `test-agent.sh` has no direct record of) needs more care than a one-line change; the current workaround is passing `--qemu` explicitly for ARCHID 7 until then.
+- Status: open
+
+### `test/test-agent.sh`'s "native" run path does not set `LD_LIBRARY_PATH` for a musl binary whose own toolchain ships a private `libgcc_s.so.1` (found 2026-08-27, ARCHID 36)
+- Where: `test/test-agent.sh` (native-execution branch, no qemu wrapper)
+- What: ARCHID 36 (`openwrt_x86_64`) is x86-64, so `test-agent.sh` runs it natively with no qemu and no sysroot setup - correct in principle, since the host is x86-64 too. But it is built with the OpenWrt 24.10.8 SDK's own bundled `x86_64_gcc-13.3.0_musl` toolchain, which links it against that toolchain's own `libgcc_s.so.1` rather than the system one, and that `.so` lives only under `$BUILDROOT/toolchains/openwrt-sdk-.../staging_dir/toolchain-x86_64_gcc-13.3.0_musl/lib/`, never on the host's default library search path. Every phase failed with `Error loading shared library libgcc_s.so.1: No such file or directory` (exit 127). Confirmed as exactly this and nothing else: running the identical binary with `LD_LIBRARY_PATH` pointed at that one directory works (`-info` prints its banner cleanly). ARCHID 33 (`alpine-x86-64`), the other native-x86-64 musl target, does not hit this because it is built with Debian's own `musl-tools` package, whose `libgcc_s.so.1` is already on the system path. This is purely an artifact of running the bare binary directly on this host with no sysroot: a real OpenWrt device ships its own `libgcc_s.so.1` as part of the same SDK-built image, so this is not a defect an OpenWrt user would ever see, only a gap in how the qemu-only sysroot logic in `test-agent.sh` doesn't get applied to a same-arch "native" run. Fix direction: extend the same toolchain-lookup logic `qemu_sysroot_for` already has to the native-run path, setting `LD_LIBRARY_PATH` whenever the binary's toolchain is known to carry a private runtime.
+- Status: open
+
+### The previously-committed `linux/mipsel` OpenSSL archive did not link against any current mipsel-uclibc toolchain (fixed by the 2026-08-27 rebuild)
+- Where: `openssl/libstatic/linux/mipsel/libcrypto.a`
+- What: before the 2026-08-27 from-scratch `openssl/libstatic/build/build.sh all` rebuild, the committed `linux/mipsel` archive failed to link against the pinned `mips32el-uclibc` toolchain with `undefined reference to '__ctype_b'` (confirmed by reverting to the exact previously-committed archive bytes via `git show HEAD:...` and relinking ARCHID 7 against it). This matches the pre-existing, already-noted problem with the sibling big-endian `linux/mips` archive (see the per-checkout MIPS cross-compile notes). The rebuilt archive links cleanly; see the sysroot-mismatch entry above for the separate issue this then exposed at runtime.
+- Status: fixed (2026-08-27 rebuild)
+
+### Wrong crypto results from the `linux-armv4` archives (armhf, armhf2, linux-armada370-hf) (last checked 2026-08-26)
+- Where: `openssl/libstatic/build/targets.sh:50`, `openssl/libstatic/build/targets.sh:94`
 - What: with asm enabled, the `linux-armv4` build produced wrong crypto results under qemu-arm (non-deterministic SHA-384/512 hashes, and `RSA.verify()` rejecting its own fresh signature). asm is therefore disabled for these targets. Reverting to `-no-asm` did not fix it, so the bug is unrelated to asm itself and remains unresolved. Do not re-enable asm without root-causing first, and do not trust any RSA or SHA-384/512 operation on these three targets. The per-target table in [openssl/libstatic/build/README.md](openssl/libstatic/build/README.md#per-target-status) carries the same warning.
+- Reproduced 2026-08-26 against the currently committed (`-no-asm`) `linux/armhf` archive: a real ARCHID=25 agent build run under qemu-arm via `test/test-agent.sh` failed 22-31 of 411 checks in `test/testmodules/04-openssl.js` (varies run to run, consistent with "non-deterministic"), including the exact `RSA.verify() rejected a signature it just produced` and repeated `SHA384Stream`/`SHA512Stream was not deterministic across two identical hashes`. So the bug is confirmed live today, not stale. A raw single-threaded C harness (`SHA384()`/`RSA_sign()`/`RSA_verify()` directly against both the committed archive and a from-source asm-enabled rebuild, 2000 hash + 50 RSA iterations each, 5 runs under qemu-arm) came back completely clean both times — the bug does **not** reproduce through bare libcrypto calls in isolation, only through the agent's actual duktape crypto bindings (`SHA384Stream`/`RSA` JS modules over `ILibCrypto.c`) exercised by the real runtime. That narrows where to look next: the defect is more likely in the agent's own crypto wrapper/call pattern (duktape heap interaction, buffer reuse, threading) than in OpenSSL's C implementation itself.
 - Status: open
 
 ### The 06-* test sections are run in their own phase
@@ -22,14 +48,9 @@ Companion documents: [BUILD.md](BUILD.md) (the routing table, the four sources o
 - Status: open
 
 ### ARCHID 16 (macOS x86-64) and `___isPlatformVersionAtLeast`
-- Where: `makefile:262`
+- Where: `makefile:259`
 - What: the macOS blocks set a 10.15 deployment floor so clang can resolve `mac_kvm.c`'s `@available` check statically. osxcross ships no compiler-rt for the runtime form (`___isPlatformVersionAtLeast`), and Xcode 15+ cannot target below 10.13 anyway. ARCHID 16 previously failed to link on that missing symbol while ARCHID 29 built clean.
 - Status: worked around
-
-### `verify` documentation disagrees on whether version and object count are gated
-- Where: `openssl/libstatic/verify:52`, `openssl/libstatic/verify:66`
-- What: the original header of `openssl/libstatic/verify` said it exits non-zero only on a symbol-gate failure, and that version and object count are reported, not gated, because archives are legitimately rebuilt piecemeal. [BUILD.md](BUILD.md#anti-drift-gate) and the README state that the object count must equal the target's `T_OBJS` and is gated. The two descriptions have not been reconciled.
-- Status: open
 
 ### ARCHID 44 (ARMVIRT32) has no OpenSSL archive
 - Where: `makefile:481`, `makefile:484`
@@ -44,11 +65,6 @@ Companion documents: [BUILD.md](BUILD.md) (the routing table, the four sources o
 ### `linux/poky` and `linux/poky64` are unbuilt
 - Where: `openssl/libstatic/build/targets.sh:105`, `openssl/libstatic/build/targets.sh:108`, `openssl/libstatic/build/build.sh:29`
 - What: `poky` is disabled because the Intel Galileo (Quark X1000) has been EOL since 2016 and no current SDK targets it. `poky64` is linked by no ARCHID and is kept for continuity only. The real Yocto 1.6.1 `x86_64-poky-linux` SDK the old `openssl-poky64` script used (`/opt/poky/1.6.1/...`) is defunct, with no public URL, 2014-era and not reproducible on any machine today, so `poky64` stands in with the host's native glibc (`linux-generic64`, no cross toolchain, empty `T_CC`) and is tracked in `targets.sh` so CI builds it through the same path as everything else instead of it being silently absent from the canonical list. The committed archives are still at 1.1.1i, see the "Not built" table in the [README](openssl/libstatic/build/README.md#not-built).
-- Status: open
-
-### `riscv64-generic` is consumed by no ARCHID
-- Where: `openssl/libstatic/build/targets.sh:68`
-- What: glibc rv64gc built with apt's `riscv64-linux-gnu-gcc`, a genuinely separate target from `riscv64`. It was ad-hoc built previously and is now tracked in `targets.sh` so a rebuild is reproducible through the normal path, but no makefile ARCHID currently links it.
 - Status: open
 
 ## Known limitations and workarounds
@@ -389,6 +405,29 @@ Companion documents: [BUILD.md](BUILD.md) (the routing table, the four sources o
 - Where: `openssl/libstatic/verify:11`, `openssl/libstatic/build/build.sh:99`
 - What: there used to be two auditors, `openssl/libstatic/verify` and a `build/verify.sh`, each with its own copy of the "which targets are musl" list, and the lists disagreed (both `build/verify.sh` and `build.sh` omitted `riscv64`, which is exactly how the glibc-built archive got past the gate). Both now derive the list from `targets.sh`'s `T_LIBC`, and `build/verify.sh` is deleted. Details in the [README](openssl/libstatic/build/README.md#what-every-script-does).
 - Status: done
+
+### `verify`'s object-count gate now matches its own documentation
+- Where: `openssl/libstatic/verify:52`, `openssl/libstatic/verify:66`
+- What: `verify` used to say in its own header that it exits non-zero only on a symbol-gate
+  failure, while [BUILD.md](BUILD.md#anti-drift-gate) and the README stated that a mismatched
+  object count is gated too. That is no longer true: `verify:54-55` now sets `rc=1` on an object
+  count mismatch (`"REJECT: $d has $n objects, targets.sh expects $want"`), matching the other
+  docs. No code change was needed to close this, just confirming which behaviour was current.
+- Status: fixed
+
+### `riscv64-generic` wired to ARCHID 46, `riscv32-generic` added as ARCHID 47
+- Where: `makefile` (`ARCH_46`, `ARCH_47`), `openssl/libstatic/build/targets.sh:65-68`, `build-env.sh` (`TC_RISCV32_MUSL`), `fetch-toolchains.sh` (`muslcc-riscv32`)
+- What: `riscv64-generic` was tracked in `targets.sh` since 2026-08-24 but consumed by no ARCHID and never actually built in this checkout (re-confirmed 2026-08-26, see the now-removed open entry this replaces). Fixed 2026-08-26: switched from an apt-glibc-dynamic recipe to musl-static (same reasoning as ARCH_35/145 - real hardware has no musl loader of its own) so `riscv64-generic`'s recipe now matches `riscv64`'s exactly, wired as its own `ARCH_46` (dynamic-linking concerns aside, `MESH_AGENTID=46`, independent of the `145` alias), and OpenSSL-side confirmed to build clean (553 objects, glibc=0, ucontext=0). Verified: `make ARCHID=46` links and, under `qemu-riscv64` against a real `/opt/test.msh`, completes a full connect → authenticate → idle-ping cycle before an expected server-side disconnect, no crash.
+- Also added `riscv32-generic` (`ARCH_47`) the same way, 32-bit: OpenSSL 1.1.1 has no riscv32 Configure target at all, so it Configures as `linux-generic32` like `arm`/`arm-linaro`/`pogo` (no asm). New `muslcc-riscv32` fetch entry (musl.cc `riscv32-linux-musl-cross`) mirrors the existing riscv64 one. Verified: OpenSSL archive builds clean (553 objects, `linux-generic32`/musl), agent builds and runs `-info` clean under `qemu-riscv32`.
+- By explicit instruction, `ARCH_47` reports `SERVER_ARCHID=45` to the server (a new per-block override capability added to the `SERVER_ARCHID` line, `?=` instead of `:=`) - the same identity `ARCH_145` uses, but via a direct override rather than the mechanical ARCHID-100 rule (which would need ARCHID=145, already taken). **Flagged before implementing and confirmed by the user regardless**: 45 is a 64-bit T-Head vendor board and this is a genuinely different 32-bit, non-vendor architecture, so a server that branches update binaries by ARCHID would hand this device a 64-bit build. Not yet observed as a real failure - noted here in case it surfaces as one.
+- Status: done
+- Since: 2026-08-26
+
+### Fixed: a no-op rebuild no longer strips `DEBUG_<binary>`'s symbols
+- Where: `makefile` (`STRIP_AND_SYMBOLCP`, `SNAP_OUTBIN_MTIME`, `PREMTIME`, `DEBUGBIN`; the `linux:`/`macos:`/`freebsd:`/`openbsd:` recipes)
+- What: found and fixed the same day (2026-08-27). `linux:` and the other OS recipes are ordinary targets with no file of that name, so `make ARCHID=N` always re-ran their recipe in full, even when the inner `$(MAKE) EXENAME=...` sub-invocation found nothing to relink (`make[2]: Nothing to be done for 'all'`). On that no-op path `$(OUTBIN)` was still the *already-stripped* binary from the previous build, but the old `$(SYMBOLCP)`/`$(STRIP)` pair unconditionally copied it over `DEBUG_<binary>` and re-stripped it — so a second `make ARCHID=N` in a row silently clobbered `DEBUG_<binary>` with a stripped copy, destroying the symbols valgrind/gdb depend on. Comparing `$(OUTBIN)` against `DEBUGBIN`'s own mtime does not work as the fix, because `strip` re-touches `$(OUTBIN)` right after the `cp`, so it is always newer than `DEBUGBIN` even after one single, correct build. The real fix: `SNAP_OUTBIN_MTIME` snapshots `$(OUTBIN)`'s mtime onto a `.premtime` stamp file (via `touch -r`) *before* the inner `$(MAKE)` call, and the new `STRIP_AND_SYMBOLCP` only copies+strips when `$(OUTBIN)` comes out newer than that snapshot (`find -newer`) or `DEBUGBIN` doesn't exist yet — i.e. only when a real link happened this invocation. `touch -r`/`find -newer` (not GNU `stat -c`) because this recipe also runs natively on macOS/FreeBSD/OpenBSD, whose BSD `stat` has an incompatible format string. Verified on ARCHID 47 (riscv32-generic): fresh build gets a real unstripped `DEBUG_`, two consecutive no-op rebuilds both correctly print "unchanged - keeping existing ... symbols" and leave it alone, and a genuine relink (after `touch`ing a source file) still refreshes it correctly.
+- Status: done
+- Since: 2026-08-27
 
 ### state.txt ledgers folded into the README
 - Where: `openssl/libstatic/build/README.md`

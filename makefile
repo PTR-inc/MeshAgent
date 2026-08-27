@@ -45,6 +45,9 @@
 #
 #   make ARCHID=45          # Linux RISC-V 64 bit, T-Head Xuantie C906 vendor musl toolchain, dynamic
 #   make ARCHID=145         # Linux RISC-V 64 bit, generic rv64gc, musl, static. Reports itself as 45
+#   make ARCHID=46          # Linux RISC-V 64 bit, generic rv64gc, musl, static (own ARCHID, not the 45 alias)
+#   make ARCHID=47          # Linux RISC-V 32 bit, generic rv32gc, musl, static. Reports itself as 45 to the
+#                            # server (see ARCH_47's comment) - done on purpose, not by the usual rule
 #
 # An ARCHID of 100 or more is the updated build of ARCHID minus 100. It reports the classic
 # id to the server (MESH_AGENTID = ARCHID-100) because the server only knows the classic numbers.
@@ -175,6 +178,7 @@ PATH_RPI = ../ToolChains/arm-rpi-4.9.3-linux-gnueabihf/
 # ./fetch-toolchains.sh riscv64-xthead downloads. See ARCH_45 below.
 PATH_RISCV64 = ../ToolChains/riscv64-linux-musl-x86_64/
 PATH_RISCV64_MUSL = ../ToolChains/riscv64-linux-musl-cross/
+PATH_RISCV32_MUSL = ../ToolChains/riscv32-linux-musl-cross/
 
 # ----------------------------------------------------------------------------
 # Target table, one block per ARCHID, sorted. ARCHNAME is the only required field.
@@ -531,11 +535,52 @@ define ARCH_145
   FETCH    = muslcc-riscv64
 endef
 
+# Generic RISC-V64 (rv64gc, no vendor extensions), musl, static - same reason as ARCH_35/145: real
+# hardware has no musl loader built in. This gets its own ARCHID, unlike ARCH_145, which reuses an
+# older device's identity for compatibility. See ISSUES.md.
+define ARCH_46
+  ARCHNAME = riscv64-generic
+  CLASS    = generic
+  XDIR     = $(PATH_RISCV64_MUSL)
+  XPREFIX  = riscv64-linux-musl-
+  XTRIPLE  = riscv64-linux-musl
+  TUNE     = -march=rv64gc -mabi=lp64d
+  HARDEN   = basic
+  KVM      = 0
+  LMS      = 0
+  LDINT    = -static
+  FETCH    = muslcc-riscv64
+endef
+
+# Generic RISC-V32 (rv32gc), musl, static - same reasoning as ARCH_46, 32-bit instead of 64.
+# OpenSSL 1.1.1 has no riscv32 Configure target at all (only linux64-riscv64/BSD-riscv64 exist),
+# so this Configures as linux-generic32 like arm/arm-linaro/pogo - no asm regardless of flags.
+#
+# On direct request this reports SERVER_ARCHID=45 (ARCH_145's identity) instead of the usual
+# automatic ARCHID-100 rule, even though 45 is really a 64-bit board and this one is 32-bit. This
+# was pointed out and approved before it was built. See ISSUES.md.
+define ARCH_47
+  ARCHNAME = riscv32-generic
+  CLASS    = generic
+  XDIR     = $(PATH_RISCV32_MUSL)
+  XPREFIX  = riscv32-linux-musl-
+  XTRIPLE  = riscv32-linux-musl
+  TUNE     = -march=rv32gc -mabi=ilp32d
+  HARDEN   = basic
+  KVM      = 0
+  LMS      = 0
+  LDINT    = -static
+  FETCH    = muslcc-riscv32
+  SERVER_ARCHID = 45
+endef
+
 $(eval $(ARCH_$(ARCHID)))
 
 # An ARCHID of 100 or more is the updated build of ARCHID minus 100 (145 is today's 45). It
 # identifies itself to the server with the classic id, because MeshCentral only knows those.
-SERVER_ARCHID := $(shell [ "$(ARCHID)" -ge 100 ] 2>/dev/null && echo $$(( $(ARCHID) - 100 )) || echo "$(ARCHID)")
+# An ARCH_ block below 100 can still override this by setting SERVER_ARCHID directly (see
+# ARCH_47) - ?= leaves that in place instead of computing the default.
+SERVER_ARCHID ?= $(shell [ "$(ARCHID)" -ge 100 ] 2>/dev/null && echo $$(( $(ARCHID) - 100 )) || echo "$(ARCHID)")
 # These goals do not need a target selected.
 ifeq ($(filter $(MAKECMDGOALS),list list-archs print-archids clean cleanbin),)
 $(if $(ARCHNAME),,$(error unknown or missing ARCHID '$(ARCHID)' - run 'make list'))
@@ -755,15 +800,20 @@ BSDSSL =
 INCDIRS = -I. -I/usr/include/openssl -Imicrostack -Imicroscript -Imeshcore -Imeshconsole
 endif
 
+DEBUGBIN = $(dir $(OUTBIN))DEBUG_$(notdir $(OUTBIN))
+PREMTIME = $(OUTBIN).premtime
 ifeq ($(DEBUG),1)
 # Debug build, so keep the symbols.
-CFLAGS += -g -D_DEBUG 
-STRIP = $(NOECHO) $(NOOP)
-SYMBOLCP = $(NOECHO) $(NOOP)
+CFLAGS += -g -D_DEBUG
+SNAP_OUTBIN_MTIME = $(NOECHO) $(NOOP)
+STRIP_AND_SYMBOLCP = $(NOECHO) $(NOOP)
 else
 CFLAGS += -O2
-STRIP += $(OUTBIN)
-SYMBOLCP = cp $(OUTBIN) $(dir $(OUTBIN))DEBUG_$(notdir $(OUTBIN))
+# linux:/macos:/etc. always re-run, so a simple copy+strip step would overwrite DEBUGBIN's real
+# symbols with an already-stripped OUTBIN even when nothing changed. Comparing file times does not
+# work directly, since strip changes OUTBIN's time too - so that time is saved first. See ISSUES.md.
+SNAP_OUTBIN_MTIME = if [ -e "$(OUTBIN)" ]; then touch -r "$(OUTBIN)" "$(PREMTIME)"; else rm -f "$(PREMTIME)"; fi
+STRIP_AND_SYMBOLCP = if [ ! -e "$(PREMTIME)" ] || [ -n "$$(find "$(OUTBIN)" -newer "$(PREMTIME)" 2>/dev/null)" ] || [ ! -e "$(DEBUGBIN)" ]; then cp "$(OUTBIN)" "$(DEBUGBIN)" && $(STRIP) "$(OUTBIN)"; else echo "  $(OUTBIN) unchanged - keeping existing $(DEBUGBIN) symbols"; fi; rm -f "$(PREMTIME)"
 endif
 
 ifeq ($(ASAN),1)
@@ -775,8 +825,8 @@ CC = gcc
 export PATH := $(HOSTPATH)
 CFLAGS += -fsanitize=address -fsanitize-recover=address -fno-omit-frame-pointer
 LDFLAGS += -fsanitize=address
-STRIP = $(NOECHO) $(NOOP)
-SYMBOLCP = $(NOECHO) $(NOOP)
+SNAP_OUTBIN_MTIME = $(NOECHO) $(NOOP)
+STRIP_AND_SYMBOLCP = $(NOECHO) $(NOOP)
 endif
 
 ifeq ($(SSL_TRACE),1)
@@ -953,9 +1003,9 @@ KVMINC = $(if $(filter 1,$(KVM)), -idirafter /usr/include)
 
 linux:
 	$(ensure_toolchain)
+	$(SNAP_OUTBIN_MTIME)
 	$(MAKE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)" ADDITIONALFLAGS="-lrt -z noexecstack -z relro -z now" CFLAGS="-DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) $(CFLAGS) $(CHARDEN) $(CEXTRA) $(KVMINC)" LDFLAGS="$(LINUXSSL) $(LINUXFLAGS) $(LDFLAGS) $(LDINT) $(LDEXTRA) -ldl"
-	$(SYMBOLCP)
-	$(STRIP)
+	$(STRIP_AND_SYMBOLCP)
 
 # MACOSOPT trails $(CFLAGS), which ends in -O2, so -O3 wins. It is repeated on the link line
 # because LTO does its codegen there, and -dead_strip drops the unreferenced objects the static
@@ -967,20 +1017,20 @@ MACOSOPT = -O3 -flto
 MACOS_SIGN = $(if $(filter 0,$(SIGN)),@echo "  not signed (SIGN=0)",@bash -c '. ./build-env.sh >/dev/null && macos_sign "$$1"' _ "$(OUTBIN)")
 macos:
 	$(ensure_toolchain)
+	$(SNAP_OUTBIN_MTIME)
 	$(MAKE) $(MAKEFILE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(MACOSKVMSOURCES)" CFLAGS="$(MACOSARCH) -std=gnu99 -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) -D_POSIX -D_NOILIBSTACKDEBUG -D_NOHECI -DMICROSTACK_PROXY -D__APPLE__ $(CWEBLOG) -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CHARDEN) -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -fstack-protector-strong $(MACOSOPT) $(CEXTRA)" LDFLAGS="$(MACOSARCH) $(MACSSL) $(MACOSFLAGS) -L. -lpthread -lz -framework IOKit -framework ApplicationServices -framework SystemConfiguration -framework CoreServices -framework CoreGraphics -framework CoreFoundation -Wl,-dead_strip $(MACOSOPT) $(LDFLAGS) $(LDINT) $(LDEXTRA)"
-	$(SYMBOLCP)
-	$(STRIP)
+	$(STRIP_AND_SYMBOLCP)
 	$(MACOS_SIGN)
 
 freebsd:
 	$(ensure_toolchain)
+	$(SNAP_OUTBIN_MTIME)
 	$(MAKE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)"  CFLAGS="-std=gnu99 -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) -D_POSIX -D_FREEBSD -D_NOHECI -D_NOILIBSTACKDEBUG -DMICROSTACK_PROXY -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CHARDEN) $(CEXTRA)" LDFLAGS="$(BSDSSL) $(BSDFLAGS) -L. -lpthread -ldl -lz -lutil $(LDFLAGS) $(LDINT) $(LDEXTRA)"
-	$(SYMBOLCP)
-	$(STRIP)
+	$(STRIP_AND_SYMBOLCP)
 
 openbsd:
 	$(ensure_toolchain)
+	$(SNAP_OUTBIN_MTIME)
 	$(MAKE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)"  CFLAGS="-std=gnu99 -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) -D_POSIX -D_FREEBSD -D_OPENBSD -D_NOHECI -D_NOILIBSTACKDEBUG -DMICROSTACK_PROXY -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CHARDEN) $(CEXTRA)" LDFLAGS="$(BSDSSL) $(BSDFLAGS) -L. -lpthread -lz -lutil $(LDFLAGS) $(LDINT) $(LDEXTRA)"
-	$(SYMBOLCP)
-	$(STRIP)
+	$(STRIP_AND_SYMBOLCP)
 

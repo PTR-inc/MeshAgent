@@ -469,6 +469,7 @@ wire_makefile_toolchains() {
                 "aarch64-linux-musl-cross:$TC_AARCH64_A53_MUSL" \
                 "x86_64-linux-musl-cross:$TC_X86_64_MUSL" \
                 "riscv64-linux-musl-cross:$TC_RISCV64_MUSL" \
+                "riscv32-linux-musl-cross:$TC_RISCV32_MUSL" \
                 "riscv64-linux-musl-x86_64:$TC_RISCV64_XTHEAD"; do
         name="${pair%%:*}"; src="${pair#*:}"
         if [ -d "$src" ]; then
@@ -479,7 +480,7 @@ wire_makefile_toolchains() {
 }
 
 # --------------------------------------------------------------------- main --
-ALL="openssl openwrt-mips24kc openwrt-mipsel24kc openwrt-openwrt_x86_64 openwrt-aarch64-cortex-a53 openwrt-armvirt32 muslcc-aarch64 muslcc-armhf muslcc-x86_64 muslcc-riscv64 riscv64-xthead \
+ALL="openssl openwrt-mips24kc openwrt-mipsel24kc openwrt-openwrt_x86_64 openwrt-aarch64-cortex-a53 openwrt-armvirt32 muslcc-aarch64 muslcc-armhf muslcc-x86_64 muslcc-riscv64 muslcc-riscv32 riscv64-xthead \
 bootlin-armv5 bootlin-armv7hf bootlin-aarch64 bootlin-mipsel-uclibc bootlin-x86 bootlin-x86-64 freebsd openbsd rcodesign osxcross"
 
 usage() {
@@ -563,6 +564,7 @@ run_one() {
         muslcc-armhf)           p_muslcc muslcc-armhf   TC_ARMV7_MUSL_HF ;;
         muslcc-x86_64)          p_muslcc muslcc-x86_64  TC_X86_64_MUSL ;;
         muslcc-riscv64)         p_muslcc muslcc-riscv64 TC_RISCV64_MUSL ;;
+        muslcc-riscv32)         p_muslcc muslcc-riscv32 TC_RISCV32_MUSL ;;
         riscv64-xthead)         p_riscv64_xthead ;;
         bootlin-armv5)          bootlin_dispatch bootlin-armv5  armv5-eabi    TC_ARMV5_BOOTLIN     arm-linux-gcc     armv5-eabi-glibc ;;
         bootlin-armv7hf)        bootlin_dispatch bootlin-armv7hf armv7-eabihf TC_ARMV7HF_BOOTLIN   arm-linux-gcc     armv7-eabihf-glibc ;;

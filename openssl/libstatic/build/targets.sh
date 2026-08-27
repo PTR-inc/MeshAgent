@@ -63,9 +63,10 @@ br_target() {
     # A glibc build here once left ASYNC_POSIX compiled in, which musl cannot satisfy, so the
     # agent link failed. 1.1.1 has no RISC-V asm. See openssl/libstatic/build/README.md.
     riscv64)        T_CONF=linux64-riscv64; T_CC="$TC_RISCV64_MUSL/bin/riscv64-linux-musl-gcc" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -Os" ; T_DEST="linux/riscv64" ; T_FETCH="muslcc-riscv64" ; T_LIBC=musl ;;
-    # A separate glibc target that no makefile ARCHID currently links. It is tracked here
-    # so a rebuild goes through the normal path instead of an ad-hoc build.
-    riscv64-generic) T_CONF=linux64-riscv64; T_CC="riscv64-linux-gnu-gcc" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -Os" ; T_DEST="linux/riscv64-generic" ; T_LIBC=glibc ; T_FETCH="apt:gcc-riscv64-linux-gnu" ;;
+    riscv64-generic) T_CONF=linux64-riscv64; T_CC="$TC_RISCV64_MUSL/bin/riscv64-linux-musl-gcc" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -Os" ; T_DEST="linux/riscv64-generic" ; T_LIBC=musl ; T_FETCH="muslcc-riscv64" ;;
+    # OpenSSL 1.1.1 has no riscv32 Configure target (only linux64-riscv64/BSD-riscv64 exist), so
+    # this Configures as linux-generic32 like arm/arm-linaro/pogo - no asm modules regardless of flags.
+    riscv32-generic) T_CONF=linux-generic32; T_CC="$TC_RISCV32_MUSL/bin/riscv32-linux-musl-gcc" ; T_EXTRA="-Os" ; T_DEST="linux/riscv32-generic" ; T_LIBC=musl ; T_FETCH="muslcc-riscv32" ;;
     # x86-64 asm is CPUID-gated and works on any libc. No -Os because Alpine is a
     # general-purpose distro, not a space-constrained router.
     alpine-x86-64)  T_CONF=linux-x86_64   ; T_CC="$MUSL_CC"                 ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_OBJS=576 ; T_DEST="linux/alpine-x86-64" ; T_LIBC=musl ; T_FETCH="apt:musl-tools" ;;
@@ -115,7 +116,7 @@ br_target() {
     return 0
 }
 
-BR_ALL_TARGETS="x86-64 x86 aarch64 arm64 armhf arm mips mipsel riscv64 riscv64-generic alpine-x86-64 \
+BR_ALL_TARGETS="x86-64 x86 aarch64 arm64 armhf arm mips mipsel riscv64 riscv64-generic riscv32-generic alpine-x86-64 \
 mips24kc mipsel24kc openwrt_x86_64 freebsd openbsd \
 aarch64-cortex-a53 linux-armada370-hf arm-linaro pogo poky64 \
 osx-arm-64 osx-x86-64"

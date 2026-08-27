@@ -222,6 +222,7 @@ qemu_for() {
         *Intel\ 80386*|*Intel\ i386*) [ "$HOST_ARCH" = "x86_64" ] || [ "$HOST_ARCH" = "i686" ] && echo "" || echo "qemu-i386";;
         *aarch64*|*ARM\ aarch64*)     [ "$HOST_ARCH" = "aarch64" ] && echo "" || echo "qemu-aarch64";;
         *ARM*)                        [ "${HOST_ARCH#arm}" != "$HOST_ARCH" ] && echo "" || echo "qemu-arm";;
+        *32-bit*UCB\ RISC-V*)         [ "$HOST_ARCH" = "riscv32" ] && echo "" || echo "qemu-riscv32";;
         *UCB\ RISC-V*)                [ "$HOST_ARCH" = "riscv64" ] && echo "" || echo "qemu-riscv64";;
         *LSB*MIPS*|*mipsel*)          [ "$HOST_ARCH" = "mips64el" ] || [ "$HOST_ARCH" = "mipsel" ] && echo "" || echo "qemu-mipsel";;
         *MSB*MIPS*|*MIPS*)            [ "$HOST_ARCH" = "mips" ] && echo "" || echo "qemu-mips";;
@@ -267,6 +268,7 @@ qemu_cpu_hint() {   # $1 is the binary, $2 the qemu binary name. Prints "-cpu <m
 qemu_cpu_candidates() {   # $1 is the qemu binary name. Prints a list separated by '|' characters.
     case "$1" in
         qemu-riscv64)          echo "-cpu thead-c906|-cpu max|-cpu rv64";;
+        qemu-riscv32)          echo "-cpu max|-cpu rv32";;
         qemu-aarch64)          echo "-cpu max|-cpu cortex-a53";;
         qemu-arm)              echo "-cpu max|-cpu cortex-a15";;
         qemu-mips|qemu-mipsel) echo "-cpu max|-cpu 24Kf";;
