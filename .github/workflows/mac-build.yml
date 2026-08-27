@@ -33,19 +33,13 @@ jobs:
       - name: Test meshagent (test/test-agent.sh, phases 1-4)
         run: test/test-agent.sh -q --no-connect -y -b build/osx-arm-64/meshagent_osx-arm-64 -l build/test-agent-macos-arm64.log
       - name: Upload artifacts
-        if: ${{ !env.ACT && always() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: meshagent-macos-arm64
           path: |
             ${{ github.workspace }}/build/*/meshagent_*
             ${{ github.workspace }}/build/test-agent-macos-arm64.log
-      - name: Upload artifacts (act)
-        if: ${{ env.ACT }}
-        uses: actions/upload-artifact@v3
-        with:
-          name: meshagent-macos-arm64
-          path: ${{ github.workspace }}/build/*/meshagent_*
 
   macos-build-x86_64:
     name: macOS x86_64 (ARCHID=16)
@@ -61,16 +55,10 @@ jobs:
       - name: Test meshagent (test/test-agent.sh, phases 1-4)
         run: test/test-agent.sh -q --no-connect -y -b build/osx-x86-64/meshagent_osx-x86-64 -l build/test-agent-macos-x86_64.log
       - name: Upload artifacts
-        if: ${{ !env.ACT && always() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: meshagent-macos-x86_64
           path: |
             ${{ github.workspace }}/build/*/meshagent_*
             ${{ github.workspace }}/build/test-agent-macos-x86_64.log
-      - name: Upload artifacts (act)
-        if: ${{ env.ACT }}
-        uses: actions/upload-artifact@v3
-        with:
-          name: meshagent-macos-x86_64
-          path: ${{ github.workspace }}/build/*/meshagent_*

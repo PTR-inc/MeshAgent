@@ -26,14 +26,7 @@ jobs:
           file build/openbsd_x86-64/meshagent_openbsd_x86-64
           file build/openbsd_x86-64/meshagent_openbsd_x86-64 | grep -q OpenBSD
       - name: Upload artifacts
-        if: ${{ !env.ACT }}
         uses: actions/upload-artifact@v7.0.1
-        with:
-          name: meshagent-openbsd-x86_64
-          path: ${{ github.workspace }}/build/*/meshagent_*
-      - name: Upload artifacts (act)
-        if: ${{ env.ACT }}
-        uses: actions/upload-artifact@v3
         with:
           name: meshagent-openbsd-x86_64
           path: ${{ github.workspace }}/build/*/meshagent_*

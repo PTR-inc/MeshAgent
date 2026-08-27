@@ -42,7 +42,6 @@ jobs:
     - name: Build ${{ matrix.platform }} ${{ env.CONFIGURATION }} (${{ matrix.toolset }})
       run: msbuild MeshAgent-2022.sln /p:Configuration=${{ env.CONFIGURATION }} /p:Platform=${{ matrix.platform }} /p:MeshToolset=${{ matrix.toolset }}
     - name: Upload ${{ matrix.platform }} artifacts
-      if: ${{ !env.ACT }}
       uses: actions/upload-artifact@v7
       with:
         name: meshagent-windows-${{ matrix.platform }}${{ env.CONFIGURATION != 'Release' && format('-{0}', env.CONFIGURATION) || '' }}${{ matrix.toolset != 'v143' && format('-{0}', matrix.toolset) || '' }}
@@ -50,9 +49,3 @@ jobs:
         path: |
           build/win-*/*.exe
           ${{ startsWith(env.CONFIGURATION, 'Debug') && 'build/win-*/*.pdb' || '' }}
-    - name: Upload ${{ matrix.platform }} artifacts (act)
-      if: ${{ env.ACT }}
-      uses: actions/upload-artifact@v3
-      with:
-        name: meshagent-windows-${{ matrix.platform }}${{ env.CONFIGURATION != 'Release' && format('-{0}', env.CONFIGURATION) || '' }}${{ matrix.toolset != 'v143' && format('-{0}', matrix.toolset) || '' }}
-        path: build/win-*/*.exe

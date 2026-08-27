@@ -44,14 +44,7 @@ jobs:
       - name: Build ARCHID ${{ matrix.archid }}
         run: make -j4 linux ARCHID=${{ matrix.archid }} YES=1
       - name: Upload artifacts
-        if: ${{ !env.ACT }}
         uses: actions/upload-artifact@v7.0.1
-        with:
-          name: meshagent-linux-${{ matrix.archid }}
-          path: ${{ github.workspace }}/build/*/meshagent_*
-      - name: Upload artifacts (act)
-        if: ${{ env.ACT }}
-        uses: actions/upload-artifact@v3
         with:
           name: meshagent-linux-${{ matrix.archid }}
           path: ${{ github.workspace }}/build/*/meshagent_*

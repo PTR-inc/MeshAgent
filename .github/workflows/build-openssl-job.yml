@@ -100,10 +100,7 @@ jobs:
           version: ${{ needs.resolve.outputs.version }}
           force: ${{ inputs.force }}
       - uses: actions/upload-artifact@v7.0.1
-        if: ${{ hashFiles('out/**') != '' && !env.ACT }}
-        with: { name: "openssl-${{ matrix.target }}", path: out/ }
-      - uses: actions/upload-artifact@v3
-        if: ${{ hashFiles('out/**') != '' && env.ACT }}
+        if: ${{ hashFiles('out/**') != '' }}
         with: { name: "openssl-${{ matrix.target }}", path: out/ }
 
   windows:
@@ -150,10 +147,7 @@ jobs:
             mkdir -p "out/$(dirname "$f")"; cp -r "$f" "out/$(dirname "$f")/"
           done
       - uses: actions/upload-artifact@v7.0.1
-        if: ${{ hashFiles('out/**') != '' && !env.ACT }}
-        with: { name: "openssl-windows-${{ matrix.target }}", path: out/ }
-      - uses: actions/upload-artifact@v3
-        if: ${{ hashFiles('out/**') != '' && env.ACT }}
+        if: ${{ hashFiles('out/**') != '' }}
         with: { name: "openssl-windows-${{ matrix.target }}", path: out/ }
 
   verify-summary:
