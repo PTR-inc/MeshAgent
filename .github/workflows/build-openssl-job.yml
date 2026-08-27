@@ -45,7 +45,7 @@ jobs:
       matrix: ${{ steps.r.outputs.matrix }}
       windows: ${{ steps.r.outputs.windows }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
       - id: r
         name: Resolve version and matrices from targets.sh / build.ps1
         run: |
@@ -96,7 +96,7 @@ jobs:
       BUILDROOT: ${{ github.workspace }}/br
       OPENSSL_VERSION: ${{ needs.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
       # The same composite action and build.sh serve both runner kinds, because
       # targets.sh picks native clang on macOS and cross-compiles on Linux.
       - uses: ./.github/actions/openssl-build-target
@@ -122,7 +122,7 @@ jobs:
       BUILDROOT: ${{ github.workspace }}\br
       OPENSSL_VERSION: ${{ needs.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
       - uses: ilammy/setup-nasm@v1
       - name: Install Strawberry Perl (Configure needs a real Windows perl)
         shell: pwsh
@@ -160,7 +160,7 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
       - uses: actions/download-artifact@v7
         with: { path: artifacts }
       - name: Overlay this run's freshly built prefixes onto the checkout

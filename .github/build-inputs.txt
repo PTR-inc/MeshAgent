@@ -35,9 +35,10 @@ windows: openssl/*/windows-*/**
 windows: openssl/build/windows/toolset-check.ps1
 
 
-# A platform's own workflow file counts as one of its inputs
-linux: .github/workflows/linux-build.yml
-macos: .github/workflows/mac-build.yml
-freebsd: .github/workflows/freebsd-build.yml
-openbsd: .github/workflows/openbsd-build.yml
-windows: .github/workflows/windows-build.yml
+# A platform's own workflow file is not an input for now: a comment sweep across all of them
+# rebuilt every platform. Test an edited workflow with `gh workflow run <file> --ref <branch>`.
+# linux: .github/workflows/linux-build.yml
+# macos: .github/workflows/mac-build.yml
+# freebsd: .github/workflows/freebsd-build.yml
+# openbsd: .github/workflows/openbsd-build.yml
+# windows: .github/workflows/windows-build.yml

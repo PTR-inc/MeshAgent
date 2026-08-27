@@ -44,28 +44,28 @@ jobs:
     name: Sources of truth still agree
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
       - run: openssl/build/consistency.sh
 
   vsprojects:
     name: Visual Studio projects and filters agree
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
       - run: ./check-vsprojects.sh
 
   verify-archives:
     name: Audit every committed OpenSSL prefix
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
       - run: openssl/build/verify
 
   shellcheck:
     name: Build scripts parse
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
       - name: bash -n every build script
         run: |
           rc=0
