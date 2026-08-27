@@ -376,7 +376,9 @@ offer_apt() {
         *) echo "  not installing $what." >&2; return 1 ;;
     esac
 
-    $sudo apt-get update && $sudo apt-get install -y $pkgs \
+    # With -y (CI) apt's progress output is dropped, its errors still reach stderr.
+    local q=""; [ "$ASSUME_YES" = 1 ] && q="-qq"
+    $sudo apt-get $q update ${q:+>/dev/null} && $sudo apt-get $q -y install $pkgs ${q:+>/dev/null} \
         || { echo "ERROR: apt-get failed - install manually:$pkgs" >&2; return 1; }
 }
 
@@ -463,6 +465,8 @@ wire_makefile_toolchains() {
     for pair in "armv5-eabi-glibc:$TC_ARMV5_BOOTLIN" \
                 "armv7-eabihf-glibc:$TC_ARMV7HF_BOOTLIN" \
                 "aarch64-glibc:$TC_AARCH64_BOOTLIN" \
+                "sparc64-glibc:$TC_SPARC64_BOOTLIN" \
+                "powerpc64le-glibc:$TC_POWERPC64LE_BOOTLIN" \
                 "mips32el-uclibc:$TC_MIPSEL_UCLIBC_BOOTLIN" \
                 "x86-i686-glibc:$TC_X86_BOOTLIN" \
                 "x86-64-glibc:$TC_X86_64_BOOTLIN" \
@@ -482,7 +486,7 @@ wire_makefile_toolchains() {
 
 # --------------------------------------------------------------------- main --
 ALL="openssl openwrt-mips24kc openwrt-mipsel24kc openwrt-openwrt_x86_64 openwrt-aarch64-cortex-a53 openwrt-armvirt32 muslcc-aarch64 muslcc-armhf muslcc-x86_64 muslcc-riscv64 muslcc-riscv32 riscv64-xthead \
-bootlin-armv5 bootlin-armv7hf bootlin-aarch64 bootlin-mipsel-uclibc bootlin-x86 bootlin-x86-64 freebsd openbsd rcodesign osxcross"
+bootlin-armv5 bootlin-armv7hf bootlin-aarch64 bootlin-sparc64 bootlin-powerpc64le bootlin-mipsel-uclibc bootlin-x86 bootlin-x86-64 freebsd openbsd rcodesign osxcross"
 
 usage() {
     cat <<EOF
@@ -570,6 +574,8 @@ run_one() {
         bootlin-armv5)          bootlin_dispatch bootlin-armv5  armv5-eabi    TC_ARMV5_BOOTLIN     arm-linux-gcc     armv5-eabi-glibc ;;
         bootlin-armv7hf)        bootlin_dispatch bootlin-armv7hf armv7-eabihf TC_ARMV7HF_BOOTLIN   arm-linux-gcc     armv7-eabihf-glibc ;;
         bootlin-aarch64)        bootlin_dispatch bootlin-aarch64 aarch64      TC_AARCH64_BOOTLIN   aarch64-linux-gcc aarch64-glibc ;;
+        bootlin-sparc64)        bootlin_dispatch bootlin-sparc64 sparc64      TC_SPARC64_BOOTLIN   sparc64-linux-gcc sparc64-glibc ;;
+        bootlin-powerpc64le)    bootlin_dispatch bootlin-powerpc64le powerpc64le-power8 TC_POWERPC64LE_BOOTLIN powerpc64le-linux-gcc powerpc64le-glibc ;;
         bootlin-mipsel-uclibc)  p_bootlin bootlin-mipsel-uclibc mips32el TC_MIPSEL_UCLIBC_BOOTLIN mipsel-linux-gcc ;;
         bootlin-x86)            bootlin_dispatch bootlin-x86    x86-i686      TC_X86_BOOTLIN       i686-linux-gcc    x86-i686-glibc ;;
         bootlin-x86-64)         bootlin_dispatch bootlin-x86-64 x86-64-core-i7 TC_X86_64_BOOTLIN   x86_64-linux-gcc  x86-64-glibc ;;
@@ -592,5 +598,7 @@ wire_makefile_toolchains
 echo
 echo "================= SUMMARY ================="
 cat "$STATUS_LOG"
-print_manual
+# The bring-your-own notes belong to a whole-set run. A named-component call is a targeted
+# request, often from CI or the makefile, so it gets its summary and nothing else.
+[ "$EXPLICIT" = 1 ] || print_manual
 exit $rc

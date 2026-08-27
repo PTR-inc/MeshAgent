@@ -15,7 +15,7 @@ jobs:
     outputs:
       archids: ${{ steps.r.outputs.archids }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - id: r
         run: |
           set -euo pipefail
@@ -26,25 +26,38 @@ jobs:
   build:
     needs: resolve
     runs-on: ubuntu-24.04
+    env:
+      # ccache 4 defaults differ per OS, so the directory is named here. The runner context is
+      # not allowed in a job env, so it lives under the workspace, which checkout cleans first.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 300M
     strategy:
       fail-fast: false
       matrix:
         archid: ${{ fromJSON(needs.resolve.outputs.archids) }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - name: Install host build prerequisites
         run: |
           sudo dpkg --add-architecture i386
-          sudo apt-get update
+          sudo apt-get -qq update >/dev/null
           # KVM=1 targets need only the X11 headers, because the real calls are
           # dlopen()'d at runtime. The makefile's KVMINC adds them with -idirafter.
-          sudo apt-get install -y build-essential \
+          sudo apt-get -qq -y install build-essential \
             libx11-dev libxtst-dev libxext-dev libxrandr-dev libjpeg62-dev \
-            linux-libc-dev:i386 libc6-dev-i386 libjpeg62-dev:i386
+            linux-libc-dev:i386 libc6-dev-i386 libjpeg62-dev:i386 ccache >/dev/null
       # YES=1 lets the makefile's ensure_toolchain provision the compiler from the
       # block's own FETCH component or APTPKG, so no toolchain names live here.
+      - name: Restore the ccache for ARCHID ${{ matrix.archid }}
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-linux-${{ matrix.archid }}-${{ github.sha }}
+          restore-keys: ccache-linux-${{ matrix.archid }}-
       - name: Build ARCHID ${{ matrix.archid }}
-        run: make -j4 linux ARCHID=${{ matrix.archid }} YES=1
+        run: make -s -j4 linux ARCHID=${{ matrix.archid }} YES=1 CCACHE=1 V=@
+      - name: ccache statistics
+        run: ccache -s | grep -E 'Hits|Misses'
       - name: Upload artifacts
         uses: actions/upload-artifact@v7.0.1
         with:

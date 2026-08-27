@@ -34,7 +34,7 @@ jobs:
       freebsd:  ${{ contains(steps.sel.outputs.platforms, ' freebsd ') }}
       openbsd:  ${{ contains(steps.sel.outputs.platforms, ' openbsd ') }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - id: sel
         env:
           GH_TOKEN: ${{ github.token }}

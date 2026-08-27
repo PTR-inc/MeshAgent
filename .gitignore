@@ -336,3 +336,4 @@ microscript/ILibDuktape_Commit.h
 
 # build output
 /build/
+.ccache/

@@ -201,7 +201,7 @@ libc_of_interp() {
         "")            echo "static";;
         *ld-musl*)     echo "musl";;
         *ld-uClibc*)   echo "uclibc";;
-        *ld-linux*|*ld.so*) echo "glibc";;
+        *ld-linux*|*ld64.so*|*ld.so*) echo "glibc";;
         *)             echo "unknown";;
     esac
 }
@@ -226,6 +226,9 @@ qemu_for() {
         *UCB\ RISC-V*)                [ "$HOST_ARCH" = "riscv64" ] && echo "" || echo "qemu-riscv64";;
         *LSB*MIPS*|*mipsel*)          [ "$HOST_ARCH" = "mips64el" ] || [ "$HOST_ARCH" = "mipsel" ] && echo "" || echo "qemu-mipsel";;
         *MSB*MIPS*|*MIPS*)            [ "$HOST_ARCH" = "mips" ] && echo "" || echo "qemu-mips";;
+        *SPARC\ V9*|*SPARC64*)        echo "qemu-sparc64";;
+        *SPARC*)                      echo "qemu-sparc32plus";;
+        *LSB*PowerPC*64*|*PowerPC*64*LSB*) echo "qemu-ppc64le";;
         *PowerPC*64*)                 echo "qemu-ppc64";;
         *PowerPC*)                    echo "qemu-ppc";;
         *) echo "";;
@@ -283,6 +286,10 @@ build_runner() {
     RUNNER=("$QEMU_BIN")
     [ -n "$QEMU_CPU" ] && RUNNER+=($QEMU_CPU)
     [ -n "$QEMU_SYSROOT" ] && RUNNER+=(-L "$QEMU_SYSROOT")
+    # A toolchain sysroot has no etc/ld.so.cache, so qemu falls back to the host's x86-64 cache and a
+    # big-endian glibc ld.so (sparc64) segfaults parsing it. LD_LIBRARY_PATH is searched first, so
+    # the cache is never opened. See ISSUES.md, "ARCHID 60 ... under qemu".
+    [ -n "$QEMU_SYSROOT" ] && [ "$BIN_LIBC" = glibc ] && RUNNER+=(-E LD_LIBRARY_PATH=/lib:/usr/lib:/lib64:/usr/lib64)
     QEMU="${RUNNER[*]}"
 }
 

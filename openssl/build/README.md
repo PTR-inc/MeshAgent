@@ -319,7 +319,11 @@ nothing here calls. Today gates 6 and 12 catch this class at build time.
 `.github/actions/openssl-build-target`, which only calls `build.sh`, so the skip check, version
 gate and every archive gate are `build.sh`'s. The action collects `out/openssl/<version>/<target>`
 plus `include/` when the version is new. The Windows job calls `build.ps1`. `verify-summary`
-overlays the fresh prefixes on the checkout and runs `verify` over all of them.
+overlays the fresh prefixes on the checkout and runs `verify` over all of them. With `commit=true`
+it then commits `openssl/<version>/` to the branch the run was started from; with `create_pr=true`
+it opens a pull request instead. A commit pushed with `GITHUB_TOKEN` starts no other workflow, so
+the platform builds only pick the new archives up on the next ordinary push, whereas merging the
+pull request triggers them.
 `build-system-checks.yml` runs `consistency.sh`, `verify` and `bash -n` on every script; on any
 change under `openssl/**` or the build files pushed to master (its own path list, since it is
 no platform of `build.yml`). Rules for what may and may not be written into a

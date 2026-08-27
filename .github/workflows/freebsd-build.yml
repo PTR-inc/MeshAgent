@@ -15,14 +15,26 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       BUILDROOT: ${{ github.workspace }}/br
+      # ccache 4 defaults differ per OS, so the directory is named here. The runner context is
+      # not allowed in a job env, so it lives under the workspace, which checkout cleans first.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 300M
     steps:
-      - uses: actions/checkout@v7.0.0
-      - name: Install clang and lld
-        run: sudo apt-get update && sudo apt-get install -y clang lld
+      - uses: actions/checkout@v7.0.1
+      - name: Install clang, lld and ccache
+        run: sudo apt-get -qq update >/dev/null && sudo apt-get -qq -y install clang lld ccache >/dev/null
       - name: Fetch the FreeBSD sysroot
-        run: ./fetch-toolchains.sh -y freebsd
+        run: ./fetch-toolchains.sh -y freebsd >/dev/null
+      - name: Restore the ccache for ARCHID 30
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-freebsd-30-${{ github.sha }}
+          restore-keys: ccache-freebsd-30-
       - name: Build meshagent (x86_64)
-        run: make -j4 freebsd ARCHID=30 CROSS=1
+        run: make -s -j4 freebsd ARCHID=30 CROSS=1 CCACHE=1 V=@
+      - name: ccache statistics
+        run: ccache -s | grep -E 'Hits|Misses'
       - name: Verify the binary targets FreeBSD
         run: |
           file build/freebsd_x86-64/meshagent_freebsd_x86-64

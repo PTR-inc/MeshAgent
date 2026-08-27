@@ -13,7 +13,7 @@ jobs:
   guard:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - name: The jobs below must cover every CLASS=macos ARCHID
         run: |
           want=$(make -s print-archids CLASS=macos | tr -s ' ' '\n' | sort -n | tr -d '\n')
@@ -27,11 +27,25 @@ jobs:
     # is not writable on a hosted runner.
     env:
       BUILDROOT: ${{ github.workspace }}/br
+      # ccache 4 defaults differ per OS, so the directory is named here. The runner context is
+      # not allowed in a job env, so it lives under the workspace, which checkout cleans first.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 300M
     steps:
       - name: Check out repository code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
+      - name: Install ccache
+        run: HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install -q ccache >/dev/null
+      - name: Restore the ccache for ARCHID 29
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-macos-29-${{ github.sha }}
+          restore-keys: ccache-macos-29-
       - name: Build meshagent (arm64, KVM enabled)
-        run: make -j4 macos ARCHID=29
+        run: make -s -j4 macos ARCHID=29 CCACHE=1 V=@
+      - name: ccache statistics
+        run: ccache -s | grep -E 'Hits|Misses'
       # The same driver as on Linux, phases 1 to 4: the -info banner (whose OpenSSL line must match
       # openssl/VERSION), the core stress run, the known 06-* crashes and the -b64exec delivery
       # path. No connection phase, since there is no MeshCentral to reach from a hosted runner.
@@ -53,11 +67,25 @@ jobs:
     # is not writable on a hosted runner.
     env:
       BUILDROOT: ${{ github.workspace }}/br
+      # ccache 4 defaults differ per OS, so the directory is named here. The runner context is
+      # not allowed in a job env, so it lives under the workspace, which checkout cleans first.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 300M
     steps:
       - name: Check out repository code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
+      - name: Install ccache
+        run: HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install -q ccache >/dev/null
+      - name: Restore the ccache for ARCHID 16
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-macos-16-${{ github.sha }}
+          restore-keys: ccache-macos-16-
       - name: Build meshagent (x86_64, KVM enabled)
-        run: make -j4 macos ARCHID=16
+        run: make -s -j4 macos ARCHID=16 CCACHE=1 V=@
+      - name: ccache statistics
+        run: ccache -s | grep -E 'Hits|Misses'
       # The same driver as on Linux, phases 1 to 4: the -info banner (whose OpenSSL line must match
       # openssl/VERSION), the core stress run, the known 06-* crashes and the -b64exec delivery
       # path. No connection phase, since there is no MeshCentral to reach from a hosted runner.

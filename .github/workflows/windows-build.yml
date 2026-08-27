@@ -38,7 +38,7 @@ jobs:
           # - { platform: x86,   toolset: v145, runner: windows-2025-vs2026 }
           # - { platform: ARM64, toolset: v145, runner: windows-11-vs2026-arm }
     steps:
-    - uses: actions/checkout@v7.0.0
+    - uses: actions/checkout@v7.0.1
     - name: Setup Visual Studio
       uses: microsoft/setup-msbuild@v3
     - name: Check OpenSSL archives against the ${{ matrix.toolset }} toolset
@@ -46,7 +46,7 @@ jobs:
       shell: pwsh
       run: openssl/build/windows/toolset-check.ps1 -Platform ${{ matrix.platform }} -Toolset ${{ matrix.toolset }}
     - name: Build ${{ matrix.platform }} ${{ env.CONFIGURATION }} (${{ matrix.toolset }})
-      run: msbuild MeshAgent-2022.sln /p:Configuration=${{ env.CONFIGURATION }} /p:Platform=${{ matrix.platform }} /p:MeshToolset=${{ matrix.toolset }}
+      run: msbuild MeshAgent-2022.sln /nologo /v:q /clp:Summary /p:Configuration=${{ env.CONFIGURATION }} /p:Platform=${{ matrix.platform }} /p:MeshToolset=${{ matrix.toolset }}
     - name: Upload ${{ matrix.platform }} artifacts
       uses: actions/upload-artifact@v7
       with:

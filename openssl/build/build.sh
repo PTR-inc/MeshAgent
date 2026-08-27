@@ -141,7 +141,7 @@ br_provision() {
     done
     if [ -n "$apt_pkgs" ]; then
         echo "  apt-get install:$apt_pkgs"
-        ${SUDO:-sudo} apt-get update -qq && ${SUDO:-sudo} apt-get install -y $apt_pkgs || return 1
+        ${SUDO:-sudo} apt-get -qq update >/dev/null && ${SUDO:-sudo} apt-get -qq -y install $apt_pkgs >/dev/null || return 1
     fi
     if [ -n "$comps" ]; then
         echo "  fetch-toolchains.sh$comps"

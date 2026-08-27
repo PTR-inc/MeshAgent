@@ -49,6 +49,13 @@
 #   make ARCHID=47          # Linux RISC-V 32 bit, generic rv32gc, musl, static. Reports itself as 45 to the
 #                            # server (see ARCH_47's comment) - done on purpose, not by the usual rule
 #
+# Other builds:
+#
+#   make ARCHID=60          # Linux SPARC64 (SPARC V9), glibc, dynamic, no vendor hardware. Reports
+#                            # itself as 45 to the server (see ARCH_60's comment), same as ARCH_47
+#   make ARCHID=70          # Linux PowerPC64LE (POWER8), glibc, dynamic, no vendor hardware. Reports
+#                            # itself as 45 to the server (see ARCH_70's comment), same as ARCH_60/47
+#
 # An ARCHID of 100 or more is the updated build of ARCHID minus 100. It reports the classic
 # id to the server (MESH_AGENTID = ARCHID-100) because the server only knows the classic numbers.
 #
@@ -169,6 +176,8 @@ PATH_OPENWRT_X86_64 = ../ToolChains/toolchain-x86_64_musl/
 PATH_ARM5 = ../ToolChains/armv5-eabi-glibc/
 PATH_LINARO = ../ToolChains/armv7-eabihf-glibc/
 PATH_AARCH64 = ../ToolChains/aarch64-glibc/
+PATH_SPARC64 = ../ToolChains/sparc64-glibc/
+PATH_POWERPC64LE = ../ToolChains/powerpc64le-glibc/
 PATH_AARCH64_CORTEXA53 = ../ToolChains/toolchain-aarch64_generic_musl/
 PATH_ARMADA370_HF = ../ToolChains/arm-linux-musleabihf-cross/
 PATH_X86_64_MUSL = ../ToolChains/x86_64-linux-musl-cross/
@@ -598,6 +607,41 @@ define ARCH_47
   SERVER_ARCHID = 45
 endef
 
+# Generic SPARC64 (SPARC V9), glibc, dynamic - no vendor hardware target, built purely as a
+# reference/CI target the same way riscv32-generic (47) is. Reports itself to the server as 45
+# (ARCH_145's identity), the same SERVER_ARCHID override ARCH_47 already uses, on direct request.
+# No real hardware relationship to 45 exists; this is only reusing an already-known agent identity.
+define ARCH_60
+  ARCHNAME = sparc64-generic
+  OSSLTARGET = linux-sparc64-glibc
+  CLASS    = generic
+  XDIR     = $(PATH_SPARC64)
+  XPREFIX  = sparc64-linux-
+  XTRIPLE  = sparc64-linux-gnu
+  HARDEN   = basic
+  KVM      = 0
+  LMS      = 0
+  FETCH    = bootlin-sparc64
+  SERVER_ARCHID = 45
+endef
+
+# Generic PowerPC64LE (POWER8), glibc, dynamic - same reasoning as ARCH_60: no vendor hardware,
+# built as a reference/CI target, and reports SERVER_ARCHID=45 on the same on-purpose basis.
+# Unlike sparc64, OpenSSL's ppc64_asm modules are real and maintained, so asm stays enabled.
+define ARCH_70
+  ARCHNAME = powerpc64le-generic
+  OSSLTARGET = linux-ppc64le-glibc
+  CLASS    = generic
+  XDIR     = $(PATH_POWERPC64LE)
+  XPREFIX  = powerpc64le-linux-
+  XTRIPLE  = powerpc64le-linux-gnu
+  HARDEN   = basic
+  KVM      = 0
+  LMS      = 0
+  FETCH    = bootlin-powerpc64le
+  SERVER_ARCHID = 45
+endef
+
 $(eval $(ARCH_$(ARCHID)))
 
 # An ARCHID of 100 or more is the updated build of ARCHID minus 100 (145 is today's 45). It
@@ -737,7 +781,8 @@ elif [ -n "$(APTPKG)" ]; then \
   elif [ -t 0 ]; then printf "  Install it now with 'sudo apt-get install -y $(APTPKG)'? [Y/n] "; read -r r; \
   else r=n; echo "  (stdin is not a terminal - re-run with YES=1 to install without asking)"; fi; \
   case "$$r" in \
-    ""|[yY]|[yY][eE][sS]) sudo apt-get update && sudo apt-get install -y $(APTPKG) || exit 1 ;; \
+    ""|[yY]|[yY][eE][sS]) if [ "$(YES)" = 1 ]; then sudo apt-get -qq update >/dev/null && sudo apt-get -qq -y install $(APTPKG) >/dev/null; \
+                          else sudo apt-get update && sudo apt-get install -y $(APTPKG); fi || exit 1 ;; \
     *) echo "  run: sudo apt-get install -y $(APTPKG)"; exit 1 ;; \
   esac; \
   command -v "$$cc" >/dev/null 2>&1 || [ -x "$$cc" ] || \
@@ -1014,9 +1059,17 @@ _FLAGLINE = $(subst ','"'"',$(CC) $(CFLAGS))
 $(shell mkdir -p $(OBJDIR); printf '%s\n' '$(_FLAGLINE)' | cmp -s - $(FLAGSTAMP) 2>/dev/null || printf '%s\n' '$(_FLAGLINE)' > $(FLAGSTAMP))
 endif
 
+# CCACHE=1 wraps only the compile step. Linking always runs, so a changed archive, header or
+# commit hash is never served from the cache. The compiler is identified by content rather than
+# mtime and size, so a refetched toolchain of the same size cannot look like the old one.
+ifeq ($(CCACHE),1)
+CCWRAP = ccache
+export CCACHE_COMPILERCHECK ?= content
+endif
+
 $(OBJDIR)/%.o: %.c $(FLAGSTAMP)
 	@mkdir -p $(@D)
-	$(V)$(CC) $(CFLAGS) -MMD -MP -c $< -o $@ $(WARNFLAGS)
+	$(V)$(CCWRAP) $(CC) $(CFLAGS) -MMD -MP -c $< -o $@ $(WARNFLAGS)
 
 -include $(shell find $(OBJDIR) -name '*.d' 2>/dev/null)
 
@@ -1034,11 +1087,15 @@ cleanbin:
 
 # KVM=1 only needs the X11 headers for types and macros, because the real calls are dlopen()'d at
 # runtime in linux_kvm.c, so the host's arch-neutral X11 headers work for any target.
-# Cross toolchains do not search host paths by default, hence -idirafter.
-KVMINC = $(if $(filter 1,$(KVM)), -idirafter /usr/include)
+# Cross toolchains do not search host paths by default, hence -idirafter. Only X11 is staged in,
+# because handing a cross compiler the whole of /usr/include makes Buildroot toolchains warn.
+X11INC  = build/hostinc
+KVMINC  = $(if $(filter 1,$(KVM)), -idirafter $(X11INC))
+STAGE_X11 = $(if $(filter 1,$(KVM)), mkdir -p $(X11INC) && ln -sfn /usr/include/X11 $(X11INC)/X11, :)
 
 linux:
 	$(ensure_toolchain)
+	$(V)$(STAGE_X11)
 	$(SNAP_OUTBIN_MTIME)
 	$(MAKE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)" ADDITIONALFLAGS="-lrt -z noexecstack -z relro -z now" CFLAGS="-DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) $(CFLAGS) $(CHARDEN) $(CEXTRA) $(KVMINC)" LDFLAGS="$(LINUXSSL) $(LINUXFLAGS) $(LDFLAGS) $(LDINT) $(LDEXTRA) -ldl"
 	$(STRIP_AND_SYMBOLCP)

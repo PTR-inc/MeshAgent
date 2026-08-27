@@ -216,6 +216,8 @@ _BOOTLIN="$BOOTLIN_RELEASE"
 export TC_ARMV5_BOOTLIN="$BR_TOOLCHAINS/armv5-eabi--glibc--stable-$_BOOTLIN"
 export TC_ARMV7HF_BOOTLIN="$BR_TOOLCHAINS/armv7-eabihf--glibc--stable-$_BOOTLIN"
 export TC_AARCH64_BOOTLIN="$BR_TOOLCHAINS/aarch64--glibc--stable-$_BOOTLIN"
+export TC_SPARC64_BOOTLIN="$BR_TOOLCHAINS/sparc64--glibc--stable-$_BOOTLIN"
+export TC_POWERPC64LE_BOOTLIN="$BR_TOOLCHAINS/powerpc64le-power8--glibc--stable-$_BOOTLIN"
 # uClibc rather than glibc, to match the libc family of ARCHID 7's own agent toolchain.
 # It replaces the dd-wrt archive that no longer builds against a current kernel.
 # mips32el is little-endian. Plain "mips32" is big-endian and unrelated.
@@ -290,6 +292,7 @@ br_check() {
              "$TC_OWRT_AARCH64_A53" "$TC_OWRT_ARMVIRT32" \
              "$TC_AARCH64_A53_MUSL" "$TC_ARMV7_MUSL_HF" "$TC_X86_64_MUSL" "$TC_RISCV64_MUSL" "$TC_RISCV32_MUSL" \
              "$TC_ARMV5_BOOTLIN" "$TC_ARMV7HF_BOOTLIN" "$TC_AARCH64_BOOTLIN" "$TC_MIPSEL_UCLIBC_BOOTLIN" \
+             "$TC_SPARC64_BOOTLIN" "$TC_POWERPC64LE_BOOTLIN" \
              "$TC_X86_BOOTLIN" "$TC_X86_64_BOOTLIN" "$TC_RISCV64_XTHEAD"; do
         [ -e "$p" ] || { echo "  MISSING: $p"; missing=1; }
     done

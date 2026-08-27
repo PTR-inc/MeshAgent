@@ -43,6 +43,10 @@ br_target() {
     # The pinned Bootlin glibc 2.31 toolchain gives the lowest floor, so one archive serves both
     # the compat ARCHID 32 and the general ARCHID 26. AArch64 asm gates on runtime AT_HWCAP.
     linux-aarch64-glibc) T_CONF=linux-aarch64 ; T_CC="$TC_AARCH64_BOOTLIN/bin/aarch64-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -Os" ; T_FETCH="bootlin-aarch64" ;;
+    # No hardware to validate the sparcv9 asm modules against, so this stays -no-asm
+    # (T_FLAGS keeps its default) unlike the other 64-bit glibc targets above.
+    linux-sparc64-glibc) T_CONF=linux64-sparcv9 ; T_CC="$TC_SPARC64_BOOTLIN/bin/sparc64-linux-gcc" ; T_EXTRA="-Os" ; T_FETCH="bootlin-sparc64" ;;
+    linux-ppc64le-glibc) T_CONF=linux-ppc64le ; T_CC="$TC_POWERPC64LE_BOOTLIN/bin/powerpc64le-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_FETCH="bootlin-powerpc64le" ;;
     # musl.cc toolchain. The ARMv8 crypto extensions are runtime-HWCAP-gated, so plain armv8-a
     # code is generated and cores with or without them are both safe.
     linux-aarch64-musl) T_CONF=linux-aarch64 ; T_CC="$TC_AARCH64_A53_MUSL/bin/aarch64-linux-musl-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -Os" ; T_LIBC=musl ; T_FETCH="muslcc-aarch64" ;;
@@ -98,7 +102,7 @@ BR_ALL_TARGETS="linux-x86_64-glibc linux-i686-glibc linux-x86_64-musl \
 linux-aarch64-glibc linux-aarch64-musl \
 linux-armv6hf-glibc linux-armv7hf-glibc linux-armv7hf-musl linux-armv5-glibc \
 linux-mipsel-uclibc linux-mipsel-musl linux-mips-musl \
-linux-riscv64-musl linux-riscv32-musl \
+linux-riscv64-musl linux-riscv32-musl linux-sparc64-glibc linux-ppc64le-glibc \
 freebsd-x86_64 openbsd-x86_64 macos-arm64 macos-x86_64 \
 windows-x86 windows-x86-debug windows-x64 windows-x64-debug windows-arm64 windows-arm64-debug"
 

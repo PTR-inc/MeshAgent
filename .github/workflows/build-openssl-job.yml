@@ -45,7 +45,7 @@ jobs:
       matrix: ${{ steps.r.outputs.matrix }}
       windows: ${{ steps.r.outputs.windows }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - id: r
         name: Resolve version and matrices from targets.sh / build.ps1
         run: |
@@ -96,7 +96,7 @@ jobs:
       BUILDROOT: ${{ github.workspace }}/br
       OPENSSL_VERSION: ${{ needs.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       # The same composite action and build.sh serve both runner kinds, because
       # targets.sh picks native clang on macOS and cross-compiles on Linux.
       - uses: ./.github/actions/openssl-build-target
@@ -122,7 +122,7 @@ jobs:
       BUILDROOT: ${{ github.workspace }}\br
       OPENSSL_VERSION: ${{ needs.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - uses: ilammy/setup-nasm@v1
       - name: Install Strawberry Perl (Configure needs a real Windows perl)
         shell: pwsh
@@ -160,8 +160,8 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/download-artifact@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v8
         with: { path: artifacts }
       - name: Overlay this run's freshly built prefixes onto the checkout
         run: |
@@ -212,7 +212,7 @@ jobs:
           git log -1 --stat | head -40
       - name: Open a pull request with the rebuilt archives
         if: inputs.create_pr
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           add-paths: openssl/${{ needs.resolve.outputs.version }}
           commit-message: "openssl: install prefixes for ${{ needs.resolve.outputs.version }} (${{ inputs.jobname }})"
