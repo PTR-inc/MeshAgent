@@ -3,6 +3,7 @@ run-name: Build MacOS versions of MeshAgent
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 # Deliberately native on macOS runners, because osxcross needs an Apple-licensed
 # SDK that public CI cannot provision. The two ARCHIDs need different runners, so
@@ -26,12 +27,19 @@ jobs:
         uses: actions/checkout@v7.0.0
       - name: Build meshagent (arm64, KVM enabled)
         run: make -j4 macos ARCHID=29
+      # The same driver as on Linux, phases 1 to 4: the -info banner (whose OpenSSL line must match
+      # openssl/VERSION), the core stress run, the known 06-* crashes and the -b64exec delivery
+      # path. No connection phase, since there is no MeshCentral to reach from a hosted runner.
+      - name: Test meshagent (test/test-agent.sh, phases 1-4)
+        run: test/test-agent.sh -q --no-connect -y -b build/osx-arm-64/meshagent_osx-arm-64 -l build/test-agent-macos-arm64.log
       - name: Upload artifacts
-        if: ${{ !env.ACT }}
+        if: ${{ !env.ACT && always() }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: meshagent-macos-arm64
-          path: ${{ github.workspace }}/build/*/meshagent_*
+          path: |
+            ${{ github.workspace }}/build/*/meshagent_*
+            ${{ github.workspace }}/build/test-agent-macos-arm64.log
       - name: Upload artifacts (act)
         if: ${{ env.ACT }}
         uses: actions/upload-artifact@v3
@@ -47,12 +55,19 @@ jobs:
         uses: actions/checkout@v7.0.0
       - name: Build meshagent (x86_64, KVM enabled)
         run: make -j4 macos ARCHID=16
+      # The same driver as on Linux, phases 1 to 4: the -info banner (whose OpenSSL line must match
+      # openssl/VERSION), the core stress run, the known 06-* crashes and the -b64exec delivery
+      # path. No connection phase, since there is no MeshCentral to reach from a hosted runner.
+      - name: Test meshagent (test/test-agent.sh, phases 1-4)
+        run: test/test-agent.sh -q --no-connect -y -b build/osx-x86-64/meshagent_osx-x86-64 -l build/test-agent-macos-x86_64.log
       - name: Upload artifacts
-        if: ${{ !env.ACT }}
+        if: ${{ !env.ACT && always() }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: meshagent-macos-x86_64
-          path: ${{ github.workspace }}/build/*/meshagent_*
+          path: |
+            ${{ github.workspace }}/build/*/meshagent_*
+            ${{ github.workspace }}/build/test-agent-macos-x86_64.log
       - name: Upload artifacts (act)
         if: ${{ env.ACT }}
         uses: actions/upload-artifact@v3

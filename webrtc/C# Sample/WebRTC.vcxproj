@@ -18,6 +18,12 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
+  <!-- OpenSSL comes from the openssl\<version>\windows-<platform>[-debug]\ prefixes; openssl\VERSION is the pin. -->
+  <PropertyGroup>
+    <MeshOpenSSLVersion Condition="'$(MeshOpenSSLVersion)'==''">$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\..\openssl\VERSION').Trim())</MeshOpenSSLVersion>
+    <MeshOpenSSLPlatform Condition="'$(Platform)'=='Win32'">x86</MeshOpenSSLPlatform>
+    <MeshOpenSSLPlatform Condition="'$(Platform)'=='x64'">x64</MeshOpenSSLPlatform>
+  </PropertyGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{7777E837-E7A3-481B-8BD2-4C76F639ECFC}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
@@ -94,12 +100,12 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;MICROSTACKWRAPPER_EXPORTS;MICROSTACK_NO_STDAFX;WINSOCK2;_MSC_PLATFORM_TOOLSET_$(PlatformToolset);_CONSOLE;_REMOTELOGGING;_REMOTELOGGINGSERVER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\..\openssl\include;..\..\openssl\include\openssl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\openssl\$(MeshOpenSSLVersion)\windows-$(MeshOpenSSLPlatform)\include;..\..\openssl\$(MeshOpenSSLVersion)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>Crypt32.lib;..\..\openssl\libstatic\windows\libssl32MTd.lib;..\..\openssl\libstatic\windows\libcrypto32MTd.lib;DbgHelp.lib;ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Crypt32.lib;..\..\openssl\$(MeshOpenSSLVersion)\windows-x86-debug\lib\libssl.lib;..\..\openssl\$(MeshOpenSSLVersion)\windows-x86-debug\lib\libcrypto.lib;DbgHelp.lib;ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
     </PostBuildEvent>
@@ -110,12 +116,12 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;WIN64;_DEBUG;_WINDOWS;_USRDLL;MICROSTACKWRAPPER_EXPORTS;MICROSTACK_NO_STDAFX;WINSOCK2;_MSC_PLATFORM_TOOLSET_$(PlatformToolset);_CONSOLE;_REMOTELOGGING;_REMOTELOGGINGSERVER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\..\openssl\include;..\..\openssl\include\openssl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\openssl\$(MeshOpenSSLVersion)\windows-$(MeshOpenSSLPlatform)\include;..\..\openssl\$(MeshOpenSSLVersion)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>Crypt32.lib;..\..\openssl\libstatic\windows\libcrypto64MTd.lib;..\..\openssl\libstatic\windows\libssl64MTd.lib;DbgHelp.lib;ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Crypt32.lib;..\..\openssl\$(MeshOpenSSLVersion)\windows-x64-debug\lib\libcrypto.lib;..\..\openssl\$(MeshOpenSSLVersion)\windows-x64-debug\lib\libssl.lib;DbgHelp.lib;ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -126,14 +132,14 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;MICROSTACKWRAPPER_EXPORTS;MICROSTACK_NO_STDAFX;WINSOCK2;_MSC_PLATFORM_TOOLSET_$(PlatformToolset);_CONSOLE;_REMOTELOGGING;_REMOTELOGGINGSERVER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\..\openssl\include;..\..\openssl\include\openssl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\openssl\$(MeshOpenSSLVersion)\windows-$(MeshOpenSSLPlatform)\include;..\..\openssl\$(MeshOpenSSLVersion)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>Crypt32.lib;..\..\openssl\libstatic\windows\libcrypto32MT.lib;..\..\openssl\libstatic\windows\libssl32MT.lib;DbgHelp.lib;ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Crypt32.lib;..\..\openssl\$(MeshOpenSSLVersion)\windows-x86\lib\libcrypto.lib;..\..\openssl\$(MeshOpenSSLVersion)\windows-x86\lib\libssl.lib;DbgHelp.lib;ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
     </PostBuildEvent>
@@ -146,14 +152,14 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;WIN64;NDEBUG;_WINDOWS;_USRDLL;MICROSTACKWRAPPER_EXPORTS;MICROSTACK_NO_STDAFX;WINSOCK2;_MSC_PLATFORM_TOOLSET_$(PlatformToolset);_CONSOLE;_REMOTELOGGING;_REMOTELOGGINGSERVER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\..\openssl\include;..\..\openssl\include\openssl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\openssl\$(MeshOpenSSLVersion)\windows-$(MeshOpenSSLPlatform)\include;..\..\openssl\$(MeshOpenSSLVersion)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>Crypt32.lib;..\..\openssl\libstatic\windows\libcrypto64MT.lib;..\..\openssl\libstatic\windows\libssl64MT.lib;DbgHelp.lib;ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Crypt32.lib;..\..\openssl\$(MeshOpenSSLVersion)\windows-x64\lib\libcrypto.lib;..\..\openssl\$(MeshOpenSSLVersion)\windows-x64\lib\libssl.lib;DbgHelp.lib;ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

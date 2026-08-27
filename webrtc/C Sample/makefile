@@ -12,7 +12,7 @@ EXENAME = webrtc_sample_linux
 CC = gcc
 
 # need to be separate for dependency generation	
-INCDIRS = -I. -I../../openssl/include -I../../openssl -I../../microstack
+INCDIRS = -I. -I../../openssl/1.1.1w/linux-x86_64-glibc/include -I../../openssl/1.1.1w/include -I../../microstack
 
 CFLAGS  ?= -Wall -D_POSIX -DMICROSTACK_PROXY -fno-strict-aliasing $(INCDIRS)
 LDEXTRAS = -L. -lpthread -ldl -lssl -lz -lutil -lcrypto -lrt
@@ -49,11 +49,11 @@ depend: $(SOURCES)
 	$(CC) -M $(CFLAGS) $(SOURCES) $(HEADERS) > depend
 	
 linux-32:
-	$(MAKE) $(MAKEFILE) EXENAME="webrtc_sample_linux_x86" CFLAGS="-m32 $(CFLAGS) $(INCDIRS)" LDFLAGS="-m32 -L../../openssl/libstatic/linux/x86 $(LDEXTRAS)"
+	$(MAKE) $(MAKEFILE) EXENAME="webrtc_sample_linux_x86" CFLAGS="-m32 $(CFLAGS) $(INCDIRS)" LDFLAGS="-m32 -L../../openssl/1.1.1w/linux-i686-glibc/lib $(LDEXTRAS)"
 	$(STRIP) strip ./webrtc_sample_linux_x86
 
 linux-64:
-	$(MAKE) $(MAKEFILE) EXENAME="webrtc_sample_linux_x64" CFLAGS="$(CFLAGS) $(INCDIRS)" LDFLAGS="-L../../openssl/libstatic/linux/x86-64 $(LDEXTRAS)" 
+	$(MAKE) $(MAKEFILE) EXENAME="webrtc_sample_linux_x64" CFLAGS="$(CFLAGS) $(INCDIRS)" LDFLAGS="-L../../openssl/1.1.1w/linux-x86_64-glibc/lib $(LDEXTRAS)" 
 	$(STRIP) strip ./webrtc_sample_linux_x64
 
 linux-arm:

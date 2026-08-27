@@ -93,7 +93,7 @@ done
 set -- "${args[@]}"
 
 # Uses build-env.sh's osxcross_extract_sdk, which pipes tools/gen_sdk_package_pbzx.sh through
-# openssl/libstatic/build/xip-sdk-cpio.py because unrestricted extraction needs ~45GB scratch.
+# openssl/build/xip-sdk-cpio.py because unrestricted extraction needs ~45GB scratch.
 # The SDK tarball is also dropped in $BR_DOWNLOADS so fetch-toolchains.sh osxcross needs no second extraction.
 pack_xcode_sdk() {
     local xip_name="$1" xip="$BR_DOWNLOADS/$1"

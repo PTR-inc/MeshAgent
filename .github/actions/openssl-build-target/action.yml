@@ -1,8 +1,8 @@
 name: Build one OpenSSL target
 description: >
   Skip-check, provision, build and collect a single targets.sh target using the
-  same openssl/libstatic/build/build.sh a developer runs locally. Shared by the
-  linux and macos jobs so there is exactly one CI recipe, not one per family.
+  same openssl/build/build.sh a developer runs locally. Shared by the linux and
+  macos jobs so there is exactly one CI recipe, not one per family.
 
 inputs:
   target:
@@ -15,10 +15,6 @@ inputs:
     description: rebuild even if the committed archive already matches
     required: false
     default: "false"
-  sfx:
-    description: filename suffix for coexisting versions, e.g. -3.0.16
-    required: false
-    default: ""
 
 runs:
   using: composite
@@ -26,12 +22,11 @@ runs:
     - name: Skip if ${{ inputs.target }} already matches OpenSSL ${{ inputs.version }}
       id: check
       shell: bash
+      # The version selects the prefix, so a rebuild for another version never touches this one.
       run: |
         skip=true
-        for d in $(openssl/libstatic/build/targets.sh --field '${{ inputs.target }}' DEST); do
-          f="openssl/libstatic/$d/libcrypto${{ inputs.sfx }}.a"
-          { [ -f "$f" ] && strings "$f" | grep -qF "OpenSSL ${{ inputs.version }} "; } || { skip=false; break; }
-        done
+        f="openssl/${{ inputs.version }}/${{ inputs.target }}/lib/libcrypto.a"
+        { [ -f "$f" ] && strings "$f" | grep -qF "OpenSSL ${{ inputs.version }} "; } || skip=false
         [ '${{ inputs.force }}' = 'true' ] && skip=false
         echo "skip=$skip" >> "$GITHUB_OUTPUT"
         [ "$skip" = true ] && echo "::notice::${{ inputs.target }} already at OpenSSL ${{ inputs.version }} and force=false - skipping rebuild."
@@ -48,14 +43,14 @@ runs:
     - name: Build ${{ inputs.target }}
       if: steps.check.outputs.skip != 'true'
       shell: bash
-      run: BR_FETCH=1 openssl/libstatic/build/build.sh '${{ inputs.target }}'
+      run: BR_FETCH=1 OPENSSL_VERSION='${{ inputs.version }}' openssl/build/build.sh '${{ inputs.target }}'
 
-    - name: Collect the staged archives
+    - name: Collect the installed prefix and, for a new version, the shared headers
       if: steps.check.outputs.skip != 'true'
       shell: bash
       run: |
-        for d in $(openssl/libstatic/build/targets.sh --field '${{ inputs.target }}' DEST); do
-          mkdir -p "out/openssl/libstatic/$d"
-          cp "openssl/libstatic/$d/libcrypto.a" "out/openssl/libstatic/$d/libcrypto${{ inputs.sfx }}.a"
-          cp "openssl/libstatic/$d/libssl.a"    "out/openssl/libstatic/$d/libssl${{ inputs.sfx }}.a"
-        done
+        v='${{ inputs.version }}'; t='${{ inputs.target }}'
+        mkdir -p "out/openssl/$v"
+        cp -r "openssl/$v/$t" "out/openssl/$v/"
+        git status --porcelain -- "openssl/$v/include" | grep -q . && cp -r "openssl/$v/include" "out/openssl/$v/"
+        true

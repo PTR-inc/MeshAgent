@@ -1,14 +1,16 @@
 name: Build OpenSSL static libs
-run-name: Build ${{ inputs.jobname }}${{ inputs.force == true && ' (force)' || '' }}${{ inputs.version_suffix == true && format(' [suffix -{0}]', inputs.version) || '' }}
+run-name: Build ${{ inputs.jobname }}${{ inputs.version != '' && format(' (OpenSSL {0})', inputs.version) || '' }}${{ inputs.force == true && ' (force)' || '' }}
 
 # This file only decides which targets to dispatch and on which runner. Every
-# per-target recipe lives in openssl/libstatic/build/targets.sh (on Windows, in
-# windows/build.ps1's own $Targets), because copies here drifted. See BUILD.md.
+# per-target recipe lives in openssl/build/targets.sh (on Windows, the MSVC details
+# in windows/build.ps1's own $Targets), because copies here drifted. See BUILD.md.
+# The version selects the install prefix openssl/<version>/<target>/, so building
+# another version adds a prefix next to the pinned one instead of replacing it.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "OpenSSL release version (default: the pin in build-env.sh)"
+        description: "OpenSSL release version (default: the pin in openssl/VERSION)"
         required: false
         default: ""
       jobname:
@@ -16,14 +18,7 @@ on:
         required: true
         default: "all"
       force:
-        description: "Rebuild and overwrite even if the committed archive already matches this version"
-        required: true
-        default: false
-        type: boolean
-      # Suffixed archives are inert because the makefile and the .vcxproj files
-      # link the unsuffixed names, so staging a copy changes no build.
-      version_suffix:
-        description: "Name the outputs libcrypto-<version>.a / libcrypto64MT-<version>.lib instead of overwriting the standard names"
+        description: "Rebuild and overwrite even if the installed prefix already matches this version"
         required: true
         default: false
         type: boolean
@@ -57,16 +52,17 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
           # One row per unix target, name then runner, with the runner chosen by T_CI.
-          rows=$(for t in $(openssl/libstatic/build/targets.sh --names); do
-                   case "$(openssl/libstatic/build/targets.sh --field "$t" CI)" in
-                     macos) echo "$t macos-latest" ;;
-                     *)     echo "$t ubuntu-24.04" ;;
+          rows=$(for t in $(openssl/build/targets.sh --names); do
+                   case "$(openssl/build/targets.sh --field "$t" CI)" in
+                     macos)   echo "$t macos-latest" ;;
+                     windows) ;;
+                     *)       echo "$t ubuntu-24.04" ;;
                    esac
                  done)
           # Windows names are grepped out of build.ps1's $Targets rather than run,
           # because act's image has no pwsh. consistency.sh check 5 asserts this
-          # parse agrees with `build.ps1 --names-json`.
-          win=$(grep -oE "Name *= *'[^']+'" openssl/libstatic/build/windows/build.ps1 | sed "s/.*'\(.*\)'/\1/")
+          # parse agrees with targets.sh --names windows.
+          win=$(grep -oE "Name *= *'[^']+'" openssl/build/windows/build.ps1 | sed "s/.*'\(.*\)'/\1/")
 
           sel="${{ inputs.jobname }}"
           case "$sel" in
@@ -94,7 +90,6 @@ jobs:
     env:
       BUILDROOT: ${{ github.workspace }}/br
       OPENSSL_VERSION: ${{ needs.resolve.outputs.version }}
-      SFX: ${{ inputs.version_suffix && format('-{0}', needs.resolve.outputs.version) || '' }}
     steps:
       - uses: actions/checkout@v4
       # The same composite action and build.sh serve both runner kinds, because
@@ -104,7 +99,6 @@ jobs:
           target: ${{ matrix.target }}
           version: ${{ needs.resolve.outputs.version }}
           force: ${{ inputs.force }}
-          sfx: ${{ env.SFX }}
       - uses: actions/upload-artifact@v7.0.1
         if: ${{ hashFiles('out/**') != '' && !env.ACT }}
         with: { name: "openssl-${{ matrix.target }}", path: out/ }
@@ -125,7 +119,6 @@ jobs:
     env:
       BUILDROOT: ${{ github.workspace }}\br
       OPENSSL_VERSION: ${{ needs.resolve.outputs.version }}
-      SFX: ${{ inputs.version_suffix && format('-{0}', needs.resolve.outputs.version) || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/setup-nasm@v1
@@ -135,27 +128,26 @@ jobs:
       - name: Fetch the OpenSSL source (URL and sha256 both from env.ps1)
         shell: pwsh
         run: |
-          . openssl/libstatic/build/windows/env.ps1
+          . openssl/build/windows/env.ps1
           New-Item -ItemType Directory -Force -Path $env:BR_DOWNLOADS | Out-Null
           if (-not (Save-BrDownload -Url $script:OpenSslUrl -Path $script:OpenSslTarball -Sha256 (Get-OpenSslSha256))) {
             throw "could not fetch $($script:OpenSslUrl)"
           }
-      # This step only invokes build.ps1, which owns the recipe, the .lib naming
-      # and the version and object-count gates. The force input is irrelevant here
-      # because build.ps1 always rebuilds and the collect step uploads only changes.
+      # This step only invokes build.ps1, which owns the recipe, the prefix layout and
+      # the version gate. The force input is irrelevant here because build.ps1 always
+      # rebuilds and the collect step uploads only changes.
       - name: Build ${{ matrix.target }}
         shell: pwsh
         run: |
-          pwsh -File openssl/libstatic/build/windows/build.ps1 ${{ matrix.target }}
+          pwsh -File openssl/build/windows/build.ps1 ${{ matrix.target }}
           if ($LASTEXITCODE -ne 0) { throw "build.ps1 ${{ matrix.target }} failed" }
       - name: Collect what the build actually changed
         shell: bash
         run: |
           mkdir -p out
-          git status --porcelain -- openssl/libstatic | awk '{print $2}' | while read -r f; do
-            d="out/$(dirname "$f")"; mkdir -p "$d"
-            b=$(basename "$f"); ext="${b##*.}"; stem="${b%.*}"
-            cp "$f" "$d/${stem}${SFX}.${ext}"
+          git status --porcelain -- "openssl/$OPENSSL_VERSION" | awk '{print $2}' | while read -r f; do
+            [ -d "$f" ] && f="$f."
+            mkdir -p "out/$(dirname "$f")"; cp -r "$f" "out/$(dirname "$f")/"
           done
       - uses: actions/upload-artifact@v7.0.1
         if: ${{ hashFiles('out/**') != '' && !env.ACT }}
@@ -168,34 +160,31 @@ jobs:
     needs: [resolve, build, windows]
     if: always()
     runs-on: ubuntu-24.04
-    env:
-      SFX: ${{ inputs.version_suffix && format('-{0}', needs.resolve.outputs.version) || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v7
         with: { path: artifacts }
-      - name: Overlay this run's freshly built archives onto the checkout
+      - name: Overlay this run's freshly built prefixes onto the checkout
         run: |
           # Search rather than assume depth, because download-artifact nests under
           # artifacts/<name>/ with several artifacts but stays flat with one.
-          find artifacts -type d -path '*/openssl/libstatic' -print0 |
-            while IFS= read -r -d '' d; do cp -rf "$d"/. openssl/libstatic/; done
-      - name: Audit every archive - version, object count, libc symbol gates
-        run: openssl/libstatic/verify
+          find artifacts -type d -path '*/out/openssl' -print0 |
+            while IFS= read -r -d '' d; do cp -rf "$d"/. openssl/; done
+      - name: Audit every prefix with the same gates build.sh applied
+        run: openssl/build/verify
       - name: Fail if any dispatched target did not succeed
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
           echo "One or more dispatched targets failed or were cancelled - their archives were NOT" >&2
           echo "regenerated this run, and the overlay step left the old committed archive in place." >&2
           exit 1
-      - name: Fail if a full ('all') rebuild left any archive stale
+      - name: Fail if a full ('all') rebuild left any target without a prefix for this version
         if: inputs.jobname == 'all'
         run: |
           fail=0
-          for f in $(find openssl/libstatic -name "libcrypto${SFX}.a"); do
-            strings "$f" | grep -qF "OpenSSL ${{ needs.resolve.outputs.version }} " && continue
-            v=$(strings "$f" | grep -oE 'OpenSSL [0-9]+\.[0-9]+\.[0-9]+[a-z]?' | sort -u | tr '\n' ' ')
-            echo "STALE: $f -> ${v:-none} (expected OpenSSL ${{ needs.resolve.outputs.version }})" >&2
+          for t in $(openssl/build/targets.sh --names); do
+            [ -d "openssl/${{ needs.resolve.outputs.version }}/$t/lib" ] && continue
+            echo "MISSING: openssl/${{ needs.resolve.outputs.version }}/$t was not produced" >&2
             fail=1
           done
           exit $fail
@@ -203,12 +192,13 @@ jobs:
         if: inputs.create_pr
         uses: peter-evans/create-pull-request@v7
         with:
-          add-paths: openssl/libstatic
-          commit-message: "openssl: update static libs to ${{ needs.resolve.outputs.version }} (${{ inputs.jobname }})"
-          title: "openssl: update static libs to ${{ needs.resolve.outputs.version }} (${{ inputs.jobname }})"
+          add-paths: openssl/${{ needs.resolve.outputs.version }}
+          commit-message: "openssl: install prefixes for ${{ needs.resolve.outputs.version }} (${{ inputs.jobname }})"
+          title: "openssl: install prefixes for ${{ needs.resolve.outputs.version }} (${{ inputs.jobname }})"
           body: |
-            Automated rebuild via `${{ github.workflow }}` (jobname=${{ inputs.jobname }}, force=${{ inputs.force }}, version_suffix=${{ inputs.version_suffix }}).
+            Automated rebuild via `${{ github.workflow }}` (jobname=${{ inputs.jobname }}, force=${{ inputs.force }}).
+            The prefixes land under openssl/${{ needs.resolve.outputs.version }}/. Switching the agent to them is a separate edit of openssl/VERSION.
 
-            No pull request is opened if the rebuilt archives are byte-identical to what is already committed.
-          branch: openssl-update-${{ needs.resolve.outputs.version }}-${{ inputs.jobname }}${{ inputs.version_suffix == true && '-suffixed' || '' }}
+            No pull request is opened if the rebuilt prefixes are byte-identical to what is already committed.
+          branch: openssl-update-${{ needs.resolve.outputs.version }}-${{ inputs.jobname }}
           base: ${{ github.ref_name }}

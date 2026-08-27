@@ -1,7 +1,7 @@
 #!/bin/bash
 # Fetches, verifies and extracts every toolchain, sysroot and source that has a stable
 # public URL into $BUILDROOT, and prints manual instructions for the rest. It lives at the
-# repo root because it also wires the OpenWrt toolchains for ARCHID 28 and 40. See openssl/libstatic/build/README.md.
+# repo root because it also wires the OpenWrt toolchains for ARCHID 28 and 40. See openssl/build/README.md.
 #
 #   ./fetch-toolchains.sh                   # everything fetchable
 #   ./fetch-toolchains.sh list              # show status, fetch nothing

@@ -1,13 +1,12 @@
 name: Build system checks
 run-name: Anti-drift gate + committed archive audit
 
-# Replaces verify-openssl-libs.yml. It runs on any build-system file change,
-# because the old path filter named a single workflow and edits to the other
-# seven openssl workflows skipped the audit entirely.
+# Runs on any build-system file change. The OpenSSL prefixes under openssl/<version>/
+# are audited by openssl/build/verify, the drift gate is openssl/build/consistency.sh.
 on:
   push:
     paths:
-      - 'openssl/libstatic/**'
+      - 'openssl/**'
       - 'build-env.sh'
       - 'fetch-toolchains.sh'
       - 'build-toolchain-archives.sh'
@@ -23,7 +22,7 @@ on:
       - '.github/actions/**'
   pull_request:
     paths:
-      - 'openssl/libstatic/**'
+      - 'openssl/**'
       - 'build-env.sh'
       - 'fetch-toolchains.sh'
       - 'build-toolchain-archives.sh'
@@ -45,7 +44,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: openssl/libstatic/build/consistency.sh
+      - run: openssl/build/consistency.sh
 
   vsprojects:
     name: Visual Studio projects and filters agree
@@ -55,11 +54,11 @@ jobs:
       - run: ./check-vsprojects.sh
 
   verify-archives:
-    name: Audit committed libcrypto.a/libssl.a
+    name: Audit every committed OpenSSL prefix
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: openssl/libstatic/verify
+      - run: openssl/build/verify
 
   shellcheck:
     name: Build scripts parse
@@ -71,7 +70,7 @@ jobs:
           rc=0
           for f in build-env.sh fetch-toolchains.sh build-toolchain-archives.sh \
                    build-bsd-sysroot-archives.sh check-vsprojects.sh \
-                   openssl/libstatic/verify openssl/libstatic/build/*.sh; do
+                   openssl/build/verify openssl/build/*.sh; do
             bash -n "$f" || { echo "::error file=$f::syntax error"; rc=1; }
           done
           exit $rc

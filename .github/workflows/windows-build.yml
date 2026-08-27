@@ -38,7 +38,7 @@ jobs:
     - name: Check OpenSSL archives against the ${{ matrix.toolset }} toolset
       # Fails the build only for a wrong machine type, a wrong CRT or an LTCG mismatch.
       shell: pwsh
-      run: openssl/libstatic/build/windows/toolset-check.ps1 -Platform ${{ matrix.platform }} -Toolset ${{ matrix.toolset }}
+      run: openssl/build/windows/toolset-check.ps1 -Platform ${{ matrix.platform }} -Toolset ${{ matrix.toolset }}
     - name: Build ${{ matrix.platform }} ${{ env.CONFIGURATION }} (${{ matrix.toolset }})
       run: msbuild MeshAgent-2022.sln /p:Configuration=${{ env.CONFIGURATION }} /p:Platform=${{ matrix.platform }} /p:MeshToolset=${{ matrix.toolset }}
     - name: Upload ${{ matrix.platform }} artifacts

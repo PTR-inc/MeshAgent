@@ -6,14 +6,20 @@
   <PropertyGroup>
     <MeshTargetSuffix Condition="'$(Platform)'=='x64'">64</MeshTargetSuffix>
     <MeshTargetSuffix Condition="'$(Platform)'=='ARM64'">ARM64</MeshTargetSuffix>
-    <MeshOpenSSLSuffix Condition="'$(Platform)'=='Win32'">32</MeshOpenSSLSuffix>
-    <MeshOpenSSLSuffix Condition="'$(Platform)'=='x64'">64</MeshOpenSSLSuffix>
-    <MeshOpenSSLSuffix Condition="'$(Platform)'=='ARM64'">ARM64</MeshOpenSSLSuffix>
-    <MeshCrtSuffix Condition="'$(MeshDebug)'=='true'">d</MeshCrtSuffix>
+    <!-- The OpenSSL prefix this build links: openssl\<version>\windows-<platform>[-debug]\ with
+         include\ and lib\ inside, the layout openssl/build/targets.sh names. openssl\VERSION is the
+         one pin; /p:MeshOpenSSLVersion=3.x.y selects another installed prefix. -->
+    <MeshOpenSSLVersion Condition="'$(MeshOpenSSLVersion)'==''">$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)openssl\VERSION').Trim())</MeshOpenSSLVersion>
+    <MeshOpenSSLPlatform Condition="'$(Platform)'=='Win32'">x86</MeshOpenSSLPlatform>
+    <MeshOpenSSLPlatform Condition="'$(Platform)'=='x64'">x64</MeshOpenSSLPlatform>
+    <MeshOpenSSLPlatform Condition="'$(Platform)'=='ARM64'">arm64</MeshOpenSSLPlatform>
+    <MeshOpenSSLTarget>windows-$(MeshOpenSSLPlatform)</MeshOpenSSLTarget>
+    <MeshOpenSSLTarget Condition="'$(MeshDebug)'=='true'">windows-$(MeshOpenSSLPlatform)-debug</MeshOpenSSLTarget>
+    <MeshOpenSSLDir>$(MSBuildThisFileDirectory)openssl\$(MeshOpenSSLVersion)\</MeshOpenSSLDir>
+    <MeshOpenSSLPrefix>$(MeshOpenSSLDir)$(MeshOpenSSLTarget)\</MeshOpenSSLPrefix>
     <MeshAgentId Condition="'$(Platform)'=='Win32'">$(MeshAgentIdWin32)</MeshAgentId>
     <MeshAgentId Condition="'$(Platform)'=='x64'">$(MeshAgentIdx64)</MeshAgentId>
     <MeshAgentId Condition="'$(Platform)'=='ARM64'">$(MeshAgentIdARM64)</MeshAgentId>
-    <MeshOpenSSLLibDir>..\openssl\libstatic\windows\</MeshOpenSSLLibDir>
 
     <!-- Mirrors the makefile's build/<arch>/ output directory. Anchored on this file, not on
          $(SolutionDir), which resolves to the project folder when a .vcxproj is built alone. -->
@@ -33,7 +39,7 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <ControlFlowGuard>Guard</ControlFlowGuard>
-      <AdditionalIncludeDirectories>..\openssl\include;..\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MeshOpenSSLPrefix)include;$(MeshOpenSSLDir)include;..\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>MESH_AGENTID=$(MeshAgentId);WIN32;WINSOCK2;_WINSOCK_DEPRECATED_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CONSOLE;MICROSTACK_NO_STDAFX;MICROSTACK_PROXY;MICROSTACK_TLS_DETECT;NOLMSCOMMANDER;_LINKVM;_REMOTELOGGING;_REMOTELOGGINGSERVER;ILibChain_WATCHDOG_TIMEOUT=600000;DUK_USE_DATE_NOW_WINDOWS;DUK_USE_DEBUGGER_SUPPORT;DUK_USE_INTERRUPT_COUNTER;DUK_USE_DEBUGGER_INSPECT;DUK_USE_DEBUGGER_PAUSE_UNCAUGHT;DUK_USE_DEBUGGER_DUMPHEAP;_MSC_PLATFORM_TOOLSET_$(PlatformToolset);$(MeshProjectDefines);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Platform)'!='Win32'">WIN64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Platform)'=='ARM64'">ARM64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -42,7 +48,7 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalOptions>/ignore:4099 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalDependencies>Ncrypt.lib;$(MeshOpenSSLLibDir)libcrypto$(MeshOpenSSLSuffix)MT$(MeshCrtSuffix).lib;$(MeshOpenSSLLibDir)libssl$(MeshOpenSSLSuffix)MT$(MeshCrtSuffix).lib;SetupAPI.lib;Crypt32.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;ws2_32.lib;$(MeshProjectLibs);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Ncrypt.lib;$(MeshOpenSSLPrefix)lib\libcrypto.lib;$(MeshOpenSSLPrefix)lib\libssl.lib;SetupAPI.lib;Crypt32.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;ws2_32.lib;$(MeshProjectLibs);%(AdditionalDependencies)</AdditionalDependencies>
       <!-- Oldest supported Windows is 7 SP1. ARM64 Windows starts at 10, so the linker refuses 6.01 there. -->
       <MinimumRequiredVersion Condition="'$(Platform)'!='ARM64'">6.01</MinimumRequiredVersion>
       <CETCompat Condition="'$(Platform)'=='x64'">true</CETCompat>

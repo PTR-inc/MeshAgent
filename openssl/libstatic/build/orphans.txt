@@ -1,6 +1,0 @@
-# Archive directories under openssl/libstatic/ that no targets.sh target builds and no makefile
-# ARCHID links. They are kept as historical artifacts and listed here, one per line, so that
-# `verify` passes on them while still failing on any new orphan. To retire one, delete its line and the directory.
-linux/arm2      # 1.1.1g, 600 objs - predates the current target table
-linux/armhf2    # 1.1.1c, 601 objs - superseded by armhf (see targets.sh's armhf note)
-linux/poky      # 1.1.1i, 600 objs - Intel Galileo/Yocto 1.6.1, EOL 2016 (targets.sh 'poky' is disabled)

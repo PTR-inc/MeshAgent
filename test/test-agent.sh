@@ -3,7 +3,7 @@
 # MeshAgent combined test driver.
 #
 # The single entry point for automated agent testing. Runs these phases, in order, against one binary:
-#   1. -info sanity banner (version, ARCHID, OpenSSL)
+#   1. -info sanity banner (version, ARCHID, OpenSSL), and the linked OpenSSL must be openssl/VERSION
 #   2. test/stress-test.js, every testmodule except 06-*   must pass
 #   3. test/stress-test.js, the 06-* sections only          known native crashes (TLS reconnect,
 #                                                           WebSocket teardown)
@@ -431,7 +431,17 @@ head2 "[1/7] agent -info"
 OUT="$TMPDIR_RUN/info.log"
 run_cmd $((20*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" -info; RC=$?
 emit "$OUT" 20
-if [ $RC -eq 0 ]; then record "agent -info" PASS
+if [ $RC -eq 0 ]; then
+    record "agent -info" PASS
+    # OpenSSL's own headers-match-library test, done here instead of as a startup abort: the
+    # version the linked libcrypto reports must be the prefix version, openssl/VERSION unless
+    # OSSLVER was passed to make. A mismatch means the agent was linked against another prefix.
+    WANT_OSSL="${OSSLVER:-$(tr -d '[:space:]' < openssl/VERSION 2>/dev/null)}"
+    GOT_OSSL="$(grep -oE 'Using OpenSSL [0-9]+\.[0-9]+\.[0-9]+[a-z]?' "$OUT" | head -1 | cut -c15-)"
+    if [ -z "$WANT_OSSL" ]; then say "  (no openssl/VERSION to compare the linked OpenSSL against)"
+    elif [ -z "$GOT_OSSL" ]; then record "openssl version" SKIP "-info printed no 'Using OpenSSL' line (NOTLS build?)"
+    elif [ "$GOT_OSSL" = "$WANT_OSSL" ]; then record "openssl version" PASS
+    else record "openssl version" FAIL "agent links OpenSSL $GOT_OSSL, openssl/VERSION pins $WANT_OSSL (pass OSSLVER=$GOT_OSSL if that was intended)"; fi
 else
     # Only reachable with an explicit --qemu. The auto path probes and retries CPU models itself.
     if [ $RC -eq 132 ] && [ -n "$QEMU" ]; then

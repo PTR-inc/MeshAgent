@@ -128,7 +128,7 @@ STRIP = strip
 HOSTPATH := $(PATH)
 
 # Kept separate because dependency generation needs the include directories on their own.
-INCDIRS = -I. -Iopenssl/include -Ilib-jpeg-turbo/includes -Imicrostack -Imicroscript -Imeshcore -Imeshconsole
+INCDIRS = -I. $(OSSLINC) -Ilib-jpeg-turbo/includes -Imicrostack -Imicroscript -Imeshcore -Imeshconsole
 
 # WARN=1 shows compiler and linker warnings, and by default they are suppressed. -w is
 # understood by gcc, clang and GNU ld, so one flag covers both compiling and linking.
@@ -182,8 +182,9 @@ PATH_RISCV32_MUSL = ../ToolChains/riscv32-linux-musl-cross/
 
 # ----------------------------------------------------------------------------
 # Target table, one block per ARCHID, sorted. ARCHNAME is the only required field.
-#   ARCHNAME  binary suffix, and also the openssl and jpeg archive directory unless OSSLARCH is set
-#   OSSLARCH  archive directory when it differs from ARCHNAME
+#   ARCHNAME  binary suffix, and also the jpeg archive directory
+#   OSSLTARGET the openssl/build/targets.sh target whose prefix openssl/$(OSSLVER)/<target>/ this links
+#   OSSLVER   optional, pins this target to another installed OpenSSL series than openssl/VERSION
 #   CLASS     one of generic, openwrt, vendor, native, bsd or macos (used by make list-archs)
 #   XDIR      SDK root, from which PATH, STAGING_DIR, CC, STRIP and INCDIRS are derived
 #   XPREFIX   gcc and strip prefix inside $(XDIR)bin/. XSTRIP overrides it for strip only
@@ -200,6 +201,7 @@ PATH_RISCV32_MUSL = ../ToolChains/riscv32-linux-musl-cross/
 # would be lower still but has no working toolchain source. See ISSUES.md.
 define ARCH_5
   ARCHNAME = x86
+  OSSLTARGET = linux-i686-glibc
   CLASS    = generic
   XDIR     = $(PATH_X86)
   XPREFIX  = i686-linux-
@@ -213,6 +215,7 @@ endef
 # TUNE resets -march=core-i7 back to generic because this target must not inherit it.
 define ARCH_6
   ARCHNAME = x86-64
+  OSSLTARGET = linux-x86_64-glibc
   CLASS    = generic
   XDIR     = $(PATH_X86_64)
   XPREFIX  = x86_64-linux-
@@ -228,7 +231,7 @@ endef
 # archive was built with. See ISSUES.md.
 define ARCH_7
   ARCHNAME = mips
-  OSSLARCH = mipsel
+  OSSLTARGET = linux-mipsel-uclibc
   CLASS    = vendor
   XDIR     = $(PATH_MIPS)
   XPREFIX  = mipsel-linux-
@@ -248,6 +251,7 @@ endef
 # floor is GLIBC_2.34. Its binutils 2.33.1 handles hardening fine, so HARDEN=basic.
 define ARCH_9
   ARCHNAME = arm
+  OSSLTARGET = linux-armv5-glibc
   CLASS    = generic
   XDIR     = $(PATH_ARM5)
   XPREFIX  = arm-linux-
@@ -264,6 +268,7 @@ endef
 # because osxcross ships no compiler-rt for ___isPlatformVersionAtLeast. See ISSUES.md.
 define ARCH_16
   ARCHNAME = osx-x86-64
+  OSSLTARGET = macos-x86_64
   CLASS    = macos
   OSXARCH  = x86_64
   MACOSARCH = -mmacosx-version-min=10.15
@@ -276,6 +281,7 @@ endef
 # Same toolchain as ARCH_5, see there.
 define ARCH_19
   ARCHNAME = x86
+  OSSLTARGET = linux-i686-glibc
   CLASS    = generic
   XDIR     = $(PATH_X86)
   XPREFIX  = i686-linux-
@@ -289,6 +295,7 @@ endef
 # Same toolchain as ARCH_6, see there.
 define ARCH_20
   ARCHNAME = x86-64
+  OSSLTARGET = linux-x86_64-glibc
   CLASS    = generic
   XDIR     = $(PATH_X86_64)
   XPREFIX  = x86_64-linux-
@@ -304,6 +311,7 @@ endef
 # whose floor is GLIBC_2.34. See ISSUES.md.
 define ARCH_24
   ARCHNAME = arm-linaro
+  OSSLTARGET = linux-armv7hf-glibc
   CLASS    = generic
   XDIR     = $(PATH_LINARO)
   XPREFIX  = arm-linux-
@@ -318,6 +326,7 @@ endef
 # Cross-compiles by default. CROSS=0 builds natively on the Pi instead. See BUILD.md.
 define ARCH_25
   ARCHNAME = armhf
+  OSSLTARGET = linux-armv6hf-glibc
   CLASS    = generic
   CC       = arm-linux-gnueabihf-gcc
   STRIP    = arm-linux-gnueabihf-strip
@@ -332,6 +341,7 @@ endef
 # builds from any machine. See ISSUES.md.
 define ARCH_26
   ARCHNAME = arm64
+  OSSLTARGET = linux-aarch64-glibc
   CLASS    = generic
   CC       = aarch64-linux-gnu-gcc
   STRIP    = aarch64-linux-gnu-strip
@@ -343,6 +353,7 @@ endef
 
 define ARCH_28
   ARCHNAME = mips24kc
+  OSSLTARGET = linux-mips-musl
   CLASS    = openwrt
   XDIR     = $(PATH_MIPS24KC)
   XPREFIX  = mips-openwrt-linux-musl-
@@ -361,6 +372,7 @@ endef
 # already fix the target, so the version floor is all that is left to state.
 define ARCH_29
   ARCHNAME = osx-arm-64
+  OSSLTARGET = macos-arm64
   CLASS    = macos
   OSXARCH  = arm64
   MACOSARCH = -mmacosx-version-min=11.0
@@ -372,6 +384,7 @@ endef
 
 define ARCH_30
   ARCHNAME = freebsd_x86-64
+  OSSLTARGET = freebsd-x86_64
   CLASS    = bsd
   CC       = clang
   CFLAGS  += -I/usr/local/include
@@ -385,6 +398,7 @@ endef
 # which matches the toolchain the OpenSSL archive was built with. See ISSUES.md.
 define ARCH_32
   ARCHNAME = aarch64
+  OSSLTARGET = linux-aarch64-glibc
   CLASS    = generic
   XDIR     = $(PATH_AARCH64)
   XPREFIX  = aarch64-linux-
@@ -400,6 +414,7 @@ endef
 # /usr/include/asm and its headers conflict with glibc's own.
 define ARCH_33
   ARCHNAME = alpine-x86-64
+  OSSLTARGET = linux-x86_64-musl
   CLASS    = generic
   XDIR     = $(PATH_X86_64_MUSL)
   XPREFIX  = x86_64-linux-musl-
@@ -415,6 +430,7 @@ endef
 # See ISSUES.md.
 define ARCH_35
   ARCHNAME = linux-armada370-hf
+  OSSLTARGET = linux-armv7hf-musl
   CLASS    = vendor
   XDIR     = $(PATH_ARMADA370_HF)
   XPREFIX  = arm-linux-musleabihf-
@@ -432,6 +448,7 @@ endef
 
 define ARCH_36
   ARCHNAME = openwrt_x86_64
+  OSSLTARGET = linux-x86_64-musl
   CLASS    = openwrt
   XDIR     = $(PATH_OPENWRT_X86_64)
   XPREFIX  = x86_64-openwrt-linux-musl-
@@ -446,6 +463,7 @@ endef
 
 define ARCH_37
   ARCHNAME = openbsd_x86-64
+  OSSLTARGET = openbsd-x86_64
   CLASS    = bsd
   CC       = clang
   CFLAGS  += -I/usr/local/include
@@ -457,6 +475,7 @@ endef
 
 define ARCH_40
   ARCHNAME = mipsel24kc
+  OSSLTARGET = linux-mipsel-musl
   CLASS    = openwrt
   XDIR     = $(PATH_MIPSEL24KC)
   XPREFIX  = mipsel-openwrt-linux-musl-
@@ -471,6 +490,7 @@ endef
 
 define ARCH_41
   ARCHNAME = aarch64-cortex-a53
+  OSSLTARGET = linux-aarch64-musl
   CLASS    = openwrt
   XDIR     = $(PATH_AARCH64_CORTEXA53)
   XPREFIX  = aarch64-openwrt-linux-
@@ -485,6 +505,7 @@ endef
 # Build with ARCHID=44 OBSOLETE_OK=1 to attempt it anyway.
 define ARCH_44
   ARCHNAME = armvirt32
+  OSSLTARGET =
   CLASS    = openwrt
   XDIR     = $(PATH_OPENWRT_ARMVIRT32)
   XPREFIX  = arm-openwrt-linux-
@@ -500,9 +521,10 @@ endef
 
 # The original ARCHID=45 target, restored as it was before commit a4ce0e3 swapped it for a
 # generic build (that build is ARCH_145 below). It needs the T-Head Xuantie C906 vendor musl
-# SDK at PATH_RISCV64. The openssl/libstatic/linux/riscv64 archive is now generic rv64gc. See ISSUES.md.
+# SDK at PATH_RISCV64. Its OpenSSL archive is the generic rv64gc one. See ISSUES.md.
 define ARCH_45
   ARCHNAME = riscv64
+  OSSLTARGET = linux-riscv64-musl
   CLASS    = vendor
   XDIR     = $(PATH_RISCV64)
   XPREFIX  = riscv64-unknown-linux-musl-
@@ -522,7 +544,7 @@ endef
 # (see SERVER_ARCHID) as the updated 45. Its toolchain and OpenSSL archive agree. See ISSUES.md.
 define ARCH_145
   ARCHNAME = riscv64-generic-musl
-  OSSLARCH = riscv64
+  OSSLTARGET = linux-riscv64-musl
   CLASS    = generic
   XDIR     = $(PATH_RISCV64_MUSL)
   XPREFIX  = riscv64-linux-musl-
@@ -540,6 +562,7 @@ endef
 # older device's identity for compatibility. See ISSUES.md.
 define ARCH_46
   ARCHNAME = riscv64-generic
+  OSSLTARGET = linux-riscv64-musl
   CLASS    = generic
   XDIR     = $(PATH_RISCV64_MUSL)
   XPREFIX  = riscv64-linux-musl-
@@ -561,6 +584,7 @@ endef
 # was pointed out and approved before it was built. See ISSUES.md.
 define ARCH_47
   ARCHNAME = riscv32-generic
+  OSSLTARGET = linux-riscv32-musl
   CLASS    = generic
   XDIR     = $(PATH_RISCV32_MUSL)
   XPREFIX  = riscv32-linux-musl-
@@ -621,7 +645,13 @@ endif
 endif
 
 # ---- derived from the target block above ----------------------------------
-OSSLARCH ?= $(ARCHNAME)
+# openssl/VERSION is the default. An ARCH_ block may set OSSLVER to pin one target to another
+# installed series, for a staged migration. `make ARCHID=n OSSLVER=3.x.y` beats both, but an
+# OSSLVER environment variable only beats the file, never a block, as make's own rules go.
+# The per-target include dir comes first so its generated opensslconf.h is the one found.
+OSSLVER ?= $(shell tr -d '[:space:]' < openssl/VERSION)
+OSSLPREFIX = openssl/$(OSSLVER)/$(OSSLTARGET)
+OSSLINC = -I$(OSSLPREFIX)/include -Iopenssl/$(OSSLVER)/include
 
 # Optional glibc floor pin, for example `make ARCHID=9 GLIBCVER=2.28`. It repoints XDIR at the
 # version-specific alias that fetch-toolchains.sh creates, for the Bootlin glibc targets only.
@@ -713,7 +743,7 @@ elif [ -n "$(APTPKG)" ]; then \
   command -v "$$cc" >/dev/null 2>&1 || [ -x "$$cc" ] || \
     { echo "  installed, but $$cc is still not there - check the ARCH_$(ARCHID) block"; exit 1; }; \
 else \
-  echo "  no automated source for this toolchain - see openssl/libstatic/build/README.md"; exit 1; \
+  echo "  no automated source for this toolchain - see openssl/build/README.md"; exit 1; \
 fi
 endef
 
@@ -783,10 +813,9 @@ LINUXSSL =
 MACSSL =
 BSDSSL =
 else
-OSSLARCH ?= $(ARCHNAME)
-LINUXSSL = -Lopenssl/libstatic/linux/$(OSSLARCH)
-MACSSL = -Lopenssl/libstatic/macos/$(ARCHNAME)
-BSDSSL = -Lopenssl/libstatic/bsd/$(ARCHNAME)
+LINUXSSL = -L$(OSSLPREFIX)/lib
+MACSSL = -L$(OSSLPREFIX)/lib
+BSDSSL = -L$(OSSLPREFIX)/lib
 CFLAGS += -DMICROSTACK_TLS_DETECT
 # -lpthread is repeated after -lcrypto because static link order matters, and glibc 2.24
 # (ARCHID 5, 6, 19 and 20) needs pthread_atfork resolved after libcrypto pulls it in.
@@ -904,7 +933,7 @@ $(shell git log -1 --format=%H | awk '{ printf "#define SOURCE_COMMIT_HASH \"%s\
 endif
 endif
 
-.PHONY: all clean cleanbin list list-archs print-toolchain print-ossldir print-bsdrel print-macosarch print-archids
+.PHONY: all clean cleanbin list list-archs print-toolchain print-ossldir print-ossltarget print-osslver print-bsdrel print-macosarch print-archids
 
 # The OS recipes re-invoke make with EXENAME= and the full per-target CFLAGS, and that inner make
 # is the only one meant to reach the compile rules. A bare `make ARCHID=n` used to fall into them
@@ -951,12 +980,19 @@ print-archids:
 	@echo
 
 # Machine-readable single-target probes. print-toolchain gives the loop above what it needs, and
-# print-ossldir gives the openssl/libstatic/ directory this target links, for the OpenSSL build.sh list.
+# print-ossltarget names the targets.sh target this ARCHID links, print-osslver the OpenSSL
+# series it resolved to, and print-ossldir the prefix made of both.
 print-toolchain:
 	@echo '$(CCBIN)|$(FETCH)|$(APTPKG)|$(HOST)|$(HOSTOK)'
 
+print-ossltarget:
+	@echo '$(OSSLTARGET)'
+
+print-osslver:
+	@echo '$(OSSLVER)'
+
 print-ossldir:
-	@echo '$(if $(filter macos,$(CLASS)),macos/$(ARCHNAME),$(if $(filter bsd,$(CLASS)),bsd/$(ARCHNAME),linux/$(OSSLARCH)))'
+	@echo '$(OSSLPREFIX)'
 
 # The OS release a bsd target cross-builds against. CI reads this to pick the matching sysroot
 # tarball, so the release lives in one place, the target block.
