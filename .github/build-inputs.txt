@@ -1,0 +1,43 @@
+# What each platform's agent binaries are built from, the OS they target rather than the CI
+# runner. build.yml's `changes` job runs .github/scripts/build-changes.sh over the files a push
+# or pull request touched and starts only the platforms that match. One "platform: glob" per
+# line. `*` does not cross a `/`, `**` does, `**/` also matches no directory. "all" is every
+# platform. consistency.sh check 8 asserts the makefile's source trees and every OpenSSL target
+# are listed here.
+
+# Shared by every agent binary
+all: makefile
+all: build-env.sh
+all: fetch-toolchains.sh
+all: meshconsole/**
+all: meshcore/**
+all: microscript/**
+all: microstack/**
+all: openssl/VERSION
+all: openssl/*/include/**
+
+# Per platform: the OpenSSL archives it links, plus what only it consumes
+linux: lib-jpeg-turbo/**
+linux: openssl/*/linux-*/**
+macos: lib-jpeg-turbo/**
+macos: openssl/*/macos-*/**
+macos: test/**
+freebsd: lib-jpeg-turbo/**
+freebsd: openssl/*/freebsd-*/**
+openbsd: lib-jpeg-turbo/**
+openbsd: openssl/*/openbsd-*/**
+windows: meshservice/**
+windows: *.sln
+windows: **/*.vcxproj
+windows: **/*.vcxproj.filters
+windows: **/*.props
+windows: openssl/*/windows-*/**
+windows: openssl/build/windows/toolset-check.ps1
+
+
+# A platform's own workflow file counts as one of its inputs
+linux: .github/workflows/linux-build.yml
+macos: .github/workflows/mac-build.yml
+freebsd: .github/workflows/freebsd-build.yml
+openbsd: .github/workflows/openbsd-build.yml
+windows: .github/workflows/windows-build.yml

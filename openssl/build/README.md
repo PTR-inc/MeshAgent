@@ -185,7 +185,7 @@ survive a second OpenSSL version. Everything it proved is now checked directly. 
 the macOS archives count 564 and 576 members here, the old 565 and 577 were GNU `ar` miscounting
 the Mach-O `__.SYMDEF` pseudo-member.
 
-`consistency.sh` is the other gate, read-only and about drift rather than archives. Its seven
+`consistency.sh` is the other gate, read-only and about drift rather than archives. Its eight
 checks are listed in BUILD.md. The ones that touch this layout: every prefix directory is a
 target, the pinned version is installed, every non-obsolete ARCHID's `OSSLTARGET` is a known and
 installed target, `build.ps1`'s `$Targets` names equal `targets.sh --names windows`, the shared
@@ -320,8 +320,9 @@ nothing here calls. Today gates 6 and 12 catch this class at build time.
 gate and every archive gate are `build.sh`'s. The action collects `out/openssl/<version>/<target>`
 plus `include/` when the version is new. The Windows job calls `build.ps1`. `verify-summary`
 overlays the fresh prefixes on the checkout and runs `verify` over all of them.
-`build-system-checks.yml` runs `consistency.sh`, `verify` and `bash -n` on every script for any
-change under `openssl/**` or the build files. Rules for what may and may not be written into a
+`build-system-checks.yml` runs `consistency.sh`, `verify` and `bash -n` on every script; on any
+change under `openssl/**` or the build files pushed to master (its own path list, since it is
+no platform of `build.yml`). Rules for what may and may not be written into a
 workflow are in BUILD.md.
 
 ## Windows build (native, PowerShell)

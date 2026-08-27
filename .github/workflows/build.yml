@@ -1,0 +1,87 @@
+name: Build Meshagent
+run-name: Build MeshAgent (${{ github.event_name }})
+
+# The one entry point for CI on master. The `changes` job maps the files a push or pull request
+# touched to platforms through .github/build-inputs.txt, and only those platforms run. The
+# platform workflows below have no push trigger of their own, so nothing bypasses this gate.
+# A manual run, or a push whose parent is unknown, runs every platform.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Space-separated platforms to run (empty: all). See .github/build-inputs.txt"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Which platforms did this change touch
+    runs-on: ubuntu-24.04
+    outputs:
+      platforms: ${{ steps.sel.outputs.platforms }}
+      linux:    ${{ contains(steps.sel.outputs.platforms, ' linux ') }}
+      macos:    ${{ contains(steps.sel.outputs.platforms, ' macos ') }}
+      windows:  ${{ contains(steps.sel.outputs.platforms, ' windows ') }}
+      freebsd:  ${{ contains(steps.sel.outputs.platforms, ' freebsd ') }}
+      openbsd:  ${{ contains(steps.sel.outputs.platforms, ' openbsd ') }}
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - id: sel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          WANT: ${{ inputs.platforms }}
+        run: |
+          set -euo pipefail
+          sel=.github/scripts/build-changes.sh
+          if [ "$EVENT" = workflow_dispatch ]; then
+            platforms=${WANT:-$($sel --list | tr '\n' ' ')}
+          elif [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
+            echo "no parent commit to compare against, running everything"
+            platforms=$($sel --list | tr '\n' ' ')
+          else
+            # The compare API needs no history in the checkout, which is 400 MB of archives.
+            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$BASE...$HEAD" --jq '.files[].filename')
+            printf '%s\n' "$files" | sed 's/^/  changed: /'
+            platforms=$(printf '%s\n' "$files" | $sel | tr '\n' ' ')
+          fi
+          echo "platforms: ${platforms:-(none)}"
+          echo "platforms= $platforms " >> "$GITHUB_OUTPUT"
+
+
+  linux:
+    needs: changes
+    if: needs.changes.outputs.linux == 'true'
+    uses: ./.github/workflows/linux-build.yml
+
+  macos:
+    needs: changes
+    if: needs.changes.outputs.macos == 'true'
+    uses: ./.github/workflows/mac-build.yml
+
+  windows:
+    needs: changes
+    if: needs.changes.outputs.windows == 'true'
+    uses: ./.github/workflows/windows-build.yml
+    with:
+      configuration: Release
+
+  freebsd:
+    needs: changes
+    if: needs.changes.outputs.freebsd == 'true'
+    uses: ./.github/workflows/freebsd-build.yml
+
+  openbsd:
+    needs: changes
+    if: needs.changes.outputs.openbsd == 'true'
+    uses: ./.github/workflows/openbsd-build.yml
+

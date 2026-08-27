@@ -1,8 +1,9 @@
-name: FreeBSD Build
+name: FreeBSD Builder
 run-name: Build FreeBSD versions of MeshAgent
-# Manual only for now: a BSD build takes long enough that it should not run on every push
-# while other platforms are being tested. Run it from the Actions tab or with `gh workflow run`.
+# Started by build.yml when a push to master touches one of this platform's inputs, which are
+# listed in .github/build-inputs.txt. Run it alone from the Actions tab with workflow_dispatch.
 on:
+  workflow_call:
   workflow_dispatch:
 
 jobs:

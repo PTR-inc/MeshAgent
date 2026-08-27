@@ -27,7 +27,7 @@ In this pull request, the following changes are made:
 - [ ] 🤖 I ran the agent self-test where appropriate (see "Self Test" in [readme.md](../readme.md)).
 - [ ] 📄 Documentation updates are included (if applicable), e.g. the `.msh` options table in [readme.md](../readme.md).
 - [ ] 🧰 Updates to vendored dependencies (OpenSSL, zlib, ...) are listed and explained.
-- [ ] ⚠️ CI passes and is green (Windows / Linux / macOS / FreeBSD builds and CodeQL).
+- [ ] ⚠️ CI passes and is green (Build system checks, the Build platforms Linux / macOS / Windows / FreeBSD / OpenBSD, and CodeQL).
 
 </details>
 

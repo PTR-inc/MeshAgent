@@ -106,6 +106,43 @@ for d in openssl/$OPENSSL_VERSION/*/; do
 done
 [ $rc -eq 0 ] && ok "every prefix carries its generated opensslconf.h"
 
+echo "== 8. build.yml is the only push trigger and build-inputs.txt covers every input ="
+SEL=.github/scripts/build-changes.sh
+if [ -x "$SEL" ]; then
+    bad=0
+    # Every tree the makefile compiles or includes from must select at least one build platform.
+    trees=$( { grep -E '^(SOURCES|[A-Z]+KVMSOURCES) *\+?= ' makefile | sed 's/^[^=]*= *//' | tr ' ' '\n' | grep -oE '^[a-z][a-z0-9_-]*/' ; \
+               grep -oE '^INCDIRS *\+?= *.*' makefile | grep -oE '\-I[a-z][a-z0-9_-]*/?' | sed 's/^-I//; s#/*$#/#' ; } | sort -u)
+    for d in $trees; do
+        platforms=$(printf '%s\n' "${d}x.c" | "$SEL" || true)
+        [ -n "$platforms" ] || { fail "the makefile compiles from $d but no platform in .github/build-inputs.txt lists it"; bad=1; }
+    done
+    # Every OpenSSL target's prefix must select the platform that links it, and only that one.
+    for t in $BR_ALL_TARGETS; do
+        platforms=$(printf '%s\n' "openssl/$OPENSSL_VERSION/$t/lib/libcrypto.a" | "$SEL" | tr '\n' ' ')
+        case "$t" in
+            linux-*)   want=linux ;; macos-*) want=macos ;; windows-*) want=windows ;;
+            freebsd-*) want=freebsd ;; openbsd-*) want=openbsd ;;
+        esac
+        case " $platforms" in *" $want "*) ;; *) fail "openssl/<version>/$t/ does not start the $want platform (got '${platforms:-nothing}')"; bad=1 ;; esac
+    done
+    # Only build.yml may react to a push or pull request, and it must call every platform.
+    for w in .github/workflows/*.yml; do
+        # Not platforms: the anti-drift gate lists its own inputs, code scanning runs on every master push.
+        case "$w" in .github/workflows/build.yml|.github/workflows/build-system-checks.yml|.github/workflows/codeql-analysis.yml) continue ;; esac
+        sed -n '/^on:/,/^[a-z]/p' "$w" | grep -qE '^  (push|pull_request):' && { fail "$w has its own push or pull_request trigger, only build.yml may"; bad=1; }
+    done
+    for f in $("$SEL" --list); do
+        grep -qE "^  $f:" .github/workflows/build.yml || { fail "platform $f is in build-inputs.txt but build.yml has no job for it"; bad=1; }
+    done
+    for u in $(grep -oE 'uses: \./\.github/workflows/[^ ]+' .github/workflows/build.yml | sed 's/uses: \.\///'); do
+        [ -f "$u" ] || { fail "build.yml calls $u, which does not exist"; bad=1; }
+    done
+    [ $bad -eq 0 ] && ok "$(echo $trees | wc -w) source trees and $(echo $BR_ALL_TARGETS | wc -w) targets map to a platform, build.yml is the only push trigger"
+else
+    fail "$SEL is missing or not executable"
+fi
+
 echo
 [ $rc -eq 0 ] && echo "CONSISTENT" || echo "DRIFT DETECTED - see the FAIL lines above" >&2
 exit $rc

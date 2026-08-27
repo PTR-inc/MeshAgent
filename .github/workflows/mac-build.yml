@@ -1,22 +1,9 @@
-name: macOS Build
+name: macOS Builder
 run-name: Build MacOS versions of MeshAgent
-# A build workflow only runs when something it builds from changed, so a documentation or
-# workflow-only push does not rebuild every platform. Its own file counts, the other workflows do not.
+# Started by build.yml when a push to master touches one of this platform's inputs, which are
+# listed in .github/build-inputs.txt. Run it alone from the Actions tab with workflow_dispatch.
 on:
-  push:
-    paths:
-      - '**'
-      - '!**/*.md'
-      - '!docs/**'
-      - '!.github/**'
-      - '.github/workflows/mac-build.yml'
-  pull_request:
-    paths:
-      - '**'
-      - '!**/*.md'
-      - '!docs/**'
-      - '!.github/**'
-      - '.github/workflows/mac-build.yml'
+  workflow_call:
   workflow_dispatch:
 
 # Deliberately native on macOS runners, because osxcross needs an Apple-licensed
