@@ -17,7 +17,8 @@ limitations under the License.
 //
 // MeshAgent global stress test harness. It is self-contained and needs no network, server or user.
 // The test sections live under test/testmodules/, one file per section, run in filename order.
-// Each must export exports.name and exports.run(check, deepEqual, done). See ISSUES.md.
+// Each must export exports.name and exports.run(check, deepEqual, done). check.known(section, cond,
+// msg, ref) records a failure of a defect already in ISSUES.md as KNOWN instead of FAIL. See ISSUES.md.
 //
 // Run from the repo root, because module paths are cwd-relative. Scratch files do not go to the
 // working directory, see scratch() below:
@@ -33,7 +34,7 @@ limitations under the License.
 // tiny harness
 // ---------------------------------------------------------------------------------------------
 
-var RESULTS = { pass: 0, fail: 0 };
+var RESULTS = { pass: 0, fail: 0, known: 0 };
 var FAILURES = [];
 
 // Options. argv is empty under -b64exec, so both have defaults:
@@ -64,6 +65,19 @@ function check(section, cond, msg) {
         console.log('FAIL [' + section + '] ' + msg);
     }
 }
+
+// A check for a defect that is already on record. It passes like any other check, but a
+// failure is counted as KNOWN instead of FAIL so the run stays green until the fix lands.
+// ref names the ISSUES.md entry, so a KNOWN line can never be an orphan.
+function known(section, cond, msg, ref) {
+    if (cond) { RESULTS.pass++; }
+    else {
+        RESULTS.known++;
+        console.log('KNOWN [' + section + '] ' + msg + ' (' + ref + ')');
+    }
+}
+// Handed to the testmodules as check.known, so run()'s signature stays as documented.
+check.known = known;
 
 function deepEqual(a, b) {
     if (a === b) { return true; }
@@ -113,7 +127,7 @@ function finish() {
     removeScratchDir();
     console.log('');
     console.log('==================================================');
-    console.log('TOTAL: ' + RESULTS.pass + ' passed, ' + RESULTS.fail + ' failed (of ' + (RESULTS.pass + RESULTS.fail) + ')');
+    console.log('TOTAL: ' + RESULTS.pass + ' passed, ' + RESULTS.fail + ' failed (of ' + (RESULTS.pass + RESULTS.fail + RESULTS.known) + ')' + (RESULTS.known > 0 ? ', ' + RESULTS.known + ' known' : ''));
     if (FAILURES.length > 0) {
         console.log('Failures:');
         for (var i = 0; i < FAILURES.length; ++i) { console.log('  ' + FAILURES[i]); }
