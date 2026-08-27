@@ -170,7 +170,8 @@ foreach ($t in $list) {
     New-Item -ItemType Directory -Force -Path $libDir, $incDir | Out-Null
     Copy-Item $libcrypto (Join-Path $libDir 'libcrypto.lib') -Force
     Copy-Item $libssl    (Join-Path $libDir 'libssl.lib') -Force
-    Copy-Item $conf      (Join-Path $incDir 'opensslconf.h') -Force
+    # nmake writes CRLF; the repo normalises text to LF, so stage it that way and avoid a spurious diff.
+    [IO.File]::WriteAllText((Join-Path $incDir 'opensslconf.h'), ([IO.File]::ReadAllText($conf) -replace "`r`n", "`n"), [Text.UTF8Encoding]::new($false))
     Write-Host "  staged  -> $prefix (lib\libcrypto.lib, lib\libssl.lib, include\openssl\opensslconf.h)"
     Write-Host "${name}: OK"
 }

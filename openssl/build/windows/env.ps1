@@ -136,6 +136,15 @@ function Get-VcEnvScript {
     return $null
 }
 
+function Get-MeshVcToolsVersion {
+    # The MSVC Major.Minor the agent's default toolset is pinned to, read from the props file that
+    # owns it so this script never restates it. Empty when the file or the pin is missing.
+    $props = Join-Path $script:Repo 'MeshAgent.Configuration.props'
+    if (-not (Test-Path $props)) { return $null }
+    if ((Get-Content $props -Raw) -match '<MeshVcToolsVersion>\s*([0-9]+\.[0-9]+)\s*</MeshVcToolsVersion>') { return $Matches[1] }
+    return $null
+}
+
 function Get-VcToolsetVersion {
     # An installed toolset folder is not proof of a usable toolset. Real installs have shown a
     # props-only version folder with no compiler that the default resolution still pointed at, and
@@ -151,7 +160,11 @@ function Get-VcToolsetVersion {
         'x64_arm64' { @('bin\HostX64\arm64\cl.exe', 'lib\arm64\setargv.obj') }
     }
 
+    # Only the pinned Major.Minor counts. A newer installed toolset is not a substitute, because
+    # the agent links with the pinned one and a newer archive is the one direction that can break.
+    $pin = Get-MeshVcToolsVersion
     $best = Get-ChildItem (Join-Path $vs 'VC\Tools\MSVC') -Directory -ErrorAction SilentlyContinue |
+        Where-Object { -not $pin -or $_.Name.StartsWith("$pin.") } |
         Where-Object {
             $dir = $_.FullName
             -not ($required | Where-Object { -not (Test-Path (Join-Path $dir $_)) })
@@ -254,10 +267,14 @@ function Get-PerlPath {
     # is exactly that, so skip it even though it is usually on PATH.
     $portable = Join-Path $env:BR_TOOLS 'strawberry-perl\perl\bin\perl.exe'
     if (Test-Path $portable) { return $portable }
+    # The choco package and the hosted runner images both put Strawberry here, not always on PATH.
+    $installed = 'C:\Strawberry\perl\bin\perl.exe'
+    if (Test-Path $installed) { return $installed }
 
     $cmd = Get-Command perl.exe -ErrorAction SilentlyContinue -All
     foreach ($c in $cmd) {
-        $ver = & $c.Source -e "print $^O" 2>$null
+        # Single quotes, or PowerShell expands $^ itself and perl never sees $^O.
+        $ver = & $c.Source -e 'print $^O' 2>$null
         if ($ver -and $ver -ne 'cygwin') { return $c.Source }
     }
     return $null
@@ -363,8 +380,14 @@ function Get-VcComponentId {
         return $best.Value.Trim('"')
     }
 
-    # Prefer the fixed "latest toolset" id. 2017-2022 and v18 all offer it, and it
-    # keeps tracking the newest toolset across VS updates.
+    # The pinned toolset has a versioned id such as VC.14.44.17.14.x86.x64. The fixed "latest
+    # toolset" id is only the fallback when nothing is pinned.
+    $pin = Get-MeshVcToolsVersion
+    if ($pin) {
+        $rxp = [regex]('"Microsoft\.VisualStudio\.Component\.VC\.' + [regex]::Escape($pin) + '\.(\d+\.\d+)\.' + [regex]::Escape($suffix) + '"')
+        $hit = $rxp.Matches($text) | Select-Object -First 1
+        if ($hit) { return $hit.Value.Trim('"') }
+    }
     if ($text.Contains('"' + $fixed + '"')) { return $fixed }
 
     $rx = [regex]('"Microsoft\.VisualStudio\.Component\.VC\.(\d[\d.]*)\.' + [regex]::Escape($suffix) + '"')

@@ -18,6 +18,14 @@
          overwrite the default toolset's. MeshAgent-2019.sln builds with v142. -->
     <MeshToolsetSuffix Condition="'$(MeshToolset)'!='$(MeshDefaultToolset)'">-$(MeshToolset)</MeshToolsetSuffix>
     <PlatformToolset>$(MeshToolset)</PlatformToolset>
+    <!-- The one home of the MSVC toolset version the default toolset builds with. OpenSSL's
+         windows/env.ps1 and toolset-check.ps1 read it from this file, so archives and agent
+         come from the same compiler on every machine, whatever newer toolset is installed. -->
+    <MeshVcToolsVersion>14.44</MeshVcToolsVersion>
+    <!-- VCToolsVersion needs the full folder name. GetDirectories returns them ';'-joined and
+         GetFileName keeps the text after the last separator, so the last match wins. -->
+    <_MeshVcToolsDirs Condition="'$(MeshToolset)'=='$(MeshDefaultToolset)' And '$(VCInstallDir)'!='' And Exists('$(VCInstallDir)Tools\MSVC')">$([System.IO.Directory]::GetDirectories('$(VCInstallDir)Tools\MSVC', '$(MeshVcToolsVersion).*'))</_MeshVcToolsDirs>
+    <VCToolsVersion Condition="'$(_MeshVcToolsDirs)'!=''">$([System.IO.Path]::GetFileName('$(_MeshVcToolsDirs)'))</VCToolsVersion>
     <!-- An x64 host otherwise drives the 32-bit toolchain for Win32, which is slower and runs out
          of address space under link-time code generation. -->
     <PreferredToolArchitecture>x64</PreferredToolArchitecture>

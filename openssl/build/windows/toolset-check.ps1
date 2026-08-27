@@ -74,6 +74,14 @@ if ($ClExe -and (Test-Path $ClExe)) {
 }
 if (-not $clBuild) { $warn.Add("could not determine the current cl.exe build (msbuild/-getProperty or -ClExe) - compiler-build comparisons skipped") }
 
+# The default toolset is pinned to one MSVC Major.Minor in MeshAgent.Configuration.props. Linking
+# with any other version is a hard failure, the same as a wrong CRT: the fix is to install it.
+$pinFile = Join-Path $Repo 'MeshAgent.Configuration.props'
+$pin = if ((Test-Path $pinFile) -and ((Get-Content $pinFile -Raw) -match '<MeshVcToolsVersion>\s*([0-9]+\.[0-9]+)\s*</MeshVcToolsVersion>')) { $Matches[1] } else { '' }
+if ($pin -and $Toolset -eq 'v143' -and $ClExe -and $ClExe -notmatch ('\\MSVC\\' + [regex]::Escape($pin) + '\.')) {
+    $fatal.Add("the linking toolset is $ClExe but MeshAgent.Configuration.props pins MSVC $pin - install 'MSVC v143 - VS 2022 C++ build tools ($pin)' (env.ps1: Install-BuildRootWindows -VsComponents)")
+}
+
 # Walk the COFF archive.
 function Read-U16([byte[]] $b, [int] $o) { [BitConverter]::ToUInt16($b, $o) }
 function Read-U32([byte[]] $b, [int] $o) { [BitConverter]::ToUInt32($b, $o) }

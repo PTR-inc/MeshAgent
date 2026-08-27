@@ -50,6 +50,9 @@ gate_target() {
     local t="$1" prefix="$2" ver lib sym want rc=0 opt tok conf pc
     ver=$(basename "$(dirname "$prefix")")
     case "$T_LIBC" in msvc) lib="$prefix/lib/libcrypto.lib" ;; *) lib="$prefix/lib/libcrypto.a" ;; esac
+    # A header written by nmake on Windows has CRLF endings, which git normalises to LF on commit
+    # but which would make every anchored grep here miss before that.
+    conf_has() { tr -d '\r' < "$conf" | grep -qE "$1"; }
     conf="$prefix/include/openssl/opensslconf.h"
     reject() { echo "  REJECT: $t: $*" >&2; rc=1; }
 
@@ -100,9 +103,9 @@ gate_target() {
         case "$opt" in
             no-shared|no-zlib|no-zlib-dynamic|no-ssl) ;;
             no-*|-no-*) sym=$(echo "OPENSSL_NO_${opt#*no-}" | tr 'a-z-' 'A-Z_')
-                        [ -f "$conf" ] && ! grep -qE "^# *define $sym\$" "$conf" && reject "opensslconf.h lacks $sym for $opt" ;;
+                        [ -f "$conf" ] && ! conf_has "^# *define $sym\$" && reject "opensslconf.h lacks $sym for $opt" ;;
             enable-*)   sym=$(echo "OPENSSL_NO_${opt#enable-}" | tr 'a-z-' 'A-Z_')
-                        [ -f "$conf" ] && grep -qE "^# *define $sym\$" "$conf" && reject "opensslconf.h defines $sym although $opt is set" ;;
+                        [ -f "$conf" ] && conf_has "^# *define $sym\$" && reject "opensslconf.h defines $sym although $opt is set" ;;
         esac
     done
 
@@ -112,8 +115,8 @@ gate_target() {
     if [ -f "$conf" ]; then
         if [ "$t" != linux-sparc64-glibc ]; then
             case "$P_CLASS" in
-                32) grep -q '^# *define THIRTY_TWO_BIT$' "$conf" || reject "opensslconf.h is not the 32-bit variant" ;;
-                64) grep -qE '^# *define SIXTY_FOUR_BIT(_LONG)?$' "$conf" || reject "opensslconf.h is not the 64-bit variant" ;;
+                32) conf_has '^# *define THIRTY_TWO_BIT$' || reject "opensslconf.h is not the 32-bit variant" ;;
+                64) conf_has '^# *define SIXTY_FOUR_BIT(_LONG)?$' || reject "opensslconf.h is not the 64-bit variant" ;;
             esac
         fi
     else

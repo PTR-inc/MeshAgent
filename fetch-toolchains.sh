@@ -125,11 +125,32 @@ p_freebsd() {
         || { log_status freebsd "FAILED (extract)"; return 1; }
 }
 
+# OpenBSD's own base/comp sets never ship unversioned libNAME.so symlinks - its native ld
+# resolves -lc et al. straight to the highest libNAME.so.MAJOR.MINOR on disk, no symlink
+# needed. ld.lld's OpenBSD target does not do that same version search, so a cross-link
+# silently falls back to the static .a for every -l flag while clang still passes
+# -dynamic-linker (since -static was never requested), producing a binary with a PT_INTERP
+# but no PT_DYNAMIC segment - it segfaults the instant OpenBSD's kernel hands it to ld.so.
+# Synthesizing the symlinks ld.lld expects fixes this without changing what gets linked in.
+openbsd_synth_so_symlinks() {
+    local lib="$SYSROOT_OPENBSD/usr/lib" f base n=0
+    [ -d "$lib" ] || return 0
+    for f in "$lib"/lib*.so.*.*; do
+        [ -e "$f" ] || continue
+        base="$(basename "$f" | sed -E 's/(\.so)\.[0-9]+\.[0-9]+$/\1/')"
+        [ -e "$lib/$base" ] || { ln -s "$(basename "$f")" "$lib/$base"; n=$((n + 1)); }
+    done
+    [ "$n" -gt 0 ] && echo "  synthesized $n unversioned .so symlink(s) in $lib for ld.lld"
+}
+
 # OpenBSD keeps the headers and crt objects in comp79.tgz, not base79.tgz, and
 # base79 alone has an empty usr/include, so both sets are fetched.
 p_openbsd() {
-    [ -d "$SYSROOT_OPENBSD/usr/include" ] && { log_status openbsd "already present"; return 0; }
-    fetch_sysroot_mirror openbsd "$SYSROOT_OPENBSD" "$MESHAGENT_TOOLCHAINS_RAW/SR/openbsd-$OPENBSD_REL-sysroot.tar.xz" && return 0
+    [ -d "$SYSROOT_OPENBSD/usr/include" ] && { openbsd_synth_so_symlinks; log_status openbsd "already present"; return 0; }
+    if fetch_sysroot_mirror openbsd "$SYSROOT_OPENBSD" "$MESHAGENT_TOOLCHAINS_RAW/SR/openbsd-$OPENBSD_REL-sysroot.tar.xz"; then
+        openbsd_synth_so_symlinks
+        return 0
+    fi
     log_status openbsd "not on mirror - falling back to cdn.openbsd.org"
     local nodot="${OPENBSD_REL//./}"
     local rel="https://cdn.openbsd.org/pub/OpenBSD/$OPENBSD_REL/amd64"
@@ -142,6 +163,7 @@ p_openbsd() {
     mkdir -p "$SYSROOT_OPENBSD"
     tar xzf "$BR_DOWNLOADS/openbsd-$OPENBSD_REL-base$nodot.tgz" -C "$SYSROOT_OPENBSD" ./usr/include ./usr/lib \
         && tar xzf "$BR_DOWNLOADS/openbsd-$OPENBSD_REL-comp$nodot.tgz" -C "$SYSROOT_OPENBSD" ./usr/include ./usr/lib \
+        && openbsd_synth_so_symlinks \
         && log_status openbsd "OK" \
         || { log_status openbsd "FAILED (extract)"; return 1; }
 }

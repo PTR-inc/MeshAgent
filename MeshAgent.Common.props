@@ -78,6 +78,10 @@
   <PropertyGroup>
     <MeshMinWindowsSDK>10.0.22621.0</MeshMinWindowsSDK>
   </PropertyGroup>
+  <Target Name="MeshCheckVcTools" BeforeTargets="ClCompile" Condition="'$(MeshToolset)'=='$(MeshDefaultToolset)'">
+    <Error Condition="!$(VCToolsVersion.StartsWith('$(MeshVcToolsVersion).'))"
+           Text="MSVC toolset $(MeshVcToolsVersion) is pinned by MeshAgent.Configuration.props but $(VCToolsVersion) resolved. Install the 'MSVC v143 - VS 2022 C++ build tools ($(MeshVcToolsVersion))' component, or run: pwsh -c '. openssl/build/windows/env.ps1; Install-BuildRootWindows -VsComponents'." />
+  </Target>
   <Target Name="MeshCheckWindowsSDK" BeforeTargets="ClCompile">
     <!-- TargetPlatformVersion is the concrete SDK the 10.0 wildcard resolved to.
          WindowsTargetPlatformVersion still reads "10.0" here. -->

@@ -114,6 +114,8 @@ jobs:
                      [ -n "$rows$win" ] || { echo "::error::'$sel' is not a target of targets.sh or windows/build.ps1"; exit 1; } ;;
           esac
 
+          # TEMPORARY: only windows-x64 while the Windows recipe is being made to work. Remove.
+          win=$(echo "$win" | awk '$0=="windows-x64"')
           m=$(echo "$rows" | awk 'NF{printf "%s{\"target\":\"%s\",\"os\":\"%s\"}", (n++?",":""), $1, $2}')
           w=$(echo "$win"  | awk 'NF{printf "%s\"%s\"", (n++?",":""), $0}')
           { echo "matrix=[$m]"; echo "windows=[$w]"; } >> "$GITHUB_OUTPUT"
@@ -160,7 +162,12 @@ jobs:
       - uses: ilammy/setup-nasm@v1
       - name: Install Strawberry Perl (Configure needs a real Windows perl)
         shell: pwsh
-        run: choco install -y strawberryperl --no-progress
+        # The image ships it already, but choco's PATH change never reaches this process, so the
+        # bin directory is added for the following steps explicitly.
+        run: |
+          if (-not (Test-Path 'C:\Strawberry\perl\bin\perl.exe')) { choco install -y strawberryperl --no-progress | Out-Null }
+          'C:\Strawberry\perl\bin' | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          & 'C:\Strawberry\perl\bin\perl.exe' -e 'print "perl $^V $^O`n"'
       - name: Fetch the OpenSSL source (URL and sha256 both from env.ps1)
         shell: pwsh
         run: |
