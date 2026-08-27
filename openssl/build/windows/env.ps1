@@ -28,7 +28,8 @@ $script:OpenSslUrl = "https://github.com/openssl/openssl/releases/download/$($sc
 function Get-OpenSslSha256 {
     param([string]$Version = $script:OpenSslVersion)
     $body = (Invoke-WebRequest -UseBasicParsing -Uri "https://www.openssl.org/source/openssl-$Version.tar.gz.sha256").Content
-    $sha = ($body -split '\s+')[0]
+    # The sidecar has been seen with a leading space, which -split turns into an empty first field.
+    $sha = ($body.Trim() -split '\s+')[0]
     if ($sha -notmatch '^[0-9a-f]{64}$') { throw "openssl-$Version.tar.gz.sha256 did not parse to a sha256" }
     return $sha
 }
