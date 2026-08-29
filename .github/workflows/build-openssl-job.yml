@@ -3,7 +3,7 @@ run-name: Build OpenSSL for ${{ inputs.jobname }}${{ inputs.version != '' && for
 
 # This file only decides which targets to dispatch and on which runner. Every
 # per-target recipe lives in openssl/build/targets.sh (on Windows, the MSVC details
-# in windows/build.ps1's own $Targets), because copies here drifted. See BUILD.md.
+# in windows/build.ps1's own $Targets), because copies here drifted.
 # The version selects the install prefix openssl/<version>/<target>/, so building
 # another version adds a prefix next to the pinned one instead of replacing it.
 on:

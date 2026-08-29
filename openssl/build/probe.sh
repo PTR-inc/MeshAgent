@@ -77,7 +77,7 @@ gate_target() {
         case " $T_FLAGS " in *" -no-asm "*|*" no-asm "*) case "$P_COMPILER" in *_ASM*) reject "asm modules present, recipe says -no-asm" ;; esac ;;
             *) case "$T_CONF" in linux-generic32|linux-generic64) ;; *) case "$P_COMPILER" in *_ASM*) ;; *) reject "no asm modules, recipe enables asm" ;; esac ;; esac ;; esac
         # MSVC objects are compiled /Zl, so the CRT choice is the agent's. /MD would still be wrong,
-        # and --debug shows as /Od. See ISSUES.md on the MTd archives.
+        # and --debug shows as /Od.
         if [ "$T_LIBC" = msvc ]; then
             case " $P_COMPILER " in *" /MD"*) reject "built /MD, the agent is /MT" ;; esac
             case " $T_EXTRA " in *" --debug "*) want=/Od ;; *) want=/O[12] ;; esac

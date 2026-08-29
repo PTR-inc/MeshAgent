@@ -121,7 +121,7 @@ rcodesign_url() { echo "https://github.com/indygreg/apple-platform-rs/releases/d
 
 # A self-signed identity is generated once into $BUILDROOT/private/ and reused, because
 # a stable identity keeps TCC's Screen Recording and Accessibility grants across self-updates.
-# Copy it to every build host rather than regenerating it, and give CI one as a secret. See ISSUES.md.
+# Copy it to every build host rather than regenerating it, and give CI one as a secret.
 export MACOS_SIGN_DIR="$BUILDROOT/private/codesign"
 export MACOS_SIGN_P12="${MACOS_SIGN_P12:-$MACOS_SIGN_DIR/meshagent-codesign.p12}"
 export MACOS_SIGN_P12_PASSWORD="${MACOS_SIGN_P12_PASSWORD-}"
@@ -210,7 +210,7 @@ export TC_RISCV64_XTHEAD="$BR_TOOLCHAINS/riscv64-linux-musl-xthead"
 
 # Bootlin is pinned to one release rather than "latest" so the glibc floor is a deliberate,
 # reproducible choice. An apt cross-gcc always floors at GLIBC_2.34, above most real ARM hardware.
-# 2020.08-1 ships glibc 2.31, gcc 9.3 and binutils 2.33.1. See ISSUES.md.
+# 2020.08-1 ships glibc 2.31, gcc 9.3 and binutils 2.33.1.
 export BOOTLIN_RELEASE="${BOOTLIN_RELEASE:-2020.08-1}"
 _BOOTLIN="$BOOTLIN_RELEASE"
 export TC_ARMV5_BOOTLIN="$BR_TOOLCHAINS/armv5-eabi--glibc--stable-$_BOOTLIN"
@@ -224,7 +224,7 @@ export TC_POWERPC64LE_BOOTLIN="$BR_TOOLCHAINS/powerpc64le-power8--glibc--stable-
 export TC_MIPSEL_UCLIBC_BOOTLIN="$BR_TOOLCHAINS/mips32el--uclibc--stable-$_BOOTLIN"
 # x86 and x86-64 pin the oldest release Bootlin ever published for them, not $_BOOTLIN,
 # to reach the lowest glibc floor available. x86-64-core-i7 is Bootlin's only x86-64 name,
-# and targets.sh overrides its -march back to a generic baseline. See ISSUES.md.
+# and targets.sh overrides its -march back to a generic baseline.
 export BOOTLIN_X86_RELEASE="${BOOTLIN_X86_RELEASE:-2017.05-toolchains-1-1}"
 _BOOTLIN_X86_OLDEST="$BOOTLIN_X86_RELEASE"
 export TC_X86_BOOTLIN="$BR_TOOLCHAINS/x86-i686--glibc--stable-$_BOOTLIN_X86_OLDEST"

@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 # The ARCHID list comes from `make print-archids` so that a new ARCH_ block is
-# picked up automatically and an OBSOLETE one drops out. Toolchains come from each
-# block's FETCH and APTPKG fields via `make print-toolchain`. See BUILD.md.
+# picked up automatically and a removed one drops out. Toolchains come from each
+# block's FETCH and APTPKG fields via `make print-toolchain`.
 jobs:
   resolve:
     runs-on: ubuntu-24.04

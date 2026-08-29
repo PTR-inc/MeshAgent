@@ -1,10 +1,10 @@
 # macOS code signing & notarization
 
-Split out of [BUILD.md](BUILD.md) because it's a self-contained topic: how `make macos` signs
+A self-contained topic: how `make macos` signs
 every agent, how to generate or replace the signing identity by hand, how to re-sign a binary
-that's already been stripped/modified, and how to notarize a Developer-ID-signed build. Read
-[BUILD.md's macOS section](BUILD.md#macos) first for the build itself (osxcross, the SDK, ARCHIDs
-16/29) — this doc picks up after the binary exists.
+that's already been stripped/modified, and how to notarize a Developer-ID-signed build. Build the binary
+first with `make macos ARCHID=16` or `ARCHID=29` (osxcross and a real macOS SDK are needed) — this
+doc picks up after the binary exists.
 
 **Code signing.** Apple Silicon refuses to exec a binary whose signature doesn't match the file,
 and `strip` invalidates the linker's ad-hoc signature, so `make macos` re-signs every agent after

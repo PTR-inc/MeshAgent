@@ -11,7 +11,7 @@ jobs:
     name: FreeBSD x86_64 (ARCHID=30)
     # Cross-compiled with clang and a base.txz sysroot, so no FreeBSD VM is needed.
     # The release, sysroot location and mirror fallback come from ARCH_30's BSDREL,
-    # build-env.sh and fetch-toolchains.sh, so nothing is restated here. See BUILD.md.
+    # build-env.sh and fetch-toolchains.sh, so nothing is restated here.
     runs-on: ubuntu-24.04
     env:
       BUILDROOT: ${{ github.workspace }}/br

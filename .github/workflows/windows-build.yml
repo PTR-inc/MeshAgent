@@ -60,6 +60,10 @@ jobs:
       run: openssl/build/windows/toolset-check.ps1 -Platform ${{ matrix.platform }} -Toolset ${{ matrix.toolset }}
     - name: Build ${{ matrix.platform }} ${{ env.CONFIGURATION }} (${{ matrix.toolset }})
       run: msbuild MeshAgent-2022.sln /nologo /v:q /clp:Summary /p:Configuration=${{ env.CONFIGURATION }} /p:Platform=${{ matrix.platform }} /p:MeshToolset=${{ matrix.toolset }}
+    - name: Run the built agent
+      # A miscompile can pass the build with zero warnings (see the x86 ltcg ILibMemory_Init_Size case), so every run must actually run its binary.
+      shell: pwsh
+      run: test/test-agent.ps1 -Ci -NoConnect -Platform ${{ matrix.platform }} -Configuration ${{ env.CONFIGURATION }}
     - name: Upload ${{ matrix.platform }} artifacts
       uses: actions/upload-artifact@v7
       with:

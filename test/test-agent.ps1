@@ -3,6 +3,9 @@
     MeshAgent combined test driver for Windows, the PowerShell counterpart of test/test-agent.sh.
 
 .DESCRIPTION
+    This script and test/test-agent.sh are one driver in two languages. Every change here, be it a
+    timeout, a milestone string, a discovery rule or the verdict wording, goes into the .sh as well.
+
     The single entry point for automated agent testing on Windows. Runs, in order, against one
     agent binary (MeshConsole*.exe by default):
       1. -info sanity banner (version, ARCHID, OpenSSL)
@@ -38,6 +41,10 @@
 .PARAMETER NoConnect
     Skip the .msh connection test.
 
+.PARAMETER Msh
+    The .msh to connect with. The agent only ever reads <binary>.msh next to itself, so this is
+    copied there, overwriting whatever was beside the binary.
+
 .PARAMETER Asan
     ASan-instrumented agent for phase 6. Default: the Release_ASAN build of the same platform,
     or <binary>_asan.exe beside the agent. Build one with:
@@ -68,6 +75,7 @@ param(
     [switch]$AllowStale,
     [string]$Log,
     [switch]$NoConnect,
+    [string]$Msh,
     [string]$Asan,
     [string]$AsanRuntimeDir,
     [switch]$Strict,
@@ -119,7 +127,11 @@ function Invoke-Agent {
         [int]$TimeoutSec = 60,
         [string[]]$StdinLines,
         [int]$StdinDelaySec = 2,
-        [string]$StopWhen
+        [string]$StopWhen,
+        # A file to watch beside stdout, for an agent whose stdout is block-buffered but whose own
+        # .log is not. The run stops as soon as StopFileWhen shows up in it.
+        [string]$StopFile,
+        [string]$StopFileWhen
     )
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = (Resolve-Path $FilePath).Path
@@ -164,6 +176,9 @@ function Invoke-Agent {
             for ($i = $scanned; $i -lt $seen.Count; $i++) { if ($seen[$i].Contains($StopWhen)) { $sawStop = $true } }
             $scanned = $seen.Count
             if ($sawStop) { break }
+        }
+        if ($StopFile -and $StopFileWhen -and (Test-Path -LiteralPath $StopFile)) {
+            if (Select-String -LiteralPath $StopFile -Pattern $StopFileWhen -SimpleMatch -Quiet) { $sawStop = $true; break }
         }
         if ((Get-Date) -gt $deadline) { $timedOut = $true; break }
         Start-Sleep -Milliseconds 250
@@ -420,7 +435,8 @@ if (-not $CanRun) {
     exit 1
 }
 
-if (Test-IsAsan $Binary) { $null = Resolve-AsanRuntime $Binary }
+$IsAsanBinary = Test-IsAsan $Binary
+if ($IsAsanBinary) { $null = Resolve-AsanRuntime $Binary }
 
 # The stress phases run through this, the connection phase does not: that one wants its .msh and .db
 # beside the real binary.
@@ -456,6 +472,20 @@ elseif ($binCommit -and $headCommit) { $infoNotes += ('at HEAD ' + $binCommit.Su
 if ($r.ExitCode -ne 0) { Record 'agent -info' 'FAIL' (RcDesc $r.ExitCode) }
 elseif ($stale -and -not $AllowStale) { Record 'agent -info' 'FAIL' (($infoNotes -join ', ') + ' - rebuild, or pass -AllowStale') }
 else { Record 'agent -info' 'PASS' ($infoNotes -join ', ') }
+
+# OpenSSL version: report only, not gating - a mismatch is expected on some platforms (Windows
+# still pins whatever openssl\<version>\windows-<platform>\ MeshOpenSSLVersion resolves to, see
+# MeshAgent.Common.props) and shouldn't fail the run over it.
+$wantOssl = ''
+try { $wantOssl = (Get-Content -Raw (Join-Path $RepoRoot 'openssl\VERSION') -ErrorAction Stop).Trim() } catch { }
+if (-not $wantOssl) { Say '  (no openssl\VERSION to compare the linked OpenSSL against)' }
+elseif (-not $HasTls) { Record 'openssl version' 'SKIP' "-info printed no 'Using OpenSSL' line (NOTLS build?)" }
+else {
+    $gotOssl = if ($r.Output -match '(?m)Using OpenSSL (\d+\.\d+\.\d+[a-z]?)') { $Matches[1] } else { '' }
+    if (-not $gotOssl) { Record 'openssl version' 'SKIP' "-info printed no version after 'Using OpenSSL'" }
+    elseif ($gotOssl -eq $wantOssl) { Record 'openssl version' 'PASS' $gotOssl }
+    else { Record 'openssl version' 'PASS' "agent links OpenSSL $gotOssl, openssl\VERSION pins $wantOssl (report only, not gating)" }
+}
 
 # --- phase 2: stress test, core sections ------------------------------------------------------
 # The 06-* testmodules are the known native-crash sections (TLS reconnect and WebSocket session
@@ -514,9 +544,24 @@ else {
 }
 
 # --- phase 5: connection test against <binary>.msh ---------------------------------------------
-$msh = [IO.Path]::ChangeExtension($Binary, '.msh')
-Head2 ('[5/6] connection test ({0})' -f (Split-Path -Leaf $msh))
-if ($NoConnect) {
+$mshFile = [IO.Path]::ChangeExtension($Binary, '.msh')
+Head2 ('[5/6] connection test ({0})' -f (Split-Path -Leaf $mshFile))
+$mshSrcFailed = $false
+if ($Msh -and -not $NoConnect) {
+    if (-not (Test-Path $Msh)) {
+        Say "  -Msh ${Msh}: no such file"
+        Record 'connection test' 'FAIL' "-Msh $Msh not found"
+        $mshSrcFailed = $true
+    }
+    else {
+        Copy-Item -LiteralPath $Msh -Destination $mshFile -Force
+        Say ("  using {0} -> {1}" -f $Msh, (Split-Path -Leaf $mshFile))
+    }
+}
+if ($mshSrcFailed) {
+    # already recorded above
+}
+elseif ($NoConnect) {
     Say '  skipped by request (-NoConnect)'
     Record 'connection test' 'SKIP' '-NoConnect'
 }
@@ -524,13 +569,13 @@ elseif (-not $HasTls) {
     Say '  this agent has no TLS compiled in, so it cannot reach a wss:// server'
     Record 'connection test' 'SKIP' 'no TLS in this build'
 }
-elseif (-not (Test-Path $msh)) {
-    Say ("  no {0} next to the agent - nothing to connect to" -f (Split-Path -Leaf $msh))
-    Record 'connection test' 'SKIP' ('no ' + (Split-Path -Leaf $msh))
+elseif (-not (Test-Path $mshFile)) {
+    Say ("  no {0} next to the agent - nothing to connect to" -f (Split-Path -Leaf $mshFile))
+    Record 'connection test' 'SKIP' ('no ' + (Split-Path -Leaf $mshFile))
 }
 else {
     # The last MeshServer= line wins. These .msh files set it twice, local first, then the real wss:// URL.
-    $srv = (Select-String -Path $msh -Pattern '^MeshServer=' | Select-Object -Last 1).Line -replace '^MeshServer=', ''
+    $srv = (Select-String -Path $mshFile -Pattern '^MeshServer=' | Select-Object -Last 1).Line -replace '^MeshServer=', ''
     Say "  MeshServer=$srv"
     $reachable = $true
     if ($srv -match '^(wss?|https?)://([^/:]+)(:(\d+))?') {
@@ -542,36 +587,62 @@ else {
     }
     if (-not $reachable) { Record 'connection test' 'SKIP' "no server on ${chost}:${cport}" }
     else {
-        Say ("  running '{0} connect' for up to 20s (writes .db/.log next to the agent)" -f (Split-Path -Leaf $Binary))
-        # --showModuleNames=1 forces the db key from the command line. A key set in the .msh still
-        # wins, since the .msh is imported after the command-line values are cached.
-        $verb = 'connect'
-        $r = Invoke-Agent -FilePath $Binary -ArgumentList @($verb, '--showModuleNames=1') -TimeoutSec 20 -StopWhen 'Launching meshcore'
-        Emit $r 25
-        $missing = @()
-        # 'Launching meshcore' is the real end state. Authentication alone can succeed while
-        # meshcore still fails to start.
-        foreach ($m in @('Control Channel Connection Established', 'Connected.', 'Authentication Complete', 'Launching meshcore')) {
-            if (-not $r.Output.Contains($m)) { $missing += "missing '$m'" }
+        # A ceiling, not a wait: the run stops as soon as 'Server verified meshcore' shows up. An ASan
+        # agent measured about 18s to reach CoreOk where a Release one took 3s, so it gets more room.
+        $connectSec = if ($IsAsanBinary) { 60 } else { 20 }
+        Say ("  running '{0} connect' for up to {1}s (writes .db/.log next to the agent)" -f (Split-Path -Leaf $Binary), $connectSec)
+        # controlChannelDebug and showModuleNames gate the markers this phase greps for, and logUpdate
+        # gates the 'Connection Established' line in the agent's own .log. Forced into the .msh
+        # because .msh is imported into the .db on every start and always wins.
+        $mshLines = @(Get-Content $mshFile)
+        $mshChanged = $false
+        foreach ($key in @('controlChannelDebug', 'showModuleNames', 'logUpdate')) {
+            if ($mshLines -notcontains "$key=1") {
+                $mshLines = @($mshLines | Where-Object { $_ -notmatch "^$key=" }) + "$key=1"
+                Say "  forced $key=1 into the .msh"
+                $mshChanged = $true
+            }
         }
-        # The node cert and its server must have been persisted, or the agent re-provisions on
-        # every start.
+        if ($mshChanged) { Set-Content -Path $mshFile -Value $mshLines -Encoding Ascii }
+        $verb = 'connect'
+        # This phase judges the agent's own <binary>.log, never its stdout. stdout is block-buffered
+        # when it is a pipe and 'Server verified meshcore' is printed without a newline, so a run that
+        # has to be killed loses it. The .log is written unbuffered with controlChannelDebug and
+        # logUpdate on. The stale log goes first, so only this run is judged.
+        $agentLog = [IO.Path]::ChangeExtension($Binary, '.log')
+        Remove-Item -LiteralPath $agentLog -Force -ErrorAction SilentlyContinue
+        # MeshCommand_CoreOk (16) is the last milestone, logged as ProcessCommand(16).
+        $null = Invoke-Agent -FilePath $Binary -ArgumentList @($verb) -TimeoutSec $connectSec -StopFile $agentLog -StopFileWhen 'ProcessCommand(16)'
+        $logText = if (Test-Path $agentLog) { Get-Content -Raw $agentLog } else { '' }
+        Emit ([pscustomobject]@{ Output = $logText }) 25
+        $missing = @()
+        # What each event writes to the .log -> how it is reported when absent
+        $milestones = [ordered]@{
+            'Control Channel Connection Established' = 'control channel'
+            'Authentication Complete'                = 'authentication'
+            'Connection Established ['               = 'connection established'
+            'ProcessCommand(16)'              = 'server verified meshcore (CoreOk)'
+        }
+        foreach ($m in $milestones.Keys) {
+            if (-not $logText.Contains($m)) { $missing += "missing $($milestones[$m]) ('$m' not in $(Split-Path -Leaf $agentLog))" }
+        }
+        # The node identity and its server must have been persisted, or the agent re-provisions on
+        # every start. On Windows the node cert normally lives in the Windows cert store and the .db
+        # only carries NodeID (agentcore.c, agent_GenerateCertificates and the noCertStore switch),
+        # so either key counts as the identity.
         $db = [IO.Path]::ChangeExtension($Binary, '.db')
         if (Test-Path $db) {
-            foreach ($k in @('SelfNodeCert', 'MeshServer')) {
-                if (-not (Select-String -Path $db -Pattern $k -SimpleMatch -Encoding Ascii -Quiet)) { $missing += "'$k' not persisted in $(Split-Path -Leaf $db)" }
+            foreach ($k in @('SelfNodeCert|NodeID', 'MeshServer')) {
+                if (-not (Select-String -Path $db -Pattern $k -Encoding Ascii -Quiet)) { $missing += "'$k' not persisted in $(Split-Path -Leaf $db)" }
             }
         }
         else { $missing += "no $(Split-Path -Leaf $db) written" }
         if ($missing.Count -eq 0) { Record 'connection test' 'PASS' "connected, authenticated, meshcore launched, identity persisted ($srv)" }
         else {
-            # The agent's C-level printf output is block-buffered when stdout is a pipe, so a run
-            # that has to be killed can lose everything it printed. Say so instead of blaming it.
             $hint = ''
-            if (($r.Output -split "`r?`n" | Where-Object { $_ -ne '' }).Count -lt 5) {
-                $hint = ' - almost no output captured; the agent block-buffers stdout when redirected and was still running when killed'
+            if (-not $logText) {
+                $hint = " - no $(Split-Path -Leaf $agentLog) was written; the agent only logs with controlChannelDebug=1 and logUpdate=1 in the .msh"
                 Say "  $hint"
-                Say "  confirm by hand: .\$(Split-Path -Leaf $Binary) $verb > out.txt 2>&1  (Ctrl-C to stop, then read out.txt)"
             }
             Record 'connection test' 'FAIL' (($missing -join ', ') + $hint)
         }

@@ -34,7 +34,7 @@ br_target() {
     case "$1" in
     # Pinned Bootlin glibc 2.24 toolchains, because apt gcc floors at GLIBC_2.34. The x86-64
     # -march override is needed because that toolchain defaults to core-i7. The asm modules
-    # gate on runtime CPUID. See ISSUES.md.
+    # gate on runtime CPUID.
     linux-x86_64-glibc) T_CONF=linux-x86_64 ; T_CC="$TC_X86_64_BOOTLIN/bin/x86_64-linux-gcc -march=x86-64 -mtune=generic" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_FETCH="bootlin-x86-64" ;;
     linux-i686-glibc)   T_CONF=linux-x86    ; T_CC="$TC_X86_BOOTLIN/bin/i686-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_FETCH="bootlin-x86" ;;
     # x86-64 asm is CPUID-gated and works on any libc. Serves Alpine and OpenWrt x86-64 alike,
@@ -42,25 +42,24 @@ br_target() {
     linux-x86_64-musl)  T_CONF=linux-x86_64 ; T_CC="$MUSL_CC" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=musl ; T_FETCH="apt:musl-tools" ;;
     # The pinned Bootlin glibc 2.31 toolchain gives the lowest floor, so one archive serves both
     # the compat ARCHID 32 and the general ARCHID 26. AArch64 asm gates on runtime AT_HWCAP.
-    linux-aarch64-glibc) T_CONF=linux-aarch64 ; T_CC="$TC_AARCH64_BOOTLIN/bin/aarch64-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -Os" ; T_FETCH="bootlin-aarch64" ;;
-    # No hardware to validate the sparcv9 asm modules against, so this stays -no-asm
-    # (T_FLAGS keeps its default) unlike the other 64-bit glibc targets above.
-    linux-sparc64-glibc) T_CONF=linux64-sparcv9 ; T_CC="$TC_SPARC64_BOOTLIN/bin/sparc64-linux-gcc" ; T_EXTRA="-Os" ; T_FETCH="bootlin-sparc64" ;;
+    linux-aarch64-glibc) T_CONF=linux-aarch64 ; T_CC="$TC_AARCH64_BOOTLIN/bin/aarch64-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -O2" ; T_FETCH="bootlin-aarch64" ;;
+    # sparcv9 asm on since 2026-08-28. No hardware here, so it is validated under qemu-sparc64 only.
+    linux-sparc64-glibc) T_CONF=linux64-sparcv9 ; T_CC="$TC_SPARC64_BOOTLIN/bin/sparc64-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_FETCH="bootlin-sparc64" ;;
     linux-ppc64le-glibc) T_CONF=linux-ppc64le ; T_CC="$TC_POWERPC64LE_BOOTLIN/bin/powerpc64le-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_FETCH="bootlin-powerpc64le" ;;
     # musl.cc toolchain. The ARMv8 crypto extensions are runtime-HWCAP-gated, so plain armv8-a
     # code is generated and cores with or without them are both safe.
-    linux-aarch64-musl) T_CONF=linux-aarch64 ; T_CC="$TC_AARCH64_A53_MUSL/bin/aarch64-linux-musl-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -Os" ; T_LIBC=musl ; T_FETCH="muslcc-aarch64" ;;
+    linux-aarch64-musl) T_CONF=linux-aarch64 ; T_CC="$TC_AARCH64_A53_MUSL/bin/aarch64-linux-musl-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -O2" ; T_LIBC=musl ; T_FETCH="muslcc-aarch64" ;;
     # -mfpu=vfp and -marm are needed because armv6 implies no FPU and thumb has no hard-float ABI.
-    # asm stays disabled: under qemu-arm it produced wrong crypto results, still unresolved. See ISSUES.md.
+    # asm stays disabled: under qemu-arm it produced wrong crypto results, still unresolved.
     linux-armv6hf-glibc) T_CONF=linux-armv4 ; T_CC="arm-linux-gnueabihf-gcc -march=armv6 -marm -mfpu=vfp -mfloat-abi=hard" ; T_EXTRA="-Os" ; T_FETCH="apt:gcc-arm-linux-gnueabihf" ;;
     # Hardfloat ARMv7 on the pinned Bootlin glibc 2.31 toolchain, because apt's gcc floors at
-    # GLIBC_2.34. linux-generic32 has no asm modules regardless of flags. See ISSUES.md.
+    # GLIBC_2.34. linux-generic32 has no asm modules regardless of flags.
     linux-armv7hf-glibc) T_CONF=linux-generic32 ; T_CC="$TC_ARMV7HF_BOOTLIN/bin/arm-linux-gcc" ; T_EXTRA="-Os" ; T_FETCH="bootlin-armv7hf" ;;
     # Generic ARMv7 static musl, a NEON-free portable baseline rather than an SoC-tuned build.
     # asm stays disabled because of the same linux-armv4 crypto-correctness break as armv6hf.
     linux-armv7hf-musl) T_CONF=linux-armv4 ; T_CC="$TC_ARMV7_MUSL_HF/bin/arm-linux-musleabihf-gcc -march=armv7-a -marm -mfpu=vfp -mfloat-abi=hard" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="muslcc-armhf" ;;
     # Softfloat ARMv5 on the pinned Bootlin glibc 2.31 toolchain, for the same floor reason.
-    # linux-generic32 has no asm modules regardless of flags. See ISSUES.md.
+    # linux-generic32 has no asm modules regardless of flags.
     linux-armv5-glibc)  T_CONF=linux-generic32 ; T_CC="$TC_ARMV5_BOOTLIN/bin/arm-linux-gcc" ; T_EXTRA="-Os" ; T_FETCH="bootlin-armv5" ;;
     # Little-endian MIPS on the pinned Bootlin uClibc toolchain, because ARCHID 7's agent is
     # uClibc and cannot link a glibc archive at all. asm runs correct crypto under qemu-mipsel.
@@ -68,7 +67,7 @@ br_target() {
     linux-mipsel-musl)  T_CONF=linux-mips32 ; T_CC="$TC_OWRT_MIPSEL24KC/bin/mipsel-openwrt-linux-musl-gcc --sysroot=$TC_OWRT_MIPSEL24KC" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="openwrt-mipsel24kc" ;;
     linux-mips-musl)    T_CONF=linux-mips32 ; T_CC="$TC_OWRT_MIPS24KC/bin/mips-openwrt-linux-musl-gcc --sysroot=$TC_OWRT_MIPS24KC" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="openwrt-mips24kc" ;;
     # Generic rv64gc musl. Serves the T-Head C906 boards too, since rv64gc is a subset of what
-    # they run. 1.1.1 has no RISC-V asm. A glibc build here once leaked ASYNC_POSIX. See ISSUES.md.
+    # they run. 1.1.1 has no RISC-V asm. A glibc build here once leaked ASYNC_POSIX.
     linux-riscv64-musl) T_CONF=linux64-riscv64 ; T_CC="$TC_RISCV64_MUSL/bin/riscv64-linux-musl-gcc" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -Os" ; T_LIBC=musl ; T_FETCH="muslcc-riscv64" ;;
     # OpenSSL 1.1.1 has no riscv32 Configure target, so this Configures as linux-generic32.
     linux-riscv32-musl) T_CONF=linux-generic32 ; T_CC="$TC_RISCV32_MUSL/bin/riscv32-linux-musl-gcc" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="muslcc-riscv32" ;;

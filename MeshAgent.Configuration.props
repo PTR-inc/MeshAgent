@@ -10,6 +10,9 @@
     <!-- EnableASAN is the C++ toolset's own property. A separate configuration keeps the sanitized
          objects and binary out of the normal build's directories. -->
     <EnableASAN Condition="$(Configuration.EndsWith('_ASAN'))">true</EnableASAN>
+    <!-- msbuild /p:MeshWebLog=true compiles in the web logging interface, the makefile's WEBLOG=1.
+         Off by default, as on the other platforms, since it is an extra listener in a release agent. -->
+    <MeshWebLog Condition="'$(MeshWebLog)'==''">false</MeshWebLog>
     <ConfigurationType>Application</ConfigurationType>
     <!-- msbuild /p:MeshToolset=v145 picks VS 2026, /p:MeshToolset=v142 the VS 2019 toolset. -->
     <MeshDefaultToolset>v143</MeshDefaultToolset>
@@ -26,11 +29,12 @@
          GetFileName keeps the text after the last separator, so the last match wins. -->
     <_MeshVcToolsDirs Condition="'$(MeshToolset)'=='$(MeshDefaultToolset)' And '$(VCInstallDir)'!='' And Exists('$(VCInstallDir)Tools\MSVC')">$([System.IO.Directory]::GetDirectories('$(VCInstallDir)Tools\MSVC', '$(MeshVcToolsVersion).*'))</_MeshVcToolsDirs>
     <VCToolsVersion Condition="'$(_MeshVcToolsDirs)'!=''">$([System.IO.Path]::GetFileName('$(_MeshVcToolsDirs)'))</VCToolsVersion>
-    <!-- An x64 host otherwise drives the 32-bit toolchain for Win32, which is slower and runs out
-         of address space under link-time code generation. -->
+    <!-- An x64 host otherwise drives the 32-bit toolchain for Win32, which is slower and used to
+         run out of address space back when link-time code generation was on. -->
     <PreferredToolArchitecture>x64</PreferredToolArchitecture>
     <CharacterSet>MultiByte</CharacterSet>
     <UseDebugLibraries>$(MeshDebug)</UseDebugLibraries>
-    <WholeProgramOptimization Condition="'$(MeshDebug)'=='false'">true</WholeProgramOptimization>
+    <!-- Link-time code generation is off because MSVC x86 ltcg (v143 and v145) miscompiled the ILibMemory_Init_Size macro into STATUS_HEAP_CORRUPTION at every agent start, and it measured only 0.77 % of MeshService.exe on this source since OpenSSL and zlib are prebuilt without /GL. See ISSUES.md. -->
+    <WholeProgramOptimization>false</WholeProgramOptimization>
   </PropertyGroup>
 </Project>

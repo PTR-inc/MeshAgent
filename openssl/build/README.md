@@ -4,8 +4,7 @@ Everything under `openssl/` that builds, verifies or documents the static `libcr
 archives this repo ships. The archives are laid out as OpenSSL install prefixes, one per version
 per target, and the agent build points at exactly one prefix at a time. `targets.sh` is the
 source of truth for what compiles each target, `openssl/build/verify` is the ledger of what is
-actually committed. This file explains the layout and the gates. `BUILD.md` at the repo root
-routes, `ISSUES.md` records decisions and incidents.
+actually committed. This file explains the layout and the gates.
 
 ## Map of `openssl/`
 
@@ -19,7 +18,7 @@ openssl/
     build.sh                      builds one or more targets and installs their prefixes
     probe.sh                      the gates, shared by build.sh (before install) and verify
     verify                        read-only audit of every committed prefix, CI runs it
-    consistency.sh                the anti-drift gate (see BUILD.md)
+    consistency.sh                the anti-drift gate
     archive-info.py               ar walker: format, wordsize, machine, member count, no binutils
     flags/1.1.1.txt               shared Configure flags for the 1.1.1 series (flags/3.txt later)
     xip-sdk-cpio.py               Xcode SDK extraction helper for osxcross
@@ -91,7 +90,7 @@ libc, their MSVC details live in `build.ps1`'s `$Targets`.
 | `linux-mipsel-uclibc` | linux-mips32 | Bootlin mips32el uClibc | uclibc | 7 | yes | yes |
 | `linux-mipsel-musl` | linux-mips32 | OpenWrt SDK mipsel_24kc | musl | 40 | yes | yes |
 | `linux-mips-musl` | linux-mips32 | OpenWrt SDK mips_24kc | musl | 28 | yes | yes |
-| `linux-riscv64-musl` | linux64-riscv64 | musl.cc riscv64 (rv64gc) | musl | 45, 46, 145 | none | yes |
+| `linux-riscv64-musl` | linux64-riscv64 | musl.cc riscv64 (rv64gc) | musl | 45, 46 | none | yes |
 | `linux-riscv32-musl` | linux-generic32 | musl.cc riscv32 | musl | 47 | none | yes |
 | `freebsd-x86_64` | BSD-x86_64 | clang + FreeBSD sysroot | bsd | 30 | yes | no |
 | `openbsd-x86_64` | BSD-x86_64 | clang + OpenBSD sysroot | bsd | 37 | yes | no |
@@ -119,7 +118,7 @@ Flag reasoning that applies across the table:
 - **`linux-armv4` stays at `-no-asm`** (armv6hf-glibc, armv7hf-musl). With asm the build produced
   wrong crypto results under qemu-arm (non-deterministic SHA-384/512, `RSA.verify()` rejecting its
   own fresh signature). Reverting to `-no-asm` did not fix it, so the bug is not asm itself and is
-  unresolved. Do not trust RSA or SHA-384/512 on those targets. Details in ISSUES.md.
+  unresolved. Do not trust RSA or SHA-384/512 on those targets.
 - **`-Os`** goes to space-constrained embedded and router targets only. General-purpose systems
   (x86, x86-64 on any libc, the BSDs, macOS) favour speed.
 - **musl targets have no `-mcpu` tune** any more (`linux-aarch64-musl` lost `-mcpu=cortex-a53`):
@@ -186,7 +185,7 @@ the macOS archives count 564 and 576 members here, the old 565 and 577 were GNU 
 the Mach-O `__.SYMDEF` pseudo-member.
 
 `consistency.sh` is the other gate, read-only and about drift rather than archives. Its eight
-checks are listed in BUILD.md. The ones that touch this layout: every prefix directory is a
+The checks that touch this layout: every prefix directory is a
 target, the pinned version is installed, every non-obsolete ARCHID's `OSSLTARGET` is a known and
 installed target, `build.ps1`'s `$Targets` names equal `targets.sh --names windows`, the shared
 `opensslv.h` is the pinned release, there is no shared `opensslconf.h`, and every prefix has its
@@ -236,7 +235,7 @@ on a smoke compile), the T-Head/Xuantie riscv64 vendor toolchain (mirrored, see 
 GNU toolchain, and the FreeBSD/OpenBSD sysroots. Safe to re-run, present components are skipped.
 `fetch-toolchains.sh list` reports status without fetching. It does not install the apt
 prerequisites below. `osxcross` clones and builds osxcross, but the macOS SDK is Apple-licensed
-and must be supplied locally, see BUILD.md's macOS section. It lives at the repo root because it
+and must be supplied locally. It lives at the repo root because it
 also wires the toolchains the agent's own cross-compile needs (ARCHID 28, 36, 40) into
 `../ToolChains/`, so `$BUILDROOT` serves the agent build too.
 
@@ -296,7 +295,7 @@ saying "dd-wrt" is stale.
 
 ## The riscv64 ASYNC/ucontext bug (2026-08-24), read before touching a musl target
 
-The old `riscv64` archive was built glibc (`riscv64-linux-gnu-gcc`) while ARCHID 45 and 145 both
+The old `riscv64` archive was built glibc (`riscv64-linux-gnu-gcc`) while ARCHID 45 and the since-removed 145 both
 link it as musl, a real mismatch. Linking an agent failed with `undefined reference to
 getcontext/setcontext/makecontext`: OpenSSL's `crypto/async/arch/async_posix.h` compiles
 `ASYNC_POSIX` in when `__GLIBC__` is defined, and musl implements `ucontext.h` on no architecture
@@ -327,7 +326,7 @@ pull request triggers them.
 `build-system-checks.yml` runs `consistency.sh`, `verify` and `bash -n` on every script; on any
 change under `openssl/**` or the build files pushed to master (its own path list, since it is
 no platform of `build.yml`). Rules for what may and may not be written into a
-workflow are in BUILD.md.
+workflow are in `consistency.sh` and the workflow files themselves.
 
 ## Windows build (native, PowerShell)
 
@@ -359,7 +358,7 @@ files on Linux, so the Windows prefixes are covered by both.
 Known caveat: the six committed `-debug` archives were compiled `/MT /Od`, not `/MTd`, because
 `build.ps1`'s `/MDd` replacement never matched (the debug makefile said `/MD`). The objects are
 `/Zl`, so no CRT is pulled in and the agent links, but they are not true MTd builds until rebuilt
-on the Windows runner. Tracked in ISSUES.md.
+on the Windows runner.
 
 ### Prerequisites
 

@@ -39,8 +39,13 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <ControlFlowGuard>Guard</ControlFlowGuard>
+      <!-- /sdl: stricter /GS cookies and a few warnings promoted to errors, notably uninitialized locals (C4700/C4703). -->
+      <SDLCheck>true</SDLCheck>
+      <!-- /std:c17 to match the makefile's -std=gnu17. It brings the conformant preprocessor with it. -->
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
       <AdditionalIncludeDirectories>$(MeshOpenSSLPrefix)include;$(MeshOpenSSLDir)include;..\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>MESH_AGENTID=$(MeshAgentId);WIN32;WINSOCK2;_WINSOCK_DEPRECATED_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CONSOLE;MICROSTACK_NO_STDAFX;MICROSTACK_PROXY;MICROSTACK_TLS_DETECT;NOLMSCOMMANDER;_LINKVM;_REMOTELOGGING;_REMOTELOGGINGSERVER;ILibChain_WATCHDOG_TIMEOUT=600000;DUK_USE_DATE_NOW_WINDOWS;DUK_USE_DEBUGGER_SUPPORT;DUK_USE_INTERRUPT_COUNTER;DUK_USE_DEBUGGER_INSPECT;DUK_USE_DEBUGGER_PAUSE_UNCAUGHT;DUK_USE_DEBUGGER_DUMPHEAP;_MSC_PLATFORM_TOOLSET_$(PlatformToolset);$(MeshProjectDefines);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>MESH_AGENTID=$(MeshAgentId);WIN32;WINSOCK2;_WINSOCK_DEPRECATED_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CONSOLE;MICROSTACK_NO_STDAFX;MICROSTACK_PROXY;MICROSTACK_TLS_DETECT;NOLMSCOMMANDER;_LINKVM;ILibChain_WATCHDOG_TIMEOUT=180000;DUK_USE_DATE_NOW_WINDOWS;DUK_USE_DEBUGGER_SUPPORT;DUK_USE_INTERRUPT_COUNTER;DUK_USE_DEBUGGER_INSPECT;DUK_USE_DEBUGGER_PAUSE_UNCAUGHT;_MSC_PLATFORM_TOOLSET_$(PlatformToolset);$(MeshProjectDefines);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(MeshWebLog)'=='true'">_REMOTELOGGING;_REMOTELOGGINGSERVER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Platform)'!='Win32'">WIN64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Platform)'=='ARM64'">ARM64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
@@ -94,7 +99,8 @@
       <Optimization>Disabled</Optimization>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
-      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- DumpHeap is the debugger-protocol command that streams the whole JS heap, a debug aid only, as on the other platforms. -->
+      <PreprocessorDefinitions>_DEBUG;DUK_USE_DEBUGGER_DUMPHEAP;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
 
@@ -109,7 +115,7 @@
     <Link>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <!-- No LinkTimeCodeGeneration here: WholeProgramOptimization is off in MeshAgent.Configuration.props, and a bare /LTCG with no /GL objects only buys a linker warning. -->
     </Link>
   </ItemDefinitionGroup>
 

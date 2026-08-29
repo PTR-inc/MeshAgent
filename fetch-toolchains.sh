@@ -171,7 +171,7 @@ p_openbsd() {
 # ------------------------------------------------------- vendor toolchains ----
 # The T-Head Xuantie C906 riscv64-unknown-linux-musl toolchain has no public upstream URL,
 # since a prebuilt needs their account-gated OCC portal, so it is mirrored at
-# PTR-inc/meshagent-toolchains/TC. A miss is not fatal, ARCH_45 stays bring-your-own. See ISSUES.md.
+# PTR-inc/meshagent-toolchains/TC. A miss is not fatal, ARCH_45 stays bring-your-own.
 p_riscv64_xthead() {
     local destdir="$TC_RISCV64_XTHEAD" url="$MESHAGENT_TOOLCHAINS_RAW/TC/riscv64-linux-musl-xthead.tar.xz"
     toolchain_smoke_ok "$destdir/bin/riscv64-unknown-linux-musl-gcc" && { log_status riscv64-xthead "already present"; return 0; }
@@ -204,7 +204,7 @@ p_muslcc() {
 # ------------------------------------------------------------ Bootlin cross --
 # Bootlin glibc and uClibc cross toolchains of ~100MB each. No checksum is published,
 # so each is gated on a smoke compile. The release is pinned rather than "latest"
-# so the libc floor is a deliberate, reproducible choice. See ISSUES.md.
+# so the libc floor is a deliberate, reproducible choice.
 p_bootlin() {
     local name="$1" family="$2" destvar="$3" ccname="$4"
     local destdir="${!destvar}" base; base="$(basename "$destdir")"
@@ -257,7 +257,7 @@ p_bootlin_pinned() {
 # ---------------------------------------------------------------- osxcross --
 # Builds osxcross in $OSXCROSS_DIR. The default run skips it, without failing, when no SDK
 # is available, because the SDK is Apple-licensed and never downloaded from anywhere public.
-# The SDK is taken from $OSXCROSS_SDK_TARBALL, then an Xcode_<ver>_Universal.xip in $BR_DOWNLOADS, then $OSXCROSS_SDK_URL. See BUILD.md.
+# The SDK is taken from $OSXCROSS_SDK_TARBALL, then an Xcode_<ver>_Universal.xip in $BR_DOWNLOADS, then $OSXCROSS_SDK_URL.
 OSXCROSS_APT="clang llvm-dev libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev cmake patch cpio git python3"
 osxcross_cc() { ls "$OSXCROSS_BIN"/aarch64-apple-darwin*-clang 2>/dev/null | head -1; }
 # The probe includes the SDK's libc headers because a broken SDK with NULLcanary headers
@@ -483,7 +483,7 @@ wire_makefile_toolchains() {
     done
     # Each musl.cc and Bootlin toolchain gets a version-less alias so a pin bump is a
     # one-line build-env.sh edit, not a makefile edit. ARCHID 35 reuses the same musl.cc
-    # armhf toolchain OpenSSL is already built with. See ISSUES.md.
+    # armhf toolchain OpenSSL is already built with.
     for pair in "armv5-eabi-glibc:$TC_ARMV5_BOOTLIN" \
                 "armv7-eabihf-glibc:$TC_ARMV7HF_BOOTLIN" \
                 "aarch64-glibc:$TC_AARCH64_BOOTLIN" \

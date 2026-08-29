@@ -1,7 +1,7 @@
 #!/bin/bash
 # Read-only drift check. It fails when the build system's sources of truth stop agreeing,
 # or when a pinned constant is copied somewhere that should ask for it instead.
-# BUILD.md says what each source of truth owns.
+# Each source of truth owns exactly one kind of constant, and this script is what enforces that.
 
 . "$(dirname "$(readlink -f "$0")")/../../build-env.sh" >/dev/null || exit 1
 . "$BR_SCRIPTS/targets.sh" || exit 1

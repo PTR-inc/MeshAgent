@@ -92,7 +92,10 @@ foreach ($t in $list) {
     if ($useAsm) { $flags = $flags -replace '-no-asm', '' }
 
     $debugFlag = if ($t.Debug) { '--debug' } else { '' }
-    $mdPattern = if ($t.Debug) { '/MDd\b' } else { '/MD\b' }
+    # With no-shared, OpenSSL's VC-noCE-common never emits /MD or /MDd; it puts "/MT /Zl" in lib_cflags for
+    # debug and release alike, so a --debug build has to have that /MT rewritten to /MTd here. /Zl stays, so
+    # the objects carry no /DEFAULTLIB and the agent's own CRT choice wins at link time.
+    $mdPattern = if ($t.Debug) { '/MT\b' } else { '/MD\b' }
     $mtReplacement = if ($t.Debug) { '/MTd' } else { '/MT' }
     # Release builds drop /Zi and nasm -g, which VC-common forces even in release.
     $stripDbg = if ($t.Debug) { '' } else { " -replace '/Zi /Fdossl_static\.pdb ','' -replace 'ASFLAGS=-g','ASFLAGS='" }

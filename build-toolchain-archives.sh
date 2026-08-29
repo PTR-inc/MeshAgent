@@ -1,7 +1,7 @@
 #!/bin/bash
 # Repacks the cross toolchains under $BUILDROOT/toolchains into smaller archives for
 # the TC/ folder of PTR-inc/meshagent-toolchains. Only share/ extras and unneeded ELF
-# symbols can go, since the toolchain is the compiler, so expect a 10-20% reduction. See ISSUES.md.
+# symbols can go, since the toolchain is the compiler, so expect a 10-20% reduction.
 #
 # Every archive is smoke-tested with its own gcc before it is kept, because a
 # stripped cc1 that no longer runs is worse than shipping no archive at all.
