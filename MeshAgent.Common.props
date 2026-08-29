@@ -46,6 +46,10 @@
       <AdditionalIncludeDirectories>$(MeshOpenSSLPrefix)include;$(MeshOpenSSLDir)include;..\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>MESH_AGENTID=$(MeshAgentId);WIN32;WINSOCK2;_WINSOCK_DEPRECATED_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CONSOLE;MICROSTACK_NO_STDAFX;MICROSTACK_PROXY;MICROSTACK_TLS_DETECT;NOLMSCOMMANDER;_LINKVM;ILibChain_WATCHDOG_TIMEOUT=180000;DUK_USE_DATE_NOW_WINDOWS;DUK_USE_DEBUGGER_SUPPORT;DUK_USE_INTERRUPT_COUNTER;DUK_USE_DEBUGGER_INSPECT;DUK_USE_DEBUGGER_PAUSE_UNCAUGHT;_MSC_PLATFORM_TOOLSET_$(PlatformToolset);$(MeshProjectDefines);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(MeshWebLog)'=='true'">_REMOTELOGGING;_REMOTELOGGINGSERVER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- The linker's MinimumRequiredVersion only stamps a number into the PE header. This is what
+           keeps the headers from declaring an API that the oldest supported Windows does not export. -->
+      <PreprocessorDefinitions Condition="'$(Platform)'!='ARM64'">_WIN32_WINNT=0x0601;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Platform)'=='ARM64'">_WIN32_WINNT=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Platform)'!='Win32'">WIN64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Platform)'=='ARM64'">ARM64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
