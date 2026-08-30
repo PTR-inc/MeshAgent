@@ -143,6 +143,9 @@ WARNFLAGS = $(if $(filter 0,$(WARN)),-w,)
 # 64-bit file offsets on the 32-bit targets, so stat() works past 2 GB and readdir() does not fail with EOVERFLOW
 # on 64-bit directory offsets, which is what every readdirSync() returned empty under qemu-user. No effect on 64-bit.
 CFLAGS ?= -std=$(CSTD) -g -Wall -D_POSIX -D_FILE_OFFSET_BITS=64 -DMICROSTACK_PROXY $(CWATCHDOG) -fno-strict-aliasing $(INCDIRS) -DDUK_USE_DEBUGGER_SUPPORT -DDUK_USE_INTERRUPT_COUNTER -DDUK_USE_DEBUGGER_INSPECT -DDUK_USE_DEBUGGER_PAUSE_UNCAUGHT
+# Snapshot before any ARCH_<id> block's `CFLAGS +=` runs (that eval happens further down), so
+# `make list`/print-cflags-extra can show just the per-ARCHID addition, not the whole line.
+BASE_CFLAGS := $(CFLAGS)
 LDFLAGS ?= -L. -lpthread -lutil -lm
 LDINT =
 
@@ -187,6 +190,11 @@ PATH_RISCV64 = ../ToolChains/riscv64-linux-musl-x86_64/
 PATH_RISCV64_MUSL = ../ToolChains/riscv64-linux-musl-cross/
 PATH_RISCV32_MUSL = ../ToolChains/riscv32-linux-musl-cross/
 
+# Zig's bundled Clang, for CCOVERRIDE - see its own doc comment above the target table. Zig's own
+# layout has no bin/ subdirectory (the binary sits at $(PATH_ZIG)zig directly, unlike a normal
+# cross toolchain), so CCOVERRIDE lines reference it as $(PATH_ZIG)zig, not $(PATH_ZIG)bin/zig.
+PATH_ZIG = ../ToolChains/zig/
+
 # ----------------------------------------------------------------------------
 # Target table, one block per ARCHID, sorted. ARCHNAME is the only required field.
 #   ARCHNAME  binary suffix, and also the jpeg archive directory
@@ -196,6 +204,18 @@ PATH_RISCV32_MUSL = ../ToolChains/riscv32-linux-musl-cross/
 #   XDIR      SDK root, from which PATH, STAGING_DIR, CC, STRIP and INCDIRS are derived
 #   XPREFIX   gcc and strip prefix inside $(XDIR)bin/. XSTRIP overrides it for strip only
 #   XTRIPLE   triple subdirectory added to PATH. XSYSROOT=1 also passes --sysroot=$(XDIR)
+#   CCOVERRIDE  replaces the whole $(XDIR)bin/$(XPREFIX)gcc[...] rule wholesale when set - the
+#             compiler command verbatim (may be multi-word, e.g. a `zig cc -target ...` line;
+#             CCBIN's $(firstword $(CC)) already handles that for the toolchain-presence check).
+#             XSYSROOT's implicit --sysroot=$(XDIR) is NOT applied on top - bake --sysroot into
+#             CCOVERRIDE itself if the override needs one. XDIR/XPREFIX/XTRIPLE keep governing
+#             STRIP/PATH/INCDIRS as usual, so a real toolchain directory can stay in place for
+#             those while only the compiler swaps out - point XDIR at a directory with no real
+#             toolchain only if STRIP is not needed either (or is separately overridden via
+#             XSTRIP with its own real path). A zig cc override specifically needs
+#             -Wno-date-time added (zig's clang errors on ScriptContainer.c's __TIME__/__DATE__
+#             use by default; neither the vendor toolchains nor upstream clang/gcc do) - see
+#             ARCH_45's CCOVERRIDE for a worked example, including the CFLAGS reasons above.
 #   BSDREL    bsd class only, the OS release used for the default cross-build triple and sysroot
 #   TUNE      the -march, -mcpu and -mabi flags for this silicon
 #   HARDEN    one of full (the default), basic or none
@@ -214,6 +234,15 @@ define ARCH_5
   XPREFIX  = i686-linux-
   XTRIPLE  = i686-buildroot-linux-gnu
   FETCH    = bootlin-x86
+  # 2026-08-30: CC moved to zig via CCOVERRIDE - same glibc 2.24 floor as the Bootlin toolchain
+  # it replaces (linux-i686-glibc's own OSSLTARGET pin). XDIR/XPREFIX/XTRIPLE/FETCH untouched, so
+  # the Bootlin toolchain stays in place for STRIP.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target x86-linux-gnu.2.24 -Wno-date-time
+  # zig's bundled lld does not resolve -l:lib-jpeg-turbo/.../libturbojpeg.a (a slash-containing
+  # name passed to the GNU-ld/gold -l: exact-filename extension) the way GNU ld does - "unable to
+  # find library". LEGACY_LD's plain-relative-path linking already exists for exactly this class
+  # of linker difference and works identically well with lld.
+  LEGACY_LD = 1
   KVM      = 1
   LMS      = 1
 endef
@@ -228,7 +257,14 @@ define ARCH_6
   XPREFIX  = x86_64-linux-
   XTRIPLE  = x86_64-buildroot-linux-gnu
   FETCH    = bootlin-x86-64
-  TUNE     = -march=x86-64 -mtune=generic
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same glibc 2.24 floor. TUNE dropped, not just
+  # replaced: zig's -march=/-mtune= route through a -mcpu= lookup with no 'x86-64'/'generic'
+  # entries ("unknown target CPU"), unlike real clang/gcc - and zig's default x86_64 baseline is
+  # already generic, so the override was only ever needed for the old core-i7-named toolchain.
+  # Previously: TUNE = -march=x86-64 -mtune=generic.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target x86_64-linux-gnu.2.24 -Wno-date-time
+  # See ARCH_5's comment: zig's lld needs LEGACY_LD's plain-relative-path libjpeg linking.
+  LEGACY_LD = 1
   KVM      = 1
   LMS      = 1
 endef
@@ -265,6 +301,8 @@ define ARCH_9
   FETCH    = bootlin-armv5
   HARDEN   = basic
   CFLAGS  += -D_NOFSWATCHER
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same glibc 2.31 floor.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target arm-linux-gnueabi.2.31 -Wno-date-time
   KVM      = 0
   LMS      = 0
 endef
@@ -293,6 +331,8 @@ define ARCH_19
   XPREFIX  = i686-linux-
   XTRIPLE  = i686-buildroot-linux-gnu
   FETCH    = bootlin-x86
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same glibc 2.24 floor as ARCH_5.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target x86-linux-gnu.2.24 -Wno-date-time
   EXENAME2 = _nokvm
   KVM      = 0
   LMS      = 1
@@ -307,7 +347,9 @@ define ARCH_20
   XPREFIX  = x86_64-linux-
   XTRIPLE  = x86_64-buildroot-linux-gnu
   FETCH    = bootlin-x86-64
-  TUNE     = -march=x86-64 -mtune=generic
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same reasoning and same glibc 2.24 floor as
+  # ARCH_6. Previously: TUNE = -march=x86-64 -mtune=generic.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target x86_64-linux-gnu.2.24 -Wno-date-time
   EXENAME2 = _nokvm
   KVM      = 0
   LMS      = 1
@@ -325,6 +367,8 @@ define ARCH_24
   FETCH    = bootlin-armv7hf
   HARDEN   = basic
   CFLAGS  += -D_NOFSWATCHER
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same glibc 2.31 floor.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target arm-linux-gnueabihf.2.31 -Wno-date-time
   KVM      = 0
   LMS      = 0
 endef
@@ -349,7 +393,25 @@ define ARCH_26
   ARCHNAME = arm64
   OSSLTARGET = linux-aarch64-glibc
   CLASS    = generic
-  CC       = aarch64-linux-gnu-gcc
+  # 2026-08-30: CC moved to zig directly, not via the CCOVERRIDE indirection every other switched
+  # ARCH block uses: this one sets CC without going through XDIR/XPREFIX, and an inline
+  # CCOVERRIDE-conditional CC line does not work placed in the same define block as CCOVERRIDE's
+  # own assignment - a define block's whole text expands in one pass when eval'd (standard
+  # recursive-variable behaviour), so CC's reference would resolve before CCOVERRIDE's own line
+  # in the same block took effect, always empty (worse: writing that literal construct out again
+  # here as an example, even inside a comment, was tried and caused a genuine Make "Recursive
+  # variable references itself" parse error - a comment inside a define block is not safe from
+  # expansion the way an ordinary makefile comment is, so avoid writing eval/override syntax
+  # in prose here at all). The shared ifdef-XDIR rule avoids the whole problem because it lives
+  # outside any eval'd block, deferred until real use - not an option for a block that sets its
+  # own CC directly.
+  # No glibc version pinned in the triple (unlike ARCH_32's own linux-aarch64-glibc row): this
+  # ARCHID is deliberately "general", meaning whatever's newest/native, distinct from ARCH_32's
+  # deliberately old floor - see targets.sh's own comment on why one archive serves both. Pinning
+  # a floor here would collapse that distinction. Previously: CC = aarch64-linux-gnu-gcc.
+  CC       = $(PATH_ZIG)zig cc -target aarch64-linux-gnu -Wno-date-time
+  # See ARCH_5's comment: zig's lld needs LEGACY_LD's plain-relative-path libjpeg linking.
+  LEGACY_LD = 1
   STRIP    = aarch64-linux-gnu-strip
   HARDEN   = none
   KVM      = 1
@@ -369,6 +431,14 @@ define ARCH_28
   HARDEN   = basic
   NOLDHARDEN = 1
   CFLAGS  += -DBADMATH
+  # 2026-08-30: CC moved to zig via CCOVERRIDE. XSYSROOT's implicit --sysroot=$(XDIR) does not
+  # apply on top of an override (see CCOVERRIDE's own doc comment) - not needed anyway, zig
+  # bundles its own musl headers for this target, same as every other zig-switched musl OpenSSL
+  # target this session (no --sysroot was needed for any of them either). soft-float musleabi:
+  # OpenWrt's mips24kc toolchain defaults to soft-float, confirmed via -Q --help=target when this
+  # was first established on the OpenSSL side. XDIR/XPREFIX/XTRIPLE/FETCH untouched, so the
+  # OpenWrt toolchain stays in place for STRIP.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target mips-linux-musleabi -Wno-date-time
   KVM      = 0
   LMS      = 0
 endef
@@ -411,6 +481,11 @@ define ARCH_32
   XTRIPLE  = aarch64-buildroot-linux-gnu
   FETCH    = bootlin-aarch64
   HARDEN   = basic
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, glibc 2.31 floor pinned (unlike ARCH_26's own
+  # linux-aarch64-glibc row, deliberately - see its comment for why).
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target aarch64-linux-gnu.2.31 -Wno-date-time
+  # See ARCH_5's comment: zig's lld needs LEGACY_LD's plain-relative-path libjpeg linking.
+  LEGACY_LD = 1
   KVM      = 1
   LMS      = 0
 endef
@@ -426,6 +501,8 @@ define ARCH_33
   XPREFIX  = x86_64-linux-musl-
   XTRIPLE  = x86_64-linux-musl
   FETCH    = muslcc-x86_64
+  # 2026-08-30: CC moved to zig via CCOVERRIDE.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target x86_64-linux-musl -Wno-date-time
   KVM      = 0
   LMS      = 1
 endef
@@ -441,8 +518,13 @@ define ARCH_35
   XPREFIX  = arm-linux-musleabihf-
   XTRIPLE  = arm-linux-musleabihf
   FETCH    = muslcc-armhf
-  TUNE     = -march=armv7-a -marm -mfpu=vfp -mfloat-abi=hard
   HARDEN   = basic
+  # 2026-08-30: CC moved to zig via CCOVERRIDE. TUNE dropped entirely, not just replaced: the
+  # -linux-musleabihf triple already encodes hardfloat, and zig's -march= routes through a
+  # -mcpu= lookup with no 'armv7-a' entry (same class of error as x86_64/riscv above) - confirmed
+  # dropping it entirely still compiles clean. Previously:
+  # TUNE = -march=armv7-a -marm -mfpu=vfp -mfloat-abi=hard.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target arm-linux-musleabihf -Wno-date-time
   KVM      = 0
   LMS      = 0
   # Real hardware here runs vendor glibc firmware, not a musl userland, so unlike the OpenWrt
@@ -462,6 +544,9 @@ define ARCH_36
   FETCH    = openwrt-openwrt_x86_64
   HARDEN   = basic
   CFLAGS  += -DBADMATH
+  # 2026-08-30: CC moved to zig via CCOVERRIDE - see ARCH_28's comment on why XSYSROOT's implicit
+  # --sysroot is neither applied nor needed here.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target x86_64-linux-musl -Wno-date-time
   KVM      = 0
   LMS      = 0
 endef
@@ -489,6 +574,9 @@ define ARCH_40
   FETCH    = openwrt-mipsel24kc
   HARDEN   = basic
   CFLAGS  += -DBADMATH
+  # 2026-08-30: CC moved to zig via CCOVERRIDE - see ARCH_28's comment (soft-float, and why
+  # XSYSROOT's implicit --sysroot is neither applied nor needed here).
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target mipsel-linux-musleabi -Wno-date-time
   KVM      = 0
   LMS      = 0
 endef
@@ -502,6 +590,8 @@ define ARCH_41
   XTRIPLE  = aarch64-openwrt-linux-musl
   HARDEN   = basic
   FETCH    = openwrt-aarch64-cortex-a53
+  # 2026-08-30: CC moved to zig via CCOVERRIDE.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target aarch64-linux-musl -Wno-date-time
   KVM      = 0
   LMS      = 0
 endef
@@ -516,13 +606,35 @@ define ARCH_45
   XDIR     = $(PATH_RISCV64)
   XPREFIX  = riscv64-unknown-linux-musl-
   XTRIPLE  = riscv64-unknown-linux-musl
-  # On this toolchain (gcc 14.1.1 from the XuanTie fork) -mcpu=c906fdv alone expands to the full
-  # T-Head extension set. The original vendor gcc 10.2.0 spelling -march=rv64imafdcv0p7xthead is
-  # rejected here because 'xthead' is no longer a single extension name.
-  TUNE     = -mcpu=c906fdv -mcmodel=medany -mabi=lp64d
+  # 2026-08-30: CC moved to zig via CCOVERRIDE (see its own doc comment above the target table).
+  # Investigated reaching the T-Head extension set through zig first: LLVM's riscv64 backend has
+  # no -mcpu= alias for c906fdv (only baseline_rv32/baseline_rv64/generic/sifive-*/etc.), and
+  # while the vendor gcc's 20 individual extensions do parse one at a time via
+  # -Xclang -target-feature -Xclang +xtheadXXX, 4 of them - including the flagship xtheadvector -
+  # silently downgrade to "ignoring feature" when combined (LLVM 20.1.2/21.1.0/22.1.8 alike).
+  # Nothing in this codebase has a correctness dependency on any of it either way: OpenSSL 1.1.1
+  # ships zero RISC-V asm, and the only RISC-V-conditional code here is Duktape's portable
+  # __riscv/__riscv_xlen check. So this now matches ARCH_46 exactly rather than attempt a partial,
+  # 16-of-20 vendor-extension reconstruction for unmeasured benefit - see meshagent-zig-toolchain.md.
+  # -march=rv64gc is dropped (not just replaced) because zig's -target riscv64-linux-musl already
+  # defaults to the RV64GC feature set, and zig's own -march= is not clang's - it resolves to a
+  # -mcpu= lookup with no 'rv64gc' entry ("unknown CPU: 'rv64gc'"), unlike real clang/gcc.
+  # XDIR/XPREFIX/XTRIPLE/FETCH are untouched - the vendor toolchain stays in place for STRIP,
+  # since CCOVERRIDE only replaces CC.
+  # Previously: TUNE = -mcpu=c906fdv -mcmodel=medany -mabi=lp64d (on this toolchain - gcc 14.1.1
+  # from the XuanTie fork - -mcpu=c906fdv alone expands to the full T-Head extension set; the
+  # original vendor gcc 10.2.0 spelling -march=rv64imafdcv0p7xthead is rejected here because
+  # 'xthead' is no longer a single extension name).
+  # -Wno-date-time: zig's clang treats -Wdate-time as an error by default (a reproducibility
+  # guard neither upstream clang nor gcc enable on their own), which the vendor gcc never hit.
+  # microscript/ILibDuktape_ScriptContainer.c's __TIME__/__DATE__ compileTime string trips it -
+  # this will hit any future CCOVERRIDE'd ARCH_<id> block too, not just this one.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target riscv64-linux-musl -Wno-date-time
+  TUNE     = -mabi=lp64d
   HARDEN   = basic
   KVM      = 0
   LMS      = 0
+  LDINT    = -static
   FETCH    = riscv64-xthead
 endef
 
@@ -535,8 +647,13 @@ define ARCH_46
   XDIR     = $(PATH_RISCV64_MUSL)
   XPREFIX  = riscv64-linux-musl-
   XTRIPLE  = riscv64-linux-musl
-  TUNE     = -march=rv64gc -mabi=lp64d
   HARDEN   = basic
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same as ARCH_45 (see its own comment for the
+  # full riscv64/zig writeup, including why -march=rv64gc is dropped rather than kept - zig's
+  # target already defaults to the RV64GC feature set, and its -march= isn't clang's).
+  # Previously: TUNE = -march=rv64gc -mabi=lp64d.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target riscv64-linux-musl -Wno-date-time
+  TUNE     = -mabi=lp64d
   KVM      = 0
   LMS      = 0
   LDINT    = -static
@@ -557,8 +674,12 @@ define ARCH_47
   XDIR     = $(PATH_RISCV32_MUSL)
   XPREFIX  = riscv32-linux-musl-
   XTRIPLE  = riscv32-linux-musl
-  TUNE     = -march=rv32gc -mabi=ilp32d
   HARDEN   = basic
+  # 2026-08-30: CC moved to zig via CCOVERRIDE - same -march=rv32gc-dropped reasoning as
+  # ARCH_46/ARCH_45 (confirmed separately for riscv32: 'unknown CPU: rv32gc').
+  # Previously: TUNE = -march=rv32gc -mabi=ilp32d.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target riscv32-linux-musl -Wno-date-time
+  TUNE     = -mabi=ilp32d
   KVM      = 0
   LMS      = 0
   LDINT    = -static
@@ -595,6 +716,8 @@ define ARCH_70
   XPREFIX  = powerpc64le-linux-
   XTRIPLE  = powerpc64le-linux-gnu
   HARDEN   = basic
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same glibc 2.31 floor.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target powerpc64le-linux-gnu.2.31 -Wno-date-time
   KVM      = 0
   LMS      = 0
   FETCH    = bootlin-powerpc64le
@@ -665,7 +788,10 @@ endif
 ifdef XDIR
 export PATH := $(XDIR)bin:$(if $(XTRIPLE),$(XDIR)$(XTRIPLE)/bin:,)$(PATH)
 export STAGING_DIR := $(XDIR)
-CC = $(XDIR)bin/$(XPREFIX)gcc$(if $(XSYSROOT), --sysroot=$(XDIR),)
+# CCOVERRIDE replaces this rule wholesale - see its own doc comment above the target table.
+# STRIP/PATH/INCDIRS are untouched by it, so XDIR can still point at a real toolchain directory
+# for those while only the compiler comes from CCOVERRIDE.
+CC = $(if $(CCOVERRIDE),$(CCOVERRIDE),$(XDIR)bin/$(XPREFIX)gcc$(if $(XSYSROOT), --sysroot=$(XDIR),))
 STRIP = $(XDIR)bin/$(if $(XSTRIP),$(XSTRIP),$(XPREFIX))strip
 INCDIRS += -I$(XDIR)include
 endif
@@ -936,9 +1062,11 @@ ifeq ($(MEMTRACK),1)
 CFLAGS += -DILIBMEMTRACK
 endif
 
-# C17 is C11 plus defect fixes, so gnu17 and gnu11 compile the same code. The two Bootlin 2017.05
-# toolchains (gcc 5.4, the glibc 2.24 pin for x86 and x86-64) predate the gnu17 name and get gnu11.
-CSTD := $(if $(filter 0,$(shell echo 'int main(void){return 0;}' | $(CC) -std=gnu17 -x c - -fsyntax-only >/dev/null 2>&1; echo $$?)),gnu17,gnu11)
+# C17 is C11 plus defect fixes, so gnu17 and gnu11 compile the same code. Pinned to gnu11 rather
+# than probed per-compiler: the two Bootlin 2017.05 toolchains (gcc 5.4, the glibc 2.24 pin for
+# x86 and x86-64) predate the gnu17 name, and a 2026-08-30 matrix build of every OpenSSL target
+# confirmed gnu11 compiles clean everywhere while gnu17 fails on just those two.
+CSTD := gnu11
 
 # The crash handler prints raw addresses that only resolve against a non-PIE image, so only builds that
 # carry it give up ASLR. Commit 3336756 (branch add-PIE-support) makes the handler PIE-safe via dladdr.
@@ -964,7 +1092,7 @@ $(shell git log -1 --format=%H | awk '{ printf "#define SOURCE_COMMIT_HASH \"%s\
 endif
 endif
 
-.PHONY: all clean cleanbin list list-archs print-toolchain print-ossldir print-ossltarget print-osslver print-bsdrel print-macosarch print-archids
+.PHONY: all clean cleanbin list list-archs print-toolchain print-ossldir print-ossltarget print-osslver print-bsdrel print-macosarch print-archids print-cflags-extra
 
 # The OS recipes re-invoke make with EXENAME= and the full per-target CFLAGS, and that inner make
 # is the only one meant to reach the compile rules. A bare `make ARCHID=n` used to fall into them
@@ -980,7 +1108,8 @@ endif
 
 # One line per ARCHID with its toolchain status. Narrow it with make list FILTER=openwrt
 list list-archs:
-	@printf "%6s  %-20s %-8s %-9s %s\n" ARCHID TARGET CLASS TOOLCHAIN COMPILER
+	@echo "default cflags: $(BASE_CFLAGS)"
+	@printf "%6s  %-20s %-8s %-9s %-30s %s\n" ARCHID TARGET CLASS TOOLCHAIN "EXTRA flags" COMPILER
 	@awk '/^define ARCH_/{id=$$2; sub(/ARCH_/,"",id); n=""; c="-"} \
 	      /^  ARCHNAME/{n=$$3} /^  CLASS/{c=$$3} \
 	      /^endef/{if(id!="" && n!="" && (f=="" || c==f)) print id, n, c; id=""}' \
@@ -989,12 +1118,13 @@ list list-archs:
 	  i=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-toolchain); \
 	  cc=$${i%%|*}; r=$${i#*|}; fetch=$${r%%|*}; r=$${r#*|}; \
 	  apt=$${r%%|*}; r=$${r#*|}; host=$${r%%|*}; hostok=$${r#*|}; \
+	  extra=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-cflags-extra); \
 	  if [ -n "$$host" ] && [ -z "$$hostok" ]; then st=n/a; how="native build - run it on $$host"; \
 	  elif command -v "$$cc" >/dev/null 2>&1 || [ -x "$$cc" ]; then st=ready; how="$$cc"; \
 	  elif [ -n "$$fetch" ]; then st=MISSING; how="./fetch-toolchains.sh $$fetch"; \
 	  elif [ -n "$$apt" ]; then st=MISSING; how="apt-get install $$apt"; \
 	  else st=MISSING; how="bring your own ($$cc)"; fi; \
-	  printf "%6s  %-20s %-8s %-9s %s\n" "$$id" "$$n" "$$c" "$$st" "$$how"; \
+	  printf "%6s  %-20s %-8s %-9s %-30s %s\n" "$$id" "$$n" "$$c" "$$st" "$${extra:--}" "$$how"; \
 	done
 
 # Machine-readable ARCHID list, so CI can loop over it instead of hardcoding an ARCHID list of
@@ -1021,6 +1151,11 @@ print-osslver:
 
 print-ossldir:
 	@echo '$(OSSLPREFIX)'
+
+# The per-ARCHID addition to CFLAGS (e.g. -DBADMATH, -D_NOFSWATCHER), isolated from BASE_CFLAGS
+# by word-filtering, since ARCH_<id> blocks only ever append flags, never remove or reorder them.
+print-cflags-extra:
+	@echo '$(strip $(filter-out $(BASE_CFLAGS),$(CFLAGS)))'
 
 # The OS release a bsd target cross-builds against. CI reads this to pick the matching sysroot
 # tarball, so the release lives in one place, the target block.

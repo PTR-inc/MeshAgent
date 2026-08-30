@@ -4,22 +4,42 @@
 # board or distribution, and its archives live in openssl/<version>/<target>/. br_target <name>
 # sets the T_ variables. The fields are documented in openssl/build/README.md.
 
-# A real macOS runner already has clang and the SDK, while the osxcross prefixed tools only
-# exist on a Linux cross host, so this is resolved per call after build-env.sh is sourced.
-# The deployment floor comes from the makefile's MACOSARCH so the archive's minos never exceeds the agent's.
+# A real macOS runner already has clang and the SDK - no toolchain-floor problem to solve there,
+# so that branch is untouched. The Linux-cross-host branch (previously osxcross's own clang
+# wrapper) moved to zig 2026-08-30: zig has no bundled Apple SDK (can't - it's licensed), so
+# --sysroot still points at the same osxcross-extracted SDK either way. Two zig-specific gotchas
+# found verifying this, both silent rather than erroring, so easy to miss:
+#  1. -mmacosx-version-min= is ignored outright (confirmed via otool -l: LC_BUILD_VERSION's minos
+#     stayed 13.0 regardless of the flag's value). The floor has to be baked into the target
+#     triple's own version suffix instead - "aarch64-macos.11.0", not "-target aarch64-macos
+#     -mmacosx-version-min=11.0" - which otool then confirms lands correctly.
+#  2. zig's own bundled generic-macos headers cover plain libc (stdio.h et al.) but not Apple
+#     frameworks - CommonCrypto/CommonCryptoError.h ("crypto/rand.h" pulls it in) 404s under
+#     --sysroot alone. Needs an explicit -isystem $SDK/usr/include forcing the real SDK headers in.
+# This is resolved per call after build-env.sh is sourced.
 _osx_tools() {
-    local arm_min x64_min
+    local arm_min x64_min sdk
     arm_min=$(make -s -C "$REPO" ARCHID=29 print-macosarch 2>/dev/null)
     x64_min=$(make -s -C "$REPO" ARCHID=16 print-macosarch 2>/dev/null)
     if [ "$(uname -s)" = Darwin ]; then
-        _OSX_ARM_CC="cc $arm_min"; _OSX_X64_CC="cc $x64_min"; _OSX_ARM_TOOLS=; _OSX_X64_TOOLS=
+        _OSX_ARM_CC="cc $arm_min"; _OSX_X64_CC="cc $x64_min"
+        _OSX_ARM_AR=; _OSX_ARM_RANLIB=; _OSX_ARM_NM=; _OSX_X64_AR=; _OSX_X64_RANLIB=; _OSX_X64_NM=
     else
-        _OSX_ARM_CC="$OSXCROSS_BIN/aarch64-apple-darwin$OSXCROSS_DARWIN_VER-clang $arm_min"
-        _OSX_X64_CC="$OSXCROSS_BIN/x86_64-apple-darwin$OSXCROSS_DARWIN_VER-clang $x64_min"
-        _OSX_ARM_TOOLS="$OSXCROSS_BIN/aarch64-apple-darwin$OSXCROSS_DARWIN_VER"
-        _OSX_X64_TOOLS="$OSXCROSS_BIN/x86_64-apple-darwin$OSXCROSS_DARWIN_VER"
-        # clang can only find the prefixed ld through PATH, as the makefile's macos block explains.
-        case ":$PATH:" in *":$OSXCROSS_BIN:"*) ;; *) export PATH="$OSXCROSS_BIN:$PATH" ;; esac
+        sdk="$OSXCROSS_DIR/target/SDK/MacOSX$OSXCROSS_SDK_VER.sdk"
+        _OSX_ARM_CC="$TC_ZIG/zig cc -target aarch64-macos.${arm_min#-mmacosx-version-min=} --sysroot=$sdk -isystem $sdk/usr/include"
+        _OSX_X64_CC="$TC_ZIG/zig cc -target x86_64-macos.${x64_min#-mmacosx-version-min=} --sysroot=$sdk -isystem $sdk/usr/include"
+        # Previously (osxcross's own clang wrapper, still what a from-scratch `fetch-toolchains.sh
+        # osxcross` provisions - see the T_FETCH note below):
+        #   _OSX_ARM_CC="$OSXCROSS_BIN/aarch64-apple-darwin$OSXCROSS_DARWIN_VER-clang $arm_min"
+        #   _OSX_X64_CC="$OSXCROSS_BIN/x86_64-apple-darwin$OSXCROSS_DARWIN_VER-clang $x64_min"
+        #   _OSX_ARM_TOOLS/_OSX_X64_TOOLS were the osxcross <triple>-ar/-ranlib/-nm prefix.
+        # zig ar/ranlib (llvm-ar) handle Mach-O archives correctly - verified: `file` reports a
+        # valid ar archive and a real Configure+build_libs run for both arches completed clean.
+        # T_NM stays empty: zig has no `nm` subcommand (only ar/ranlib/objcopy), and T_NM turns
+        # out to be dead wiring anyway - grep confirms build.sh/probe.sh never pass NM= to the
+        # real build, so there's nothing depending on it either way.
+        _OSX_ARM_AR="$TC_ZIG/zig ar"; _OSX_ARM_RANLIB="$TC_ZIG/zig ranlib"; _OSX_ARM_NM=
+        _OSX_X64_AR="$TC_ZIG/zig ar"; _OSX_X64_RANLIB="$TC_ZIG/zig ranlib"; _OSX_X64_NM=
     fi
 }
 
@@ -32,63 +52,115 @@ br_target() {
     T_MAKE=build_libs
     T_FLAGS="$OSSL_FLAGS"
     case "$1" in
-    # Pinned Bootlin glibc 2.24 toolchains, because apt gcc floors at GLIBC_2.34. The x86-64
-    # -march override is needed because that toolchain defaults to core-i7. The asm modules
-    # gate on runtime CPUID.
-    linux-x86_64-glibc) T_CONF=linux-x86_64 ; T_CC="$TC_X86_64_BOOTLIN/bin/x86_64-linux-gcc -march=x86-64 -mtune=generic" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_FETCH="bootlin-x86-64" ;;
-    linux-i686-glibc)   T_CONF=linux-x86    ; T_CC="$TC_X86_BOOTLIN/bin/i686-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_FETCH="bootlin-x86" ;;
+    # 2026-08-30: switched to Zig's bundled Clang (zig cc -target <triple>.<glibcver>), which
+    # reaches the same glibc floor as the old toolchain with a current compiler instead of
+    # whatever gcc version that toolchain's era happened to ship - see meshagent-optimizations.md.
+    # Previously: pinned Bootlin glibc 2.24 toolchain ($TC_X86_64_BOOTLIN/bin/x86_64-linux-gcc
+    # -march=x86-64 -mtune=generic; the -march/-mtune override existed only because that
+    # toolchain otherwise defaulted to core-i7 tuning - zig's default x86_64 baseline needs no
+    # such override). The asm modules gate on runtime CPUID.
+    linux-x86_64-glibc) T_CONF=linux-x86_64 ; T_CC="$TC_ZIG/zig cc -target x86_64-linux-gnu.2.24" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_FETCH="zig" ;;
+    # Previously: pinned Bootlin glibc 2.24 toolchain ($TC_X86_BOOTLIN/bin/i686-linux-gcc).
+    linux-i686-glibc)   T_CONF=linux-x86    ; T_CC="$TC_ZIG/zig cc -target x86-linux-gnu.2.24" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_FETCH="zig" ;;
     # x86-64 asm is CPUID-gated and works on any libc. Serves Alpine and OpenWrt x86-64 alike,
     # so no -Os: the archive is shared and the general-purpose use favours speed.
-    linux-x86_64-musl)  T_CONF=linux-x86_64 ; T_CC="$MUSL_CC" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=musl ; T_FETCH="apt:musl-tools" ;;
-    # The pinned Bootlin glibc 2.31 toolchain gives the lowest floor, so one archive serves both
-    # the compat ARCHID 32 and the general ARCHID 26. AArch64 asm gates on runtime AT_HWCAP.
-    linux-aarch64-glibc) T_CONF=linux-aarch64 ; T_CC="$TC_AARCH64_BOOTLIN/bin/aarch64-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -O2" ; T_FETCH="bootlin-aarch64" ;;
-    # sparcv9 asm on since 2026-08-28. No hardware here, so it is validated under qemu-sparc64 only.
+    # Previously: $MUSL_CC (apt musl-tools' host musl-gcc).
+    linux-x86_64-musl)  T_CONF=linux-x86_64 ; T_CC="$TC_ZIG/zig cc -target x86_64-linux-musl" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=musl ; T_FETCH="zig" ;;
+    # One archive serves both the compat ARCHID 32 and the general ARCHID 26. AArch64 asm
+    # gates on runtime AT_HWCAP. Previously: pinned Bootlin glibc 2.31 toolchain
+    # ($TC_AARCH64_BOOTLIN/bin/aarch64-linux-gcc).
+    linux-aarch64-glibc) T_CONF=linux-aarch64 ; T_CC="$TC_ZIG/zig cc -target aarch64-linux-gnu.2.31" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -O2" ; T_FETCH="zig" ;;
+    # sparcv9 asm on since 2026-08-28. No hardware here, so it is validated under qemu-sparc64
+    # only. NOT switched to zig: root-caused 2026-08-30 - `srln`, a genuine GNU-as-native
+    # synthetic SPARC pseudo-op used 14x in the vendored crypto asm (not a macro; resolves to a
+    # real shift on 32-bit V8, a nop on 64-bit V9 - see crypto/perlasm/sparcv9_modes.pl's own
+    # comment), isn't implemented by LLVM's SPARC integrated assembler through LLVM 21.1.0 (zig
+    # 0.15.2/0.16.0). Fixed in LLVM 22.1.8 (zig 0.17.0-dev master) - confirmed with a real
+    # Configure+build_libs pass - but not adopted: ziglang.org's release index only exposes a
+    # moving "master" key, not that exact dev snapshot, so it isn't a reproducible pin the way
+    # every other toolchain here is. Revisit at a tagged 0.17.0 stable release. Stays on the
+    # pinned Bootlin glibc 2.31 toolchain ($TC_SPARC64_BOOTLIN/bin/sparc64-linux-gcc) until then.
     linux-sparc64-glibc) T_CONF=linux64-sparcv9 ; T_CC="$TC_SPARC64_BOOTLIN/bin/sparc64-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_FETCH="bootlin-sparc64" ;;
-    linux-ppc64le-glibc) T_CONF=linux-ppc64le ; T_CC="$TC_POWERPC64LE_BOOTLIN/bin/powerpc64le-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_FETCH="bootlin-powerpc64le" ;;
-    # musl.cc toolchain. The ARMv8 crypto extensions are runtime-HWCAP-gated, so plain armv8-a
-    # code is generated and cores with or without them are both safe.
-    linux-aarch64-musl) T_CONF=linux-aarch64 ; T_CC="$TC_AARCH64_A53_MUSL/bin/aarch64-linux-musl-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -O2" ; T_LIBC=musl ; T_FETCH="muslcc-aarch64" ;;
-    # -mfpu=vfp and -marm are needed because armv6 implies no FPU and thumb has no hard-float ABI.
+    # Previously: pinned Bootlin glibc 2.31 toolchain ($TC_POWERPC64LE_BOOTLIN/bin/powerpc64le-linux-gcc).
+    linux-ppc64le-glibc) T_CONF=linux-ppc64le ; T_CC="$TC_ZIG/zig cc -target powerpc64le-linux-gnu.2.31" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_FETCH="zig" ;;
+    # The ARMv8 crypto extensions are runtime-HWCAP-gated, so plain armv8-a code is generated
+    # and cores with or without them are both safe. Previously: musl.cc toolchain
+    # ($TC_AARCH64_A53_MUSL/bin/aarch64-linux-musl-gcc).
+    linux-aarch64-musl) T_CONF=linux-aarch64 ; T_CC="$TC_ZIG/zig cc -target aarch64-linux-musl" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -O2" ; T_LIBC=musl ; T_FETCH="zig" ;;
     # asm stays disabled: under qemu-arm it produced wrong crypto results, still unresolved.
-    linux-armv6hf-glibc) T_CONF=linux-armv4 ; T_CC="arm-linux-gnueabihf-gcc -march=armv6 -marm -mfpu=vfp -mfloat-abi=hard" ; T_EXTRA="-Os" ; T_FETCH="apt:gcc-arm-linux-gnueabihf" ;;
-    # Hardfloat ARMv7 on the pinned Bootlin glibc 2.31 toolchain, because apt's gcc floors at
-    # GLIBC_2.34. linux-generic32 has no asm modules regardless of flags.
-    linux-armv7hf-glibc) T_CONF=linux-generic32 ; T_CC="$TC_ARMV7HF_BOOTLIN/bin/arm-linux-gcc" ; T_EXTRA="-Os" ; T_FETCH="bootlin-armv7hf" ;;
+    # No glibc floor was ever pinned for this row (apt's cross gcc, whatever floor that carries),
+    # so none is pinned in the zig triple either - same floor behaviour as before the switch.
+    # Previously: apt's arm-linux-gnueabihf-gcc -march=armv6 -marm -mfpu=vfp -mfloat-abi=hard.
+    linux-armv6hf-glibc) T_CONF=linux-armv4 ; T_CC="$TC_ZIG/zig cc -target arm-linux-gnueabihf" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_EXTRA="-Os" ; T_FETCH="zig" ;;
+    # linux-generic32 has no asm modules regardless of flags. Previously: pinned Bootlin glibc
+    # 2.31 toolchain ($TC_ARMV7HF_BOOTLIN/bin/arm-linux-gcc).
+    linux-armv7hf-glibc) T_CONF=linux-generic32 ; T_CC="$TC_ZIG/zig cc -target arm-linux-gnueabihf.2.31" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_EXTRA="-Os" ; T_FETCH="zig" ;;
     # Generic ARMv7 static musl, a NEON-free portable baseline rather than an SoC-tuned build.
     # asm stays disabled because of the same linux-armv4 crypto-correctness break as armv6hf.
-    linux-armv7hf-musl) T_CONF=linux-armv4 ; T_CC="$TC_ARMV7_MUSL_HF/bin/arm-linux-musleabihf-gcc -march=armv7-a -marm -mfpu=vfp -mfloat-abi=hard" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="muslcc-armhf" ;;
-    # Softfloat ARMv5 on the pinned Bootlin glibc 2.31 toolchain, for the same floor reason.
-    # linux-generic32 has no asm modules regardless of flags.
-    linux-armv5-glibc)  T_CONF=linux-generic32 ; T_CC="$TC_ARMV5_BOOTLIN/bin/arm-linux-gcc" ; T_EXTRA="-Os" ; T_FETCH="bootlin-armv5" ;;
+    # Previously: musl.cc toolchain ($TC_ARMV7_MUSL_HF/bin/arm-linux-musleabihf-gcc -march=armv7-a
+    # -marm -mfpu=vfp -mfloat-abi=hard).
+    linux-armv7hf-musl) T_CONF=linux-armv4 ; T_CC="$TC_ZIG/zig cc -target arm-linux-musleabihf" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="zig" ;;
+    # linux-generic32 has no asm modules regardless of flags. Previously: pinned Bootlin glibc
+    # 2.31 toolchain ($TC_ARMV5_BOOTLIN/bin/arm-linux-gcc).
+    linux-armv5-glibc)  T_CONF=linux-generic32 ; T_CC="$TC_ZIG/zig cc -target arm-linux-gnueabi.2.31" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_EXTRA="-Os" ; T_FETCH="zig" ;;
     # Little-endian MIPS on the pinned Bootlin uClibc toolchain, because ARCHID 7's agent is
     # uClibc and cannot link a glibc archive at all. asm runs correct crypto under qemu-mipsel.
+    # NOT switched to zig: Zig has no uClibc ABI at all (confirmed 2026-08-30 -
+    # 'unable to parse target query mipsel-linux-uclibceabi: UnknownApplicationBinaryInterface').
     linux-mipsel-uclibc) T_CONF=linux-mips32 ; T_CC="$TC_MIPSEL_UCLIBC_BOOTLIN/bin/mipsel-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=uclibc ; T_FETCH="bootlin-mipsel-uclibc" ;;
-    linux-mipsel-musl)  T_CONF=linux-mips32 ; T_CC="$TC_OWRT_MIPSEL24KC/bin/mipsel-openwrt-linux-musl-gcc --sysroot=$TC_OWRT_MIPSEL24KC" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="openwrt-mipsel24kc" ;;
-    linux-mips-musl)    T_CONF=linux-mips32 ; T_CC="$TC_OWRT_MIPS24KC/bin/mips-openwrt-linux-musl-gcc --sysroot=$TC_OWRT_MIPS24KC" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="openwrt-mips24kc" ;;
+    # 2026-08-30: switched to zig. First attempt used the bare `mipsel-linux-musl` triple, which
+    # zig accepts but silently never wires up its own -isystem search path for (0 auto isystems
+    # vs. 4 for a working target - a driver footgun, not a real "unsupported" error). The fix was
+    # the target name, not a workaround: zig renamed this triple to require an explicit float-ABI
+    # suffix, `musleabihf`/`musleabi`. The OpenWrt mipsel24kc toolchain this replaces defaults to
+    # soft-float (`-mhard-float [disabled]`, confirmed via `-Q --help=target`), so `musleabi` is
+    # the correct match, not `musleabihf`. Previously: $TC_OWRT_MIPSEL24KC/bin/mipsel-openwrt-linux-musl-gcc --sysroot=$TC_OWRT_MIPSEL24KC.
+    linux-mipsel-musl)  T_CONF=linux-mips32 ; T_CC="$TC_ZIG/zig cc -target mipsel-linux-musleabi" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="zig" ;;
+    # Same fix and same soft-float confirmation as linux-mipsel-musl above, big-endian variant.
+    # Previously: $TC_OWRT_MIPS24KC/bin/mips-openwrt-linux-musl-gcc --sysroot=$TC_OWRT_MIPS24KC.
+    linux-mips-musl)    T_CONF=linux-mips32 ; T_CC="$TC_ZIG/zig cc -target mips-linux-musleabi" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="zig" ;;
     # Generic rv64gc musl. Serves the T-Head C906 boards too, since rv64gc is a subset of what
     # they run. 1.1.1 has no RISC-V asm. A glibc build here once leaked ASYNC_POSIX.
-    linux-riscv64-musl) T_CONF=linux64-riscv64 ; T_CC="$TC_RISCV64_MUSL/bin/riscv64-linux-musl-gcc" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -Os" ; T_LIBC=musl ; T_FETCH="muslcc-riscv64" ;;
+    # Previously: musl.cc toolchain ($TC_RISCV64_MUSL/bin/riscv64-linux-musl-gcc).
+    linux-riscv64-musl) T_CONF=linux64-riscv64 ; T_CC="$TC_ZIG/zig cc -target riscv64-linux-musl" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_EXTRA="enable-ec_nistp_64_gcc_128 -Os" ; T_LIBC=musl ; T_FETCH="zig" ;;
     # OpenSSL 1.1.1 has no riscv32 Configure target, so this Configures as linux-generic32.
-    linux-riscv32-musl) T_CONF=linux-generic32 ; T_CC="$TC_RISCV32_MUSL/bin/riscv32-linux-musl-gcc" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="muslcc-riscv32" ;;
-    # No -Os: general-purpose operating systems favour speed.
-    freebsd-x86_64)     T_CONF=BSD-x86_64 ; T_CC="clang --target=$FREEBSD_TRIPLE --sysroot=$SYSROOT_FREEBSD -fuse-ld=lld" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=bsd ; T_FETCH="apt:clang apt:lld freebsd" ;;
-    openbsd-x86_64)     T_CONF=BSD-x86_64 ; T_CC="clang --target=$OPENBSD_TRIPLE --sysroot=$SYSROOT_OPENBSD -fuse-ld=lld" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=bsd ; T_FETCH="apt:clang apt:lld openbsd" ;;
-    # No explicit -target, because the darwin64 Configure targets add -arch themselves and an
-    # explicit one breaks the osxcross wrapper's linker selection. The T_AR, T_RANLIB and T_NM
-    # overrides exist because host GNU binutils do not reliably handle Mach-O archives.
-    macos-arm64)        T_CONF=darwin64-arm64-cc  ; T_CC="$_OSX_ARM_CC" ; T_AR="${_OSX_ARM_TOOLS:+$_OSX_ARM_TOOLS-ar}" ; T_RANLIB="${_OSX_ARM_TOOLS:+$_OSX_ARM_TOOLS-ranlib}" ; T_NM="${_OSX_ARM_TOOLS:+$_OSX_ARM_TOOLS-nm}" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=macos ; T_CI=macos ; T_FETCH=osxcross ;;
-    macos-x86_64)       T_CONF=darwin64-x86_64-cc ; T_CC="$_OSX_X64_CC" ; T_AR="${_OSX_X64_TOOLS:+$_OSX_X64_TOOLS-ar}" ; T_RANLIB="${_OSX_X64_TOOLS:+$_OSX_X64_TOOLS-ranlib}" ; T_NM="${_OSX_X64_TOOLS:+$_OSX_X64_TOOLS-nm}" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=macos ; T_CI=macos ; T_FETCH=osxcross ;;
+    # Previously: musl.cc toolchain ($TC_RISCV32_MUSL/bin/riscv32-linux-musl-gcc).
+    linux-riscv32-musl) T_CONF=linux-generic32 ; T_CC="$TC_ZIG/zig cc -target riscv32-linux-musl" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="zig" ;;
+    # No -Os: general-purpose operating systems favour speed. 2026-08-30: switched to zig. Zig
+    # bundles no FreeBSD/OpenBSD libc either (same reason as macOS below - real, versioned OS
+    # headers, not something to vendor generically), so --sysroot still points at the same pinned
+    # sysroots either way, forced past zig's own bundled-header attempt with -nostdlibinc
+    # -isystem $SYSROOT/usr/include (found via a real failure: an unforced FreeBSD build silently
+    # compiled against zig's own bundled generic-freebsd headers, targeting __FreeBSD_version
+    # 14.0 rather than this repo's pinned $FREEBSD_REL - a header/sysroot version-drift risk, not
+    # just a missing-file error, so worth the explicit force even where it doesn't hard-fail).
+    # zig has no OS-version triple suffix for these two (unlike glibc's .2.31 or macOS's .11.0) -
+    # $FREEBSD_REL/$OPENBSD_REL take no effect on the compiler here, only on which sysroot tree
+    # is baked into $SYSROOT_FREEBSD/$SYSROOT_OPENBSD already.
+    # Previously: clang --target=$FREEBSD_TRIPLE --sysroot=$SYSROOT_FREEBSD -fuse-ld=lld (apt:clang apt:lld).
+    freebsd-x86_64)     T_CONF=BSD-x86_64 ; T_CC="$TC_ZIG/zig cc -target x86_64-freebsd-none --sysroot=$SYSROOT_FREEBSD -isystem $SYSROOT_FREEBSD/usr/include -nostdlibinc" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=bsd ; T_FETCH="zig freebsd" ;;
+    # Previously: clang --target=$OPENBSD_TRIPLE --sysroot=$SYSROOT_OPENBSD -fuse-ld=lld (apt:clang apt:lld).
+    openbsd-x86_64)     T_CONF=BSD-x86_64 ; T_CC="$TC_ZIG/zig cc -target x86_64-openbsd-none --sysroot=$SYSROOT_OPENBSD -isystem $SYSROOT_OPENBSD/usr/include -nostdlibinc" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=bsd ; T_FETCH="zig openbsd" ;;
+    # No explicit -target beyond what _osx_tools baked in, because the darwin64 Configure targets
+    # add -arch themselves and an explicit one breaks the (pre-zig) osxcross wrapper's linker
+    # selection - kept as-is since it's still true for the native-Darwin-host branch. T_AR/T_RANLIB
+    # come from _osx_tools too now; see its own comment for the zig gotchas found switching this.
+    macos-arm64)        T_CONF=darwin64-arm64-cc  ; T_CC="$_OSX_ARM_CC" ; T_AR="$_OSX_ARM_AR" ; T_RANLIB="$_OSX_ARM_RANLIB" ; T_NM="$_OSX_ARM_NM" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=macos ; T_CI=macos ; T_FETCH=osxcross ;;
+    macos-x86_64)       T_CONF=darwin64-x86_64-cc ; T_CC="$_OSX_X64_CC" ; T_AR="$_OSX_X64_AR" ; T_RANLIB="$_OSX_X64_RANLIB" ; T_NM="$_OSX_X64_NM" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=macos ; T_CI=macos ; T_FETCH=osxcross ;;
 
     # Windows is built natively by windows/build.ps1, whose own table carries the MSVC details.
     # These rows exist so the name list, the Configure target and the libc family have one home
     # and verify can audit the .lib archives on any host. asm needs NASM, so VC-WIN64-ARM has none.
-    windows-x86)        T_CONF=VC-WIN32     ; T_CC=cl ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_LIBC=msvc ; T_CI=windows ;;
-    windows-x86-debug)  T_CONF=VC-WIN32     ; T_CC=cl ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="--debug" ; T_LIBC=msvc ; T_CI=windows ;;
-    windows-x64)        T_CONF=VC-WIN64A    ; T_CC=cl ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_LIBC=msvc ; T_CI=windows ;;
-    windows-x64-debug)  T_CONF=VC-WIN64A    ; T_CC=cl ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="--debug" ; T_LIBC=msvc ; T_CI=windows ;;
-    windows-arm64)      T_CONF=VC-WIN64-ARM ; T_CC=cl ; T_LIBC=msvc ; T_CI=windows ;;
-    windows-arm64-debug) T_CONF=VC-WIN64-ARM ; T_CC=cl ; T_EXTRA="--debug" ; T_LIBC=msvc ; T_CI=windows ;;
+    # -fPIC is meaningless to cl and has no MSVC equivalent flag needed here: PE ASLR comes from
+    # the linker's /DYNAMICBASE, on by default, not from a compile-time position-independence flag.
+    # -std=gnu11 is a GCC/Clang dialect flag; cl has its own /std: switch and OpenSSL's VC-WIN*
+    # Configure targets don't pass one, so it is stripped here rather than mismatched onto cl.
+    windows-x86)        T_CONF=VC-WIN32     ; T_CC=cl ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_FLAGS="${T_FLAGS/-fPIC/}" ; T_FLAGS="${T_FLAGS/-std=gnu11/}" ; T_LIBC=msvc ; T_CI=windows ;;
+    windows-x86-debug)  T_CONF=VC-WIN32     ; T_CC=cl ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_FLAGS="${T_FLAGS/-fPIC/}" ; T_FLAGS="${T_FLAGS/-std=gnu11/}" ; T_EXTRA="--debug" ; T_LIBC=msvc ; T_CI=windows ;;
+    windows-x64)        T_CONF=VC-WIN64A    ; T_CC=cl ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_FLAGS="${T_FLAGS/-fPIC/}" ; T_FLAGS="${T_FLAGS/-std=gnu11/}" ; T_LIBC=msvc ; T_CI=windows ;;
+    windows-x64-debug)  T_CONF=VC-WIN64A    ; T_CC=cl ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_FLAGS="${T_FLAGS/-fPIC/}" ; T_FLAGS="${T_FLAGS/-std=gnu11/}" ; T_EXTRA="--debug" ; T_LIBC=msvc ; T_CI=windows ;;
+    windows-arm64)      T_CONF=VC-WIN64-ARM ; T_CC=cl ; T_FLAGS="${T_FLAGS/-fPIC/}" ; T_FLAGS="${T_FLAGS/-std=gnu11/}" ; T_LIBC=msvc ; T_CI=windows ;;
+    windows-arm64-debug) T_CONF=VC-WIN64-ARM ; T_CC=cl ; T_FLAGS="${T_FLAGS/-fPIC/}" ; T_FLAGS="${T_FLAGS/-std=gnu11/}" ; T_EXTRA="--debug" ; T_LIBC=msvc ; T_CI=windows ;;
 
     *) return 1 ;;
     esac

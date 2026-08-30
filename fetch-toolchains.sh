@@ -185,6 +185,40 @@ p_riscv64_xthead() {
         || { log_status riscv64-xthead "FAILED (extracted, but $destdir/bin/riscv64-unknown-linux-musl-gcc fails a smoke compile)"; return 1; }
 }
 
+# --------------------------------------------------------------------- Zig --
+# Zig bundles its own Clang and can target an exact glibc symbol-version floor via
+# `zig cc -target <triple>.<glibcver>` without needing a matching old sysroot, decoupling
+# the glibc floor from whatever gcc version the pinned Bootlin toolchain happens to ship.
+# The release index carries the tarball URL and its sha256 together, so both are read from
+# there instead of pinning a URL and hash by hand. See ZIG_VERSION/TC_ZIG in build-env.sh.
+zig_smoke_ok() {
+    [ -x "$1" ] || return 1
+    echo 'typedef int x;' | "$1" cc -target x86_64-linux-gnu -c -x c -o /dev/null - >/dev/null 2>&1
+}
+p_zig() {
+    zig_smoke_ok "$TC_ZIG/zig" && { log_status zig "already present ($ZIG_VERSION)"; return 0; }
+    local key; key=$(zig_index_key) || { log_status zig "FAILED (unsupported host $(uname -s)-$(uname -m))"; return 1; }
+    local json; json=$(curl -sSL --fail --retry 3 --retry-delay 2 "https://ziglang.org/download/index.json") \
+        || { log_status zig "FAILED (couldn't fetch ziglang.org/download/index.json)"; return 1; }
+    local out; out=$(echo "$json" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+e = d.get(sys.argv[1], {}).get(sys.argv[2])
+if not e:
+    sys.exit(1)
+print(e["tarball"])
+print(e["shasum"])
+' "$ZIG_VERSION" "$key") || { log_status zig "FAILED (version $ZIG_VERSION has no $key entry in index.json)"; return 1; }
+    local url sha; url=$(echo "$out" | sed -n 1p); sha=$(echo "$out" | sed -n 2p)
+    local tarball="$BR_DOWNLOADS/$(basename "$url")"
+    fetch "$url" "$sha" "$tarball" || { log_status zig "FAILED (download)"; return 1; }
+    [ -e "$TC_ZIG" ] && rm -rf "$TC_ZIG"
+    mkdir -p "$TC_ZIG" && tar -xaf "$tarball" -C "$TC_ZIG" --strip-components=1 || { log_status zig "FAILED (extract)"; return 1; }
+    zig_smoke_ok "$TC_ZIG/zig" \
+        && log_status zig "OK ($ZIG_VERSION -> $TC_ZIG/zig)" \
+        || { log_status zig "FAILED (extracted, but $TC_ZIG/zig fails a smoke compile)"; return 1; }
+}
+
 # ------------------------------------------------------------ musl.cc cross ----
 # Prebuilt musl cross toolchains of ~100MB each. musl.cc publishes no checksum,
 # so each is gated on a real smoke compile rather than a hash.
@@ -497,7 +531,8 @@ wire_makefile_toolchains() {
                 "x86_64-linux-musl-cross:$TC_X86_64_MUSL" \
                 "riscv64-linux-musl-cross:$TC_RISCV64_MUSL" \
                 "riscv32-linux-musl-cross:$TC_RISCV32_MUSL" \
-                "riscv64-linux-musl-x86_64:$TC_RISCV64_XTHEAD"; do
+                "riscv64-linux-musl-x86_64:$TC_RISCV64_XTHEAD" \
+                "zig:$TC_ZIG"; do
         name="${pair%%:*}"; src="${pair#*:}"
         if [ -d "$src" ]; then
             ln -sfn "$src" "$tc_dir/$name"
@@ -508,7 +543,7 @@ wire_makefile_toolchains() {
 
 # --------------------------------------------------------------------- main --
 ALL="openssl openwrt-mips24kc openwrt-mipsel24kc openwrt-openwrt_x86_64 openwrt-aarch64-cortex-a53 openwrt-armvirt32 muslcc-aarch64 muslcc-armhf muslcc-x86_64 muslcc-riscv64 muslcc-riscv32 riscv64-xthead \
-bootlin-armv5 bootlin-armv7hf bootlin-aarch64 bootlin-sparc64 bootlin-powerpc64le bootlin-mipsel-uclibc bootlin-x86 bootlin-x86-64 freebsd openbsd rcodesign osxcross"
+bootlin-armv5 bootlin-armv7hf bootlin-aarch64 bootlin-sparc64 bootlin-powerpc64le bootlin-mipsel-uclibc bootlin-x86 bootlin-x86-64 freebsd openbsd rcodesign osxcross zig"
 
 usage() {
     cat <<EOF
@@ -526,6 +561,10 @@ Safe to re-run - anything already present and passing its check is skipped.
                                           the no-argument run skips it otherwise, naming it
                                           explicitly makes a missing SDK fatal.
   ./fetch-toolchains.sh rcodesign         apple-codesign's rcodesign (signs the macOS agents)
+  ./fetch-toolchains.sh zig               Zig's bundled Clang, for targeting an exact glibc
+                                          symbol-version floor with a current compiler via
+                                          'zig cc -target <triple>.<glibcver>' - not wired
+                                          into any target's T_CC yet, fetched standalone
   ./fetch-toolchains.sh -y [components]   answer the apt-get prompts yes
 
 Missing packages are offered for install (default yes): the host deps this
@@ -605,6 +644,7 @@ run_one() {
         openbsd)                p_openbsd ;;
         osxcross)               p_osxcross ;;
         rcodesign)              p_rcodesign ;;
+        zig)                    p_zig ;;
         *) echo "unknown component: $1 - run '$0 help' for the list" >&2; return 2 ;;
     esac
 }

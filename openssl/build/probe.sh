@@ -83,8 +83,13 @@ gate_target() {
             case " $T_EXTRA " in *" --debug "*) want=/Od ;; *) want=/O[12] ;; esac
             echo " $P_COMPILER " | grep -qE " $want " || reject "compiler line lacks $want for this configuration"
         fi
-        # A musl toolchain names itself. glibc and uClibc do not, so those rely on the symbol gates.
-        [ "$T_LIBC" = musl ] && case "${P_COMPILER%% *}" in *musl*) ;; *) reject "compiled by '${P_COMPILER%% *}', which is not a musl toolchain" ;; esac
+        # A musl toolchain names itself, either in the compiler binary's own filename (every
+        # musl.cc/OpenWrt toolchain: x86_64-linux-musl-gcc) or, for zig, in its -target argument
+        # (zig's own binary is just called "zig" regardless of target, so checking only the first
+        # word here rejected every legitimate zig-built musl archive - found via a real 2026-08-30
+        # `build.sh all` run). glibc and uClibc do not name themselves either way, so those rely on
+        # the symbol gates instead.
+        [ "$T_LIBC" = musl ] && case "$P_COMPILER" in *musl*) ;; *) reject "compiled by '${P_COMPILER%% *}', which is not a musl toolchain" ;; esac
     else
         reject "no 'compiler:' string in the archive"
     fi

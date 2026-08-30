@@ -1,3 +1,5 @@
+-fPIC
+-std=gnu11
 no-weak-ssl-ciphers
 no-srp
 no-psk

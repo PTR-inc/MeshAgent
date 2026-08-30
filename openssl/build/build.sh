@@ -6,7 +6,36 @@
 . "$BR_SCRIPTS/targets.sh"
 . "$BR_SCRIPTS/probe.sh"
 
-[ $# -ge 1 ] || { echo "usage: $(basename $0) <target|all|list> [target...]"; echo "targets: $BR_ALL_TARGETS"; exit 2; }
+print_manual() {
+    cat <<EOF
+usage: $(basename "$0") <target|all|list> [target...]
+
+  <target> [target...]  Build one or more named targets, each installed into
+                         openssl/\$OPENSSL_VERSION/<target>/. Nothing is installed
+                         unless the archive passes the gates in probe.sh.
+  all                    Build every linux and macos target (BR_ALL_TARGETS,
+                         filtered to those two T_CI groups). Windows targets are
+                         never built here - see openssl/build/windows/build.ps1.
+  list                   Print the target matrix (libc, toolchain readiness, the
+                         ARCHIDs that link each prefix, asm on/off, per-target
+                         EXTRA flags, install status) and exit. No build runs.
+  -h, --help             Show this manual and exit.
+
+targets: $BR_ALL_TARGETS
+
+environment:
+  BUILDROOT   Toolchain and work-directory root (see build-env.sh). Required by
+              most targets unless already set in the shell.
+  MAKE_JOBS   Parallel jobs per target's own make (default: nproc).
+  BR_FETCH    When 1, provisions each target's toolchain via T_FETCH (apt
+              packages or fetch-toolchains.sh components) before building.
+              CI sets this; a local run leaves it 0 so it never surprises you
+              with an unattended package install.
+EOF
+}
+
+case "${1:-}" in -h|--help) print_manual; exit 0 ;; esac
+[ $# -ge 1 ] || { print_manual; exit 2; }
 
 # Asks the makefile which ARCHIDs link each target, so its table is never duplicated here.
 # Prints nothing when make or the makefile is absent.
@@ -25,15 +54,17 @@ archid_map() {
 print_target_list() {
     local map ready=0 total=0
     map="$(archid_map)"
-    printf "%-22s %-7s %-9s %-10s %s\n" TARGET LIBC TOOLCHAIN ARCHIDS "PREFIX"
+    echo "shared flags: $OSSL_FLAGS"
+    printf "%-22s %-7s %-9s %-10s %-4s %-30s %s\n" TARGET LIBC TOOLCHAIN ARCHIDS ASM "EXTRA flags" "PREFIX"
     for t in $BR_ALL_TARGETS; do
         br_target "$t" || continue
         total=$((total+1))
-        local cc="${T_CC%% *}" st ids
+        local cc="${T_CC%% *}" st ids asm
         if [ "$T_CI" = windows ]; then st=windows
         elif command -v "$cc" >/dev/null 2>&1 || [ -x "$cc" ]; then st=ready; ready=$((ready+1)); else st=MISSING; fi
         ids=$(echo "$map" | awk -v d="$t" '$1==d{printf "%s%s", (n++?",":""), $2}')
-        printf "%-22s %-7s %-9s %-10s %s\n" "$t" "$T_LIBC" "$st" "${ids:--}" "openssl/$OPENSSL_VERSION/$t$([ -d "$T_PREFIX/lib" ] || echo ' (absent)')"
+        case "$T_FLAGS" in *-no-asm*) asm=off ;; *) asm=on ;; esac
+        printf "%-22s %-7s %-9s %-10s %-4s %-30s %s\n" "$t" "$T_LIBC" "$st" "${ids:--}" "$asm" "${T_EXTRA:--}" "openssl/$OPENSSL_VERSION/$t$([ -d "$T_PREFIX/lib" ] || echo ' (absent)')"
     done
     echo
     echo "  $ready buildable here. MISSING = no compiler, see ./fetch-toolchains.sh. windows = built by windows/build.ps1"

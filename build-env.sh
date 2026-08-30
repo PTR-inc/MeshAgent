@@ -208,6 +208,24 @@ export TC_RISCV32_MUSL="$BR_TOOLCHAINS/riscv32-linux-musl-cross"
 # mirrored. See p_riscv64_xthead in fetch-toolchains.sh and ARCH_45 in the makefile.
 export TC_RISCV64_XTHEAD="$BR_TOOLCHAINS/riscv64-linux-musl-xthead"
 
+# Zig's bundled Clang, used as `zig cc -target <triple>.<glibcver>` to reach an exact glibc
+# symbol-version floor with a current compiler, decoupled from what glibc version the pinned
+# toolchain's own gcc happened to ship with. See p_zig in fetch-toolchains.sh. Pinned like
+# every other toolchain here, not "latest", so a Zig release bump is a deliberate one-line edit.
+export ZIG_VERSION="${ZIG_VERSION:-0.15.2}"
+export TC_ZIG="$BR_TOOLCHAINS/zig-$ZIG_VERSION"
+# Maps to the key Zig's own release index (ziglang.org/download/index.json) uses per host,
+# which is <arch>-<os>, not uname's raw field order or spelling.
+zig_index_key() {
+    case "$(uname -s)-$(uname -m)" in
+        Linux-x86_64)  echo x86_64-linux ;;
+        Linux-aarch64) echo aarch64-linux ;;
+        Darwin-arm64)  echo aarch64-macos ;;
+        Darwin-x86_64) echo x86_64-macos ;;
+        *) return 1 ;;
+    esac
+}
+
 # Bootlin is pinned to one release rather than "latest" so the glibc floor is a deliberate,
 # reproducible choice. An apt cross-gcc always floors at GLIBC_2.34, above most real ARM hardware.
 # 2020.08-1 ships glibc 2.31, gcc 9.3 and binutils 2.33.1.
