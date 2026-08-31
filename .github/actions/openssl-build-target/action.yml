@@ -49,6 +49,20 @@ runs:
         echo "::endgroup::"
         exit $rc
 
+    # The per-phase logs live under $BR_WORK on the runner, which nothing uploads on its own,
+    # so a CONFIGURE/MAKE FAILED verdict would otherwise point at files nobody can open.
+    - name: Keep the build logs when the build failed
+      if: failure()
+      uses: actions/upload-artifact@v7.0.1
+      with:
+        name: openssl-logs-${{ inputs.target }}
+        path: |
+          ${{ env.BUILDROOT }}/work/${{ inputs.target }}.log
+          ${{ env.BUILDROOT }}/work/${{ inputs.target }}/configure.log
+          ${{ env.BUILDROOT }}/work/${{ inputs.target }}/make.log
+          ${{ env.BUILDROOT }}/work/${{ inputs.target }}/install.log
+        if-no-files-found: ignore
+
     - name: Collect the installed prefix and, for a new version, the shared headers
       if: steps.check.outputs.skip != 'true'
       shell: bash

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Read-only audit of every committed OpenSSL prefix under openssl/<version>/. Usage is
-# verify [target ...], defaulting to every target of every installed version. Every gate
+# verify.sh [target ...], defaulting to every target of every installed version. Every gate
 # comes from probe.sh, the same code build.sh runs before it stages anything.
 
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"

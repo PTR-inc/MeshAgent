@@ -1,38 +1,54 @@
 # Build one or more Windows OpenSSL targets and stage them into the repo as install prefixes,
 # openssl\<version>\<target>\ with lib\libcrypto.lib, lib\libssl.lib and include\openssl\opensslconf.h.
-# Run it as build.ps1 windows-x64, build.ps1 all, or build.ps1 --names-json to print the CI matrix.
+# Run it as build.ps1 windows-x64, build.ps1 all, or build.ps1 list for the target table.
 
 param(
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$TargetNames
 )
 
-# One entry per staged target. The Name values must match the windows rows of targets.sh,
-# because consistency.sh compares the two tables. Asm is only enabled for x86 and x64
-# because OpenSSL 1.1.1's VC-WIN64-ARM config has no asm path.
-$Targets = @(
-    @{ Name = 'windows-x86';         VcVars = 'x86';       VcConf = 'VC-WIN32';     Asm = $true;  Debug = $false }
-    @{ Name = 'windows-x86-debug';   VcVars = 'x86';       VcConf = 'VC-WIN32';     Asm = $true;  Debug = $true  }
-    @{ Name = 'windows-x64';         VcVars = 'x64';       VcConf = 'VC-WIN64A';    Asm = $true;  Debug = $false }
-    @{ Name = 'windows-x64-debug';   VcVars = 'x64';       VcConf = 'VC-WIN64A';    Asm = $true;  Debug = $true  }
-    @{ Name = 'windows-arm64';       VcVars = 'x64_arm64'; VcConf = 'VC-WIN64-ARM'; Asm = $false; Debug = $false }
-    @{ Name = 'windows-arm64-debug'; VcVars = 'x64_arm64'; VcConf = 'VC-WIN64-ARM'; Asm = $false; Debug = $true  }
-)
+# One entry per target, derived from the name: Debug from the -debug suffix, the vcvars pair from
+# the arch (arm64 cross-builds with x64 host tools), asm off for arm64 (VC-WIN64-ARM has no asm path).
+# consistency.sh check 5 keeps names, VcConf, --debug and asm in step with targets.sh's windows rows.
+$VcConfByArch = @{ x86 = 'VC-WIN32'; x64 = 'VC-WIN64A'; arm64 = 'VC-WIN64-ARM' }
+$Targets = @('windows-x86', 'windows-x86-debug', 'windows-x64', 'windows-x64-debug', 'windows-arm64', 'windows-arm64-debug') |
+    ForEach-Object {
+        $arch = $_ -replace '^windows-', '' -replace '-debug$', ''
+        @{ Name = $_; VcVars = $(if ($arch -eq 'arm64') { 'x64_arm64' } else { $arch })
+           VcConf = $VcConfByArch[$arch]; Asm = ($arch -ne 'arm64'); Debug = $_.EndsWith('-debug') }
+    }
 
-# The CI matrix is generated from $Targets above so it is never restated in YAML.
-if ($TargetNames -and $TargetNames[0] -eq '--names-json') {
-    Write-Output (($Targets.Name | ForEach-Object { '"' + $_ + '"' }) -join ',' | ForEach-Object { "[$_]" })
-    exit 0
-}
 . (Join-Path $PSScriptRoot 'env.ps1')
 
 if (-not $TargetNames -or $TargetNames.Count -eq 0) {
-    Write-Host "usage: build.ps1 <target|all|--names-json> [target...]"
+    Write-Host "usage: build.ps1 <target|all|list> [target...]"
     Write-Host "targets: $($Targets.Name -join ' ')"
     exit 2
 }
+# One row per target with the MSBuild consumer that links each prefix. ARCHIDs are a unix
+# makefile concept; on Windows the props derive the target from $(Platform) and $(MeshDebug),
+# so that platform/configuration pairing is what a per-consumer listing means here.
+if ($TargetNames[0] -eq 'list') {
+    "{0,-22} {1,-14} {2,-13} {3,-4} {4}" -f 'TARGET', 'CONSUMER', 'VCCONF', 'ASM', 'PREFIX' | Write-Host
+    foreach ($t in $Targets) {
+        $arch = $t.Name -replace '^windows-', '' -replace '-debug$', ''
+        $plat = if ($arch -eq 'x86') { 'Win32' } elseif ($arch -eq 'arm64') { 'ARM64' } else { 'x64' }
+        $consumer = '{0} {1}' -f $plat, $(if ($t.Debug) { 'Debug' } else { 'Release' })
+        $state = if (Test-Path (Join-Path $script:OpenSslPrefixRoot "$($t.Name)\lib\libcrypto.lib")) { '' } else { ' (absent)' }
+        "{0,-22} {1,-14} {2,-13} {3,-4} {4}" -f $t.Name, $consumer, $t.VcConf, $(if ($t.Asm) { 'on' } else { 'off' }), "openssl\$($script:OpenSslVersion)\$($t.Name)$state" | Write-Host
+    }
+    exit 0
+}
+# A misspelled name must refuse the whole run, not be silently dropped from the list.
+if ($TargetNames[0] -ne 'all') {
+    $unknown = @($TargetNames | Where-Object { $Targets.Name -notcontains $_ })
+    if ($unknown.Count -gt 0) {
+        Write-Host "unknown target(s): $($unknown -join ' ')"
+        Write-Host "targets: $($Targets.Name -join ' ')"
+        exit 2
+    }
+}
 $list = if ($TargetNames[0] -eq 'all') { $Targets } else { $Targets | Where-Object { $TargetNames -contains $_.Name } }
-if ($list.Count -eq 0) { Write-Host "no matching targets in: $($TargetNames -join ' ')"; exit 2 }
 
 if (-not (Test-Path $script:OpenSslTarball)) {
     Write-Host "MISSING: $script:OpenSslTarball - fetch it first, see README.md"
@@ -95,10 +111,10 @@ foreach ($t in $list) {
     # With no-shared, OpenSSL's VC-noCE-common never emits /MD or /MDd; it puts "/MT /Zl" in lib_cflags for
     # debug and release alike, so a --debug build has to have that /MT rewritten to /MTd here. /Zl stays, so
     # the objects carry no /DEFAULTLIB and the agent's own CRT choice wins at link time.
-    $mdPattern = if ($t.Debug) { '/MT\b' } else { '/MD\b' }
-    $mtReplacement = if ($t.Debug) { '/MTd' } else { '/MT' }
-    # Release builds drop /Zi and nasm -g, which VC-common forces even in release.
-    $stripDbg = if ($t.Debug) { '' } else { " -replace '/Zi /Fdossl_static\.pdb ','' -replace 'ASFLAGS=-g','ASFLAGS='" }
+    # Release builds also drop /Zi and nasm -g, which VC-common forces even in release. The patch runs
+    # through perl, already a hard requirement, rather than a quoting-fragile nested powershell.
+    $makefilePatch = 's{/MD\b}{/MT}g; s{/Zi /Fdossl_static\.pdb }{}g; s{ASFLAGS=-g}{ASFLAGS=}g'
+    if ($t.Debug) { $makefilePatch = 's{/MT\b}{/MTd}g' }
 
     # Each target gets its own cmd.exe session because the vcvars script only mutates its
     # own process. PATH is extended before the call so its own vswhere.exe lookup succeeds.
@@ -115,7 +131,9 @@ foreach ($t in $list) {
         "cd /d `"$src`""
         "perl Configure $($t.VcConf) $debugFlag $flags"
         "if errorlevel 1 exit /b 1"
-        "powershell -NoProfile -Command `"(Get-Content makefile) -replace '$mdPattern','$mtReplacement'$stripDbg | Set-Content makefile`""
+        "perl -pi.bak -e `"$makefilePatch`" makefile"
+        "if errorlevel 1 exit /b 1"
+        "del makefile.bak"
         "nmake"
     )
     $cmdFile = Join-Path $src 'do-build.cmd'
@@ -136,26 +154,25 @@ foreach ($t in $list) {
         continue
     }
 
-    $versionMatch = Select-String -Path $libcrypto -Pattern "OpenSSL $($script:OpenSslVersion) " -Encoding Ascii
+    $versionMatch = Select-String -Path $libcrypto -Pattern "OpenSSL $($script:OpenSslVersion) " -SimpleMatch -Encoding Ascii
     if (-not $versionMatch) {
         Write-Host "${name}: REJECTED - version string 'OpenSSL $($script:OpenSslVersion) ' not found in libcrypto.lib"
         $overallOk = $false
         continue
     }
 
-    $listCmdFile = Join-Path $src 'do-list.cmd'
-    $listCmdLines = @()
-    if ($extraPath) { $listCmdLines += "set `"PATH=$($extraPath -join ';');%PATH%`"" }
-    $listCmdLines += @(
-        "$vcEnvCall >nul"
-        "lib /list `"$libcrypto`""
-    )
-    $listCmdLines -join "`r`n" | Set-Content -Path $listCmdFile -Encoding ASCII
-    $listOutput = & cmd.exe /c "`"$listCmdFile`""
-    $objCount = ($listOutput | Where-Object { $_ -match '\.obj$' }).Count
-    # The object count is reported only. It is not a gate, since it moves with every flag and toolset change.
+    # The object count is reported only. It is not a gate, since it moves with every flag and
+    # toolset change. Inspect-Archive (env.ps1) parses the COFF archive itself, so no second
+    # vcvars session for lib /list is needed.
+    $info = try { Inspect-Archive $libcrypto } catch { $null }
+    if (-not $info) {
+        Write-Host "${name}: REJECTED - libcrypto.lib is not a readable COFF archive"
+        $overallOk = $false
+        continue
+    }
     Write-Host "  version : OK ($($script:OpenSslVersion))"
-    Write-Host "  objects : $objCount"
+    Write-Host "  objects : $($info.objs)"
+    Write-Host "  platform: $($info.platform)"
 
     # In 1.1.1 nmake, not Configure, writes include\openssl\opensslconf.h, so it is only copied after the build.
     $conf = Join-Path $src 'include\openssl\opensslconf.h'
@@ -179,4 +196,15 @@ foreach ($t in $list) {
     Write-Host "${name}: OK"
 }
 
+# Report-only audit of what was just staged, so a local build is not blind until CI's verify
+# runs. toolset-check.ps1 covers an arch's release and -debug prefix together, and its verdict
+# does not gate the staging above - a FATAL there is a reason to look, not an unstage.
+$arches = @($list | ForEach-Object { $_.Name -replace '^windows-', '' -replace '-debug$', '' } | Select-Object -Unique)
+foreach ($a in $arches) {
+    $plat = if ($a -eq 'arm64') { 'ARM64' } else { $a }
+    Write-Host "=================== toolset-check ($plat, report only) ==================="
+    & (Join-Path $PSScriptRoot 'toolset-check.ps1') -Platform $plat
+}
+
 if (-not $overallOk) { exit 1 }
+exit 0

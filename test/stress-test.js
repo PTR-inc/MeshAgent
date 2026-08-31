@@ -40,18 +40,25 @@ var FAILURES = [];
 // Options. argv is empty under -b64exec, so both have defaults:
 //   --watchdog=<ms>        overall watchdog, default 10000. Raise it under valgrind, which is about 20x slower.
 //   --exclude=a,b          skip testmodules whose filename contains any of these substrings.
+//   --qemu                 running under qemu-user emulation. Same idea as test-agent.ps1's ASan
+//                          connectSec ternary: bumps the default watchdog for a slow environment,
+//                          only when the caller did not already pick one with --watchdog=.
 var OPT_WATCHDOG = 10000;
 var OPT_EXCLUDE = [];
+var OPT_QEMU = false;
 (function () {
     var av = process.argv || [];
+    var watchdogSet = false;
     for (var i = 0; i < av.length; ++i) {
         var a = ('' + av[i]);
-        if (a.indexOf('--watchdog=') == 0) { OPT_WATCHDOG = parseInt(a.substring(11)) || OPT_WATCHDOG; }
+        if (a.indexOf('--watchdog=') == 0) { OPT_WATCHDOG = parseInt(a.substring(11)) || OPT_WATCHDOG; watchdogSet = true; }
+        else if (a == '--qemu') { OPT_QEMU = true; }
         else if (a.indexOf('--exclude=') == 0) {
             var parts = a.substring(10).split(',');
             for (var j = 0; j < parts.length; ++j) { if (parts[j] != '') { OPT_EXCLUDE.push(parts[j]); } }
         }
     }
+    if (OPT_QEMU && !watchdogSet) { OPT_WATCHDOG = 60000; }
 })();
 
 // Never name a variable 'keys'. Object.prototype.keys is a readonly polyfill, so a top-level

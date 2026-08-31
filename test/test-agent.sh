@@ -22,6 +22,8 @@
 # Everything is written to the console and to a logfile at the same time.
 #
 # Usage:  test/test-agent.sh [options]
+#   Run with no arguments to get this manual. Any option starts a run, for example `-y`
+#   for an unattended full run against the newest built binary.
 #   -b, --binary PATH     agent binary to test (default: newest build/*/meshagent_*)
 #   -d, --debug PATH      unstripped binary for valgrind (default: DEBUG_<binary>, if present)
 #   -l, --log PATH        logfile (default: test/logs/test-agent-<host-or-arch>-<timestamp>.log)
@@ -76,6 +78,12 @@ ASAN_BIN=""
 MSH_SRC=""
 CONNECT_TIMEOUT=""
 
+usage() { sed -n '2,53p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+# With no arguments at all, show the manual instead of starting a run. Any option starts a
+# run, so an unattended full run against the newest binary is just `test/test-agent.sh -y`.
+if [ $# -eq 0 ]; then usage; exit 0; fi
+
 while [ $# -gt 0 ]; do
     case "$1" in
         -b|--binary)     BIN="${2:-}"; shift 2;;
@@ -92,7 +100,7 @@ while [ $# -gt 0 ]; do
         --ci)            CI_MODE=1; ASSUME_YES=1; [ "$LENIENT" = 1 ] || STRICT=1; shift;;
         --strict)        STRICT=1; shift;;
         --lenient)       LENIENT=1; [ "$CI_MODE" = 1 ] && STRICT=0; shift;;
-        -h|--help)       sed -n '2,49p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
+        -h|--help)       usage; exit 0;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2;;
     esac
 done
@@ -185,13 +193,15 @@ ensure_tool() {
 # --------------------------------------------------------------------------------------------
 # binary + architecture / qemu selection
 # --------------------------------------------------------------------------------------------
+newest_bin() {   # $@ are find's path and depth arguments. Prints the newest executable meshagent_*.
+    find "$@" -type f -name 'meshagent_*' ! -name '*.db' ! -name '*.msh' ! -name '*.log' \
+         ! -name '*_asan' -perm -u+x -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-
+}
 if [ -z "$BIN" ]; then
     # Newest non-DEBUG meshagent_* executable under build/<arch>/, or the repo root for pre-layout
     # builds. *_asan is a special-purpose build that the ASan phase finds on its own.
-    BIN="$(find build -mindepth 2 -maxdepth 2 -type f -name 'meshagent_*' ! -name '*.db' ! -name '*.msh' ! -name '*.log' \
-           ! -name '*_asan' -perm -u+x -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)"
-    [ -n "$BIN" ] || BIN="$(find . -maxdepth 1 -type f -name 'meshagent_*' ! -name '*.db' ! -name '*.msh' ! -name '*.log' \
-           ! -name '*_asan' -perm -u+x -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)"
+    BIN="$(newest_bin build -mindepth 2 -maxdepth 2)"
+    [ -n "$BIN" ] || BIN="$(newest_bin . -maxdepth 1)"
 fi
 [ -n "$BIN" ] && [ -x "$BIN" ] || { echo "no agent binary found - pass one with --binary" >&2; exit 1; }
 [ -z "$DBGBIN" ] && DBGBIN="$(dirname "$BIN")/DEBUG_$(basename "$BIN")"
@@ -378,8 +388,14 @@ signame() {
 }
 rcdesc() { local n; n="$(signame "$1")"; [ -n "$n" ] && echo "exit $1 ($n)" || echo "exit $1"; }
 
-record() { PHASE_NAMES+=("$1"); PHASE_RESULTS+=("$2"); PHASE_NOTES+=("${3:-}"); 
+record() { PHASE_NAMES+=("$1"); PHASE_RESULTS+=("$2"); PHASE_NOTES+=("${3:-}");
            case "$2" in FAIL) FAILED=$((FAILED+1));; esac; }
+
+# Every stress phase judges itself on the TOTAL line rather than on the exit code, because a
+# failing exit status does not always survive. These pick that line and its fields apart.
+total_line() { grep -o 'TOTAL: .*' "$1" | tail -1; }                              # $1 is the phase's output file.
+failed_in()  { printf '%s' "$1" | sed -n 's/.*passed, \([0-9]*\) failed.*/\1/p'; }   # $1 is a TOTAL line.
+of_in()      { printf '%s' "$1" | sed -n 's/.*(of \([0-9]*\)).*/\1/p'; }             # $1 is a TOTAL line.
 
 # run_cmd <timeout-sec> <outfile> <cmd...> returns the command's exit code.
 # macOS ships no coreutils timeout, so perl's alarm is the portable stand-in with the same -k
@@ -476,11 +492,10 @@ CORE_EXCL="$(ls test/testmodules | grep -v '^06-' | sed 's/\.js$//' | tr '\n' ',
 head2 "[2/7] stress test - every testmodule except the known-crash 06-* sections"
 OUT="$TMPDIR_RUN/stress-core.log"
 run_cmd $((120*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" test/stress-test.js \
-        --exclude=$KNOWN_EXCL --watchdog=$((60000*SCALE)); RC=$?
+        --exclude=$KNOWN_EXCL --watchdog=$((60000*SCALE)) ${QEMU:+--qemu}; RC=$?
 emit "$OUT"
-TOTAL_LINE="$(grep -o 'TOTAL: .*' "$OUT" | tail -1)"
-# Trust the TOTAL line over the exit code, because a failing exit status does not always survive.
-FAILED_CHECKS="$(printf '%s' "$TOTAL_LINE" | sed -n 's/.*passed, \([0-9]*\) failed.*/\1/p')"
+TOTAL_LINE="$(total_line "$OUT")"
+FAILED_CHECKS="$(failed_in "$TOTAL_LINE")"
 if [ $RC -eq 0 ] && [ "${FAILED_CHECKS:-1}" = "0" ]; then record "stress (core)" PASS "$TOTAL_LINE"
 elif [ -z "$TOTAL_LINE" ]; then record "stress (core)" FAIL "$(rcdesc $RC) - no TOTAL line, the run did not finish"
 else record "stress (core)" FAIL "$(rcdesc $RC) $TOTAL_LINE"; fi
@@ -489,10 +504,10 @@ else record "stress (core)" FAIL "$(rcdesc $RC) $TOTAL_LINE"; fi
 head2 "[3/7] stress test - known-crash 06-* sections only (TLS, WebSocket)"
 OUT="$TMPDIR_RUN/stress-known.log"
 run_cmd $((60*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" test/stress-test.js \
-        --exclude=$CORE_EXCL --watchdog=$((20000*SCALE)); RC=$?
+        --exclude=$CORE_EXCL --watchdog=$((20000*SCALE)) ${QEMU:+--qemu}; RC=$?
 emit "$OUT"
-KNOWN_TOTAL="$(grep -o 'TOTAL: .*' "$OUT" | tail -1)"
-KNOWN_FAILED="$(printf '%s' "$KNOWN_TOTAL" | sed -n 's/.*passed, \([0-9]*\) failed.*/\1/p')"
+KNOWN_TOTAL="$(total_line "$OUT")"
+KNOWN_FAILED="$(failed_in "$KNOWN_TOTAL")"
 case $RC in
     0)   if [ "${KNOWN_FAILED:-1}" = "0" ]; then record "stress (known 06-*)" PASS "no crash reproduced - $KNOWN_TOTAL"
          else record "stress (known 06-*)" FAIL "$KNOWN_TOTAL"; fi;;
@@ -509,11 +524,11 @@ OUT="$TMPDIR_RUN/stress-b64.log"
 B64="$(sed 's/^var OPT_EXCLUDE = \[\];/var OPT_EXCLUDE = ["06-"];/; s/^var OPT_WATCHDOG = 10000;/var OPT_WATCHDOG = '$((60000*SCALE))';/' test/stress-test.js | base64 -w0)"
 run_cmd $((90*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" -b64exec "$B64"; RC=$?
 emit "$OUT" 30
-B64_TOTAL="$(grep -o 'TOTAL: .*' "$OUT" | tail -1)"
-B64_FAILED="$(printf '%s' "$B64_TOTAL" | sed -n 's/.*passed, \([0-9]*\) failed.*/\1/p')"
+B64_TOTAL="$(total_line "$OUT")"
+B64_FAILED="$(failed_in "$B64_TOTAL")"
 # Only the check count "(of N)" must match phase 2. The KNOWN split varies between runs.
-B64_OF="$(printf '%s' "$B64_TOTAL" | sed -n 's/.*(of \([0-9]*\)).*/\1/p')"
-CORE_OF="$(printf '%s' "$TOTAL_LINE" | sed -n 's/.*(of \([0-9]*\)).*/\1/p')"
+B64_OF="$(of_in "$B64_TOTAL")"
+CORE_OF="$(of_in "$TOTAL_LINE")"
 if [ $RC -eq 0 ] && [ "${B64_FAILED:-1}" = "0" ] && [ -n "$B64_OF" ] && [ "$B64_OF" = "$CORE_OF" ]; then record "stress (-b64exec)" PASS "$B64_TOTAL"
 elif [ $RC -eq 0 ] && [ "${B64_FAILED:-1}" = "0" ]; then record "stress (-b64exec)" FAIL "passed, but ran a different check count than phase 2: '$B64_TOTAL' vs '$TOTAL_LINE'"
 elif [ -z "$B64_TOTAL" ]; then record "stress (-b64exec)" FAIL "$(rcdesc $RC) - no TOTAL line, the run did not finish"
@@ -695,11 +710,11 @@ else
     # run going so one report does not hide the rest.
     ASAN_OPTIONS=halt_on_error=0:detect_leaks=1:print_legend=0 \
         run_cmd $((180*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$ASAN_BIN" test/stress-test.js \
-            --exclude=$KNOWN_EXCL --watchdog=$((120000*SCALE))
+            --exclude=$KNOWN_EXCL --watchdog=$((120000*SCALE)) ${QEMU:+--qemu}
     RC=$?
     emit "$OUT" 12
     ACOUNT="$(grep -c 'ERROR: AddressSanitizer' "$OUT" 2>/dev/null || true)"
-    ATOTAL="$(grep -o 'TOTAL: .*' "$OUT" | tail -1)"
+    ATOTAL="$(total_line "$OUT")"
     if [ "${ACOUNT:-0}" -gt 0 ]; then
         say "  $ACOUNT AddressSanitizer report(s):"
         grep -A2 'ERROR: AddressSanitizer' "$OUT" | grep -E '^ *#[01] ' | sed 's/0x[0-9a-f]* in //;s/^ */    /' |
@@ -732,8 +747,7 @@ if [ "$CI_MODE" = "1" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     } >> "$GITHUB_STEP_SUMMARY"
 fi
 
-i=0
-while [ $i -lt ${#PHASE_NAMES[@]} ]; do
+for i in "${!PHASE_NAMES[@]}"; do
     printf '  %-24s %-6s %s\n' "${PHASE_NAMES[$i]}" "${PHASE_RESULTS[$i]}" "${PHASE_NOTES[$i]}" | tee -a "$LOGFILE"
     if [ "$CI_MODE" = "1" ]; then
         case "${PHASE_RESULTS[$i]}" in
@@ -744,7 +758,6 @@ while [ $i -lt ${#PHASE_NAMES[@]} ]; do
         [ -n "${GITHUB_STEP_SUMMARY:-}" ] && \
             echo "| ${PHASE_NAMES[$i]} | ${PHASE_RESULTS[$i]} | ${PHASE_NOTES[$i]//|/\\|} |" >> "$GITHUB_STEP_SUMMARY"
     fi
-    i=$((i+1))
 done
 hr
 if [ "$FAILED" -eq 0 ]; then say "RESULT: OK ($FAILED failing phases)"; else say "RESULT: FAILED ($FAILED failing phases)"; fi

@@ -104,6 +104,55 @@ $script:NasmSha256 = '3ee4782247bcb874378d02f7eab4e294a84d3d15f3f6ee2de2f47a46aa
 
 $script:VsWhereDir = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
 
+# Walk a COFF archive without lib.exe or dumpbin, so no MSVC environment is needed to read it.
+# Shared by build.ps1 (object-count report) and toolset-check.ps1 (the full CRT/LTCG audit).
+function Read-U16([byte[]] $b, [int] $o) { [BitConverter]::ToUInt16($b, $o) }
+function Read-U32([byte[]] $b, [int] $o) { [BitConverter]::ToUInt32($b, $o) }
+
+function Inspect-Archive([string] $path) {
+    $d = [System.IO.File]::ReadAllBytes($path)
+    if ([System.Text.Encoding]::ASCII.GetString($d, 0, 8) -ne "!<arch>`n") { throw "not a COFF archive" }
+    $r = [ordered]@{ objs = 0; ltcg = 0; machines = @{}; builds = @{}; nocompid = 0; defaultlibs = @{}; version = 'UNKNOWN'; platform = '-'; compiler = '-' }
+    $text = [System.Text.Encoding]::ASCII.GetString($d)
+    if ($text -match 'OpenSSL \d+\.\d+\.\d+[a-z]?') { $r.version = $Matches[0] }
+    # cversion.c embeds the Configure target and compiler line as NUL-terminated strings.
+    if ($text -match 'platform: ([^\x00]+)') { $r.platform = $Matches[1].Trim() }
+    if ($text -match 'compiler: ([^\x00]+)') { $r.compiler = $Matches[1].Trim() }
+    $off = 8
+    while ($off + 60 -le $d.Length) {
+        $name = [System.Text.Encoding]::ASCII.GetString($d, $off, 16).Trim()
+        $size = [int]([System.Text.Encoding]::ASCII.GetString($d, $off + 48, 10).Trim())
+        $body = $off + 60
+        $off = $body + $size + ($size -band 1)
+        if ($name -eq '/' -or $name -eq '//') { continue }          # The symbol index and long-name table are not objects.
+        $r.objs++
+        $m = Read-U16 $d $body
+        if ($m -eq 0 -and (Read-U16 $d ($body + 2)) -eq 0xFFFF) {  # An anonymous header means an object built with /GL.
+            $r.ltcg++; $am = Read-U16 $d ($body + 6); $r.machines[$am] = 1 + $r.machines[$am]; continue
+        }
+        $r.machines[$m] = 1 + $r.machines[$m]
+        $nsec = Read-U16 $d ($body + 2); $symoff = Read-U32 $d ($body + 8); $nsym = Read-U32 $d ($body + 12); $optsz = Read-U16 $d ($body + 16)
+        for ($i = 0; $i -lt $nsec; $i++) {
+            $s = $body + 20 + $optsz + $i * 40
+            if ([System.Text.Encoding]::ASCII.GetString($d, $s, 8).TrimEnd([char]0) -eq '.drectve') {
+                $sz = Read-U32 $d ($s + 16); $ptr = Read-U32 $d ($s + 20)
+                $dir = [System.Text.Encoding]::ASCII.GetString($d, $body + $ptr, $sz)
+                foreach ($mm in [regex]::Matches($dir, '/DEFAULTLIB:"?([A-Za-z0-9_.]+)"?', 'IgnoreCase')) { $r.defaultlibs[$mm.Groups[1].Value.ToLower()] = 1 }
+            }
+        }
+        $found = $false; $i = 0
+        while ($i -lt $nsym) {
+            $s = $body + $symoff + $i * 18
+            if ([System.Text.Encoding]::ASCII.GetString($d, $s, 8) -eq '@comp.id') {
+                $v = Read-U32 $d ($s + 8); $b = [int]($v -band 0xFFFF); $r.builds[$b] = 1 + $r.builds[$b]; $found = $true; break
+            }
+            $i += 1 + $d[$s + 17]
+        }
+        if (-not $found) { $r.nocompid++ }
+    }
+    return $r
+}
+
 function Get-VsInstallPath {
     $vswhere = Join-Path $script:VsWhereDir 'vswhere.exe'
     if (-not (Test-Path $vswhere)) { return $null }

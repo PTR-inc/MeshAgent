@@ -3,6 +3,14 @@
 # A target is named by what decides link compatibility, <os>-<arch/abi>-<libc>, never by a
 # board or distribution, and its archives live in openssl/<version>/<target>/. br_target <name>
 # sets the T_ variables. The fields are documented in openssl/build/README.md.
+#
+# Every T_CC="$TC_ZIG/zig cc ..." target below embeds DWARF debug info by default, confirmed via
+# the real compile lines in $BR_WORK/<target>.log having no -g anywhere, yet every .o still
+# carries .debug_info/.debug_line/etc (plain clang/gcc never do this without an explicit -g).
+# That's why these archives run noticeably larger than the old openssl/libstatic/ ones on the
+# same target - left in deliberately: the agent's own STRIP_AND_SYMBOLCP (see makefile) already
+# strips it back out of the shipped binary, and the pre-strip DEBUG_ copy gets real file/line
+# frames inside OpenSSL for free. Pass -g0 in a target's T_FLAGS to opt a target out of this.
 
 # A real macOS runner already has clang and the SDK - no toolchain-floor problem to solve there,
 # so that branch is untouched. The Linux-cross-host branch (previously osxcross's own clang
@@ -18,6 +26,10 @@
 #     --sysroot alone. Needs an explicit -isystem $SDK/usr/include forcing the real SDK headers in.
 # This is resolved per call after build-env.sh is sourced.
 _osx_tools() {
+    # br_target calls this for every target, and the two make probes below cost a full makefile
+    # parse each, so the result is computed once and reused for the rest of the process.
+    [ -n "${_OSX_TOOLS_DONE:-}" ] && return
+    _OSX_TOOLS_DONE=1
     local arm_min x64_min sdk
     arm_min=$(make -s -C "$REPO" ARCHID=29 print-macosarch 2>/dev/null)
     x64_min=$(make -s -C "$REPO" ARCHID=16 print-macosarch 2>/dev/null)
@@ -102,12 +114,12 @@ br_target() {
     linux-armv7hf-musl) T_CONF=linux-armv4 ; T_CC="$TC_ZIG/zig cc -target arm-linux-musleabihf" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="zig" ;;
     # linux-generic32 has no asm modules regardless of flags. Previously: pinned Bootlin glibc
     # 2.31 toolchain ($TC_ARMV5_BOOTLIN/bin/arm-linux-gcc).
-    linux-armv5-glibc)  T_CONF=linux-generic32 ; T_CC="$TC_ZIG/zig cc -target arm-linux-gnueabi.2.31" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_EXTRA="-Os" ; T_FETCH="zig" ;;
+    linux-armv5sf-glibc)  T_CONF=linux-generic32 ; T_CC="$TC_ZIG/zig cc -target arm-linux-gnueabi.2.31" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_EXTRA="-Os" ; T_FETCH="zig" ;;
     # Little-endian MIPS on the pinned Bootlin uClibc toolchain, because ARCHID 7's agent is
     # uClibc and cannot link a glibc archive at all. asm runs correct crypto under qemu-mipsel.
     # NOT switched to zig: Zig has no uClibc ABI at all (confirmed 2026-08-30 -
     # 'unable to parse target query mipsel-linux-uclibceabi: UnknownApplicationBinaryInterface').
-    linux-mipsel-uclibc) T_CONF=linux-mips32 ; T_CC="$TC_MIPSEL_UCLIBC_BOOTLIN/bin/mipsel-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=uclibc ; T_FETCH="bootlin-mipsel-uclibc" ;;
+    linux-mips32r1el-uclibc) T_CONF=linux-mips32 ; T_CC="$TC_MIPSEL_UCLIBC_BOOTLIN/bin/mipsel-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=uclibc ; T_FETCH="bootlin-mipsel-uclibc" ;;
     # 2026-08-30: switched to zig. First attempt used the bare `mipsel-linux-musl` triple, which
     # zig accepts but silently never wires up its own -isystem search path for (0 auto isystems
     # vs. 4 for a working target - a driver footgun, not a real "unsupported" error). The fix was
@@ -115,10 +127,25 @@ br_target() {
     # suffix, `musleabihf`/`musleabi`. The OpenWrt mipsel24kc toolchain this replaces defaults to
     # soft-float (`-mhard-float [disabled]`, confirmed via `-Q --help=target`), so `musleabi` is
     # the correct match, not `musleabihf`. Previously: $TC_OWRT_MIPSEL24KC/bin/mipsel-openwrt-linux-musl-gcc --sysroot=$TC_OWRT_MIPSEL24KC.
-    linux-mipsel-musl)  T_CONF=linux-mips32 ; T_CC="$TC_ZIG/zig cc -target mipsel-linux-musleabi" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="zig" ;;
-    # Same fix and same soft-float confirmation as linux-mipsel-musl above, big-endian variant.
+    # Rebuilt 2026-08-31 with build.sh's br_patch_mips_la, which fixes the clang-miscompiled
+    # aes-mips.S/sha256-mips.S the previous archive carried - see the linux-mips32r1el-musl row.
+    linux-mips32r2el-musl)  T_CONF=linux-mips32 ; T_CC="$TC_ZIG/zig cc -target mipsel-linux-musleabi" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="zig" ;;
+    # MIPS32r1 little-endian static musl, for ARCHID 7's pre-r2 silicon (Broadcom BMIPS3300/4350,
+    # Atheros AR231x, MIPS 4Kc). It cannot share linux-mips32r2el-musl: that archive is built at zig's
+    # default -target-cpu mips32r2 and carries 426 r2-only instructions (ext, ins, wsbh, seb),
+    # which SIGILL on r1. -mcpu=mips32 pins the baseline; endianness and the soft-float musleabi
+    # ABI are otherwise identical to linux-mips32r2el-musl.
+    # asm is ON again since 2026-08-31. It was off because clang's integrated assembler miscompiled
+    # aes-mips.S and sha256-mips.S: `la` of a table symbol defined later in the file loses its
+    # R_MIPS_LO16 pair, so the K256/AES_Te pointers dropped their in-page offset and SHA-256/AES
+    # computed garbage (llvm/llvm-project#65020, fix PR 83115 unmerged in every zig/LLVM so far).
+    # build.sh's br_patch_mips_la works around it with forward .local declarations. At -mcpu=mips32
+    # the asm carries no r2-only instructions, since mips_arch.h keys off __mips_isa_rev.
+    linux-mips32r1el-musl) T_CONF=linux-mips32 ; T_CC="$TC_ZIG/zig cc -target mipsel-linux-musleabi -mcpu=mips32" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="zig" ;;
+    # Same fix and same soft-float confirmation as linux-mips32r2el-musl above, big-endian variant.
     # Previously: $TC_OWRT_MIPS24KC/bin/mips-openwrt-linux-musl-gcc --sysroot=$TC_OWRT_MIPS24KC.
-    linux-mips-musl)    T_CONF=linux-mips32 ; T_CC="$TC_ZIG/zig cc -target mips-linux-musleabi" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="zig" ;;
+    # Rebuilt 2026-08-31 with br_patch_mips_la, same clang-miscompile fix as the rows above.
+    linux-mips32r2eb-musl)    T_CONF=linux-mips32 ; T_CC="$TC_ZIG/zig cc -target mips-linux-musleabi" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="zig" ;;
     # Generic rv64gc musl. Serves the T-Head C906 boards too, since rv64gc is a subset of what
     # they run. 1.1.1 has no RISC-V asm. A glibc build here once leaked ASYNC_POSIX.
     # Previously: musl.cc toolchain ($TC_RISCV64_MUSL/bin/riscv64-linux-musl-gcc).
@@ -171,8 +198,8 @@ br_target() {
 
 BR_ALL_TARGETS="linux-x86_64-glibc linux-i686-glibc linux-x86_64-musl \
 linux-aarch64-glibc linux-aarch64-musl \
-linux-armv6hf-glibc linux-armv7hf-glibc linux-armv7hf-musl linux-armv5-glibc \
-linux-mipsel-uclibc linux-mipsel-musl linux-mips-musl \
+linux-armv6hf-glibc linux-armv7hf-glibc linux-armv7hf-musl linux-armv5sf-glibc \
+linux-mips32r1el-uclibc linux-mips32r2el-musl linux-mips32r1el-musl linux-mips32r2eb-musl \
 linux-riscv64-musl linux-riscv32-musl linux-sparc64-glibc linux-ppc64le-glibc \
 freebsd-x86_64 openbsd-x86_64 macos-arm64 macos-x86_64 \
 windows-x86 windows-x86-debug windows-x64 windows-x64-debug windows-arm64 windows-arm64-debug"

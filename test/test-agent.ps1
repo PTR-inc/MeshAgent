@@ -21,6 +21,8 @@
     agent chdirs to its own directory and stress-test.js resolves its modules against the cwd.
     The legacy upstream scripts (self-test.js, leaktest.js, update-test.js, authtest.js) are unused.
     Everything is written to the console and to a logfile at the same time.
+    Run with no parameters to get this manual. Any parameter starts a run, for example
+    -Configuration Release for a full run against the newest Release build.
 .PARAMETER Binary
     Agent .exe to test. Default: newest MeshConsole*.exe under build\win-*\ (or the pre-layout Release\, Debug\).
 
@@ -62,7 +64,7 @@
     GitHub Actions mode: ::group:: folding, annotations, job summary table. Implies -Yes.
 
 .EXAMPLE
-    .\test\test-agent.ps1
+    .\test\test-agent.ps1 -Configuration Release
 .EXAMPLE
     .\test\test-agent.ps1 -Binary .\build\win-x64-Release\MeshConsole64.exe -NoConnect
 #>
@@ -82,6 +84,10 @@ param(
     [switch]$Lenient,
     [switch]$Ci
 )
+
+# With no parameters at all, show the manual instead of starting a run. Any parameter starts a
+# run, for example `-Configuration Release` for a full run against the newest Release build.
+if ($PSBoundParameters.Count -eq 0) { Get-Help -Detailed $PSCommandPath; exit 0 }
 
 $ErrorActionPreference = 'Continue'
 if ($Ci -and -not $Lenient) { $Strict = $true }
@@ -218,10 +224,11 @@ function Emit($Result, [int]$MaxLines = 0) {
 # process.exit(1) does not always survive on Windows.
 function Get-StressTotals([string]$Text) {
     $line = ([regex]::Matches($Text, 'TOTAL: .*') | Select-Object -Last 1).Value
+    $of = if ($line -match '\(of (\d+)\)') { [int]$Matches[1] } else { -1 }
     if ($line -match 'TOTAL: (\d+) passed, (\d+) failed') {
-        return [pscustomobject]@{ Line = $line; Passed = [int]$Matches[1]; Failed = [int]$Matches[2] }
+        return [pscustomobject]@{ Line = $line; Passed = [int]$Matches[1]; Failed = [int]$Matches[2]; Of = $of }
     }
-    return [pscustomobject]@{ Line = $line; Passed = -1; Failed = -1 }
+    return [pscustomobject]@{ Line = $line; Passed = -1; Failed = -1; Of = $of }
 }
 
 # NTSTATUS values such as 0xC0000005 read as huge negative numbers. Name them, or nobody can
@@ -537,8 +544,9 @@ else {
     $r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('-b64exec', $b64) -TimeoutSec 180
     Emit $r 30
     $b64r = Get-StressTotals $r.Output
-    if ($r.ExitCode -eq 0 -and $b64r.Failed -eq 0 -and $b64r.Passed -eq $core.Passed) { Record 'stress (-b64exec)' 'PASS' $b64r.Line }
-    elseif ($r.ExitCode -eq 0 -and $b64r.Failed -eq 0) { Record 'stress (-b64exec)' 'FAIL' ('passed, but ran {0} checks where phase 2 ran {1}' -f $b64r.Passed, $core.Passed) }
+    # Only the check count "(of N)" must match phase 2. The KNOWN split varies between runs.
+    if ($r.ExitCode -eq 0 -and $b64r.Failed -eq 0 -and $b64r.Of -gt 0 -and $b64r.Of -eq $core.Of) { Record 'stress (-b64exec)' 'PASS' $b64r.Line }
+    elseif ($r.ExitCode -eq 0 -and $b64r.Failed -eq 0) { Record 'stress (-b64exec)' 'FAIL' ("passed, but ran a different check count than phase 2: '{0}' vs '{1}'" -f $b64r.Line, $core.Line) }
     elseif ($b64r.Failed -lt 0) { Record 'stress (-b64exec)' 'FAIL' ((RcDesc $r.ExitCode) + ' - no TOTAL line, the run did not finish') }
     else { Record 'stress (-b64exec)' 'FAIL' ((RcDesc $r.ExitCode) + ' ' + $b64r.Line) }
 }
@@ -604,7 +612,6 @@ else {
             }
         }
         if ($mshChanged) { Set-Content -Path $mshFile -Value $mshLines -Encoding Ascii }
-        $verb = 'connect'
         # This phase judges the agent's own <binary>.log, never its stdout. stdout is block-buffered
         # when it is a pipe and 'Server verified meshcore' is printed without a newline, so a run that
         # has to be killed loses it. The .log is written unbuffered with controlChannelDebug and
@@ -612,7 +619,7 @@ else {
         $agentLog = [IO.Path]::ChangeExtension($Binary, '.log')
         Remove-Item -LiteralPath $agentLog -Force -ErrorAction SilentlyContinue
         # MeshCommand_CoreOk (16) is the last milestone, logged as ProcessCommand(16).
-        $null = Invoke-Agent -FilePath $Binary -ArgumentList @($verb) -TimeoutSec $connectSec -StopFile $agentLog -StopFileWhen 'ProcessCommand(16)'
+        $null = Invoke-Agent -FilePath $Binary -ArgumentList @('connect') -TimeoutSec $connectSec -StopFile $agentLog -StopFileWhen 'ProcessCommand(16)'
         $logText = if (Test-Path $agentLog) { Get-Content -Raw $agentLog } else { '' }
         Emit ([pscustomobject]@{ Output = $logText }) 25
         $missing = @()
@@ -653,10 +660,10 @@ else {
 Head2 '[6/6] AddressSanitizer - core stress run'
 if (-not $Asan) {
     # A Release_ASAN build lands in its own directory beside this one, named <target>_asan.exe.
-    $stem = Split-Path -Leaf ([IO.Path]::ChangeExtension($Binary, $null)).TrimEnd('.')
-    $cand = @([IO.Path]::ChangeExtension($Binary, $null) + '_asan.exe')
+    $noExt = ([IO.Path]::ChangeExtension($Binary, $null)).TrimEnd('.')
+    $cand = @($noExt + '_asan.exe')
     if ($BuildTag.Platform) {
-        $cand += Join-Path $RepoRoot ("build{0}win-{1}-Release_ASAN{0}{2}_asan.exe" -f [IO.Path]::DirectorySeparatorChar, $BuildTag.Platform, $stem)
+        $cand += Join-Path $RepoRoot ("build{0}win-{1}-Release_ASAN{0}{2}_asan.exe" -f [IO.Path]::DirectorySeparatorChar, $BuildTag.Platform, (Split-Path -Leaf $noExt))
     }
     $hit = $cand | Where-Object { Test-Path $_ } | Select-Object -First 1
     if ($hit) { $Asan = $hit }

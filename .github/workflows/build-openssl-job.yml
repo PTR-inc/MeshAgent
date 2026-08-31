@@ -33,10 +33,11 @@ on:
           - linux-armv6hf-glibc
           - linux-armv7hf-glibc
           - linux-armv7hf-musl
-          - linux-armv5-glibc
-          - linux-mipsel-uclibc
-          - linux-mipsel-musl
-          - linux-mips-musl
+          - linux-armv5sf-glibc
+          - linux-mips32r1el-uclibc
+          - linux-mips32r2el-musl
+          - linux-mips32r1el-musl
+          - linux-mips32r2eb-musl
           - linux-riscv64-musl
           - linux-riscv32-musl
           - linux-sparc64-glibc
@@ -90,18 +91,17 @@ jobs:
             || { echo "::error::'$v' does not resolve to a published OpenSSL release"; exit 1; }
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
-          # One row per unix target, name then runner, with the runner chosen by T_CI.
-          rows=$(for t in $(openssl/build/targets.sh --names); do
-                   case "$(openssl/build/targets.sh --field "$t" CI)" in
-                     macos)   echo "$t macos-latest" ;;
-                     windows) ;;
-                     *)       echo "$t ubuntu-24.04" ;;
-                   esac
-                 done)
-          # Windows names are grepped out of build.ps1's $Targets rather than run,
-          # because act's image has no pwsh. consistency.sh check 5 asserts this
-          # parse agrees with targets.sh --names windows.
-          win=$(grep -oE "Name *= *'[^']+'" openssl/build/windows/build.ps1 | sed "s/.*'\(.*\)'/\1/")
+          # One row per unix target, name then runner, with the runner chosen by T_CI. The
+          # windows names come from the same table (T_CI=windows), so build.ps1 is never
+          # parsed here. consistency.sh check 5 keeps its $Targets in step with targets.sh.
+          rows=""; win=""
+          for t in $(openssl/build/targets.sh --names); do
+            case "$(openssl/build/targets.sh --field "$t" CI)" in
+              macos)   rows="$rows$t macos-latest"$'\n' ;;
+              windows) win="$win$t"$'\n' ;;
+              *)       rows="$rows$t ubuntu-24.04"$'\n' ;;
+            esac
+          done
 
           sel="${{ inputs.jobname }}"
           case "$sel" in
@@ -159,8 +159,22 @@ jobs:
       OPENSSL_VERSION: ${{ needs.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@v7.0.1
+      - name: Skip if ${{ matrix.target }} already matches OpenSSL ${{ needs.resolve.outputs.version }}
+        id: check
+        shell: pwsh
+        # The same rule as the unix composite action: the version selects the prefix, and a
+        # prefix already carrying this version is only rebuilt with force.
+        run: |
+          $v = '${{ needs.resolve.outputs.version }}'
+          $f = "openssl/$v/${{ matrix.target }}/lib/libcrypto.lib"
+          $skip = (Test-Path $f) -and (Select-String -Path $f -Pattern "OpenSSL $v " -SimpleMatch -Quiet)
+          if ('${{ inputs.force }}' -eq 'true') { $skip = $false }
+          if ($skip) { Write-Host "::notice::${{ matrix.target }} already at OpenSSL $v and force=false - skipping rebuild." }
+          "skip=$($skip.ToString().ToLower())" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
       - uses: ilammy/setup-nasm@v1
+        if: steps.check.outputs.skip != 'true'
       - name: Install Strawberry Perl (Configure needs a real Windows perl)
+        if: steps.check.outputs.skip != 'true'
         shell: pwsh
         # The image ships it already, but choco's PATH change never reaches this process, so the
         # bin directory is added for the following steps explicitly.
@@ -169,6 +183,7 @@ jobs:
           'C:\Strawberry\perl\bin' | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
           & 'C:\Strawberry\perl\bin\perl.exe' -e 'print "perl $^V $^O`n"'
       - name: Fetch the OpenSSL source (URL and sha256 both from env.ps1)
+        if: steps.check.outputs.skip != 'true'
         shell: pwsh
         run: |
           . openssl/build/windows/env.ps1
@@ -177,14 +192,15 @@ jobs:
             throw "could not fetch $($script:OpenSslUrl)"
           }
       # This step only invokes build.ps1, which owns the recipe, the prefix layout and
-      # the version gate. The force input is irrelevant here because build.ps1 always
-      # rebuilds and the collect step uploads only changes.
+      # the version gate.
       - name: Build ${{ matrix.target }}
+        if: steps.check.outputs.skip != 'true'
         shell: pwsh
         run: |
           pwsh -File openssl/build/windows/build.ps1 ${{ matrix.target }}
           if ($LASTEXITCODE -ne 0) { throw "build.ps1 ${{ matrix.target }} failed" }
       - name: Collect what the build actually changed
+        if: steps.check.outputs.skip != 'true'
         shell: bash
         run: |
           mkdir -p out
@@ -211,7 +227,7 @@ jobs:
           find artifacts -type d -path '*/out/openssl' -print0 |
             while IFS= read -r -d '' d; do cp -rf "$d"/. openssl/; done
       - name: Audit every prefix with the same gates build.sh applied
-        run: openssl/build/verify
+        run: openssl/build/verify.sh
       - name: Fail if any dispatched target did not succeed
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
@@ -247,7 +263,7 @@ jobs:
             exit 0
           fi
           git commit -q -m "openssl: install prefixes for $VERSION ($JOBNAME)" \
-            -m "Automated rebuild via $GITHUB_WORKFLOW run $GITHUB_RUN_ID (jobname=$JOBNAME, force=$FORCE), audited by openssl/build/verify." \
+            -m "Automated rebuild via $GITHUB_WORKFLOW run $GITHUB_RUN_ID (jobname=$JOBNAME, force=$FORCE), audited by openssl/build/verify.sh." \
             -m "Switching the agent to these prefixes is a separate edit of openssl/VERSION."
           git push origin "HEAD:$REF"
           git log -1 --stat | head -40

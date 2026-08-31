@@ -7,6 +7,7 @@
 #
 #   make list                     # every ARCHID with its class, toolchain readiness and how to fetch it
 #   make list-archs [FILTER=...]  # the same list, narrowed to one CLASS (generic, openwrt, vendor, bsd or macos)
+#   make listflags                # the same list, plus each ARCHID's EXTRA cflags (make list flags also works)
 #
 # Standard builds. The ARCHID alone picks the OS recipe (linux, macos, freebsd or openbsd), so
 # `make ARCHID=6` and `make linux ARCHID=6` do the same thing. BSD hosts need gmake.
@@ -216,6 +217,11 @@ PATH_ZIG = ../ToolChains/zig/
 #             -Wno-date-time added (zig's clang errors on ScriptContainer.c's __TIME__/__DATE__
 #             use by default; neither the vendor toolchains nor upstream clang/gcc do) - see
 #             ARCH_45's CCOVERRIDE for a worked example, including the CFLAGS reasons above.
+#             `zig cc` also embeds DWARF debug info by default even with no -g flag on the
+#             command line (unlike plain clang/gcc), which is why a zig-built ARCHID's DEBUG_
+#             binary (see STRIP_AND_SYMBOLCP below) now resolves real file/line frames inside
+#             OpenSSL too - deliberately left on, since $(STRIP) below already removes it from
+#             the shipped OUTBIN and only the pre-strip debug copy carries the extra size.
 #   BSDREL    bsd class only, the OS release used for the default cross-build triple and sysroot
 #   TUNE      the -march, -mcpu and -mabi flags for this silicon
 #   HARDEN    one of full (the default), basic or none
@@ -274,7 +280,7 @@ endef
 # archive was built with.
 define ARCH_7
   ARCHNAME = mips
-  OSSLTARGET = linux-mipsel-uclibc
+  OSSLTARGET = linux-mips32r1el-musl
   CLASS    = vendor
   XDIR     = $(PATH_MIPS)
   XPREFIX  = mipsel-linux-
@@ -283,6 +289,14 @@ define ARCH_7
   HARDEN   = basic
   NOLDHARDEN = 1
   CFLAGS  += -DBADMATH
+  # 2026-08-31: dynamic uClibc -> static musl. The old binary needed a compatible uClibc-ng on the
+  # device itself, which nothing here can guarantee, so it now carries its own libc. zig defaults
+  # this triple to mips32r2, so -mcpu=mips32 pins the MIPS32r1 baseline the target exists for.
+  # The Bootlin uClibc toolchain stays in XDIR/XPREFIX/XTRIPLE/FETCH only to supply STRIP, the
+  # same way ARCH_28 and ARCH_40 keep their OpenWrt toolchains - nothing links uClibc any more.
+  # XTRIPLE still reading uclibc is what keeps NOILIBSTACKDEBUG off, which musl needs too.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target mipsel-linux-musleabi -mcpu=mips32 -Wno-date-time
+  LDINT    = -static
   IPADDR_MONITOR_DISABLE = 1
   IFADDR_DISABLE = 1
   KVM      = 0
@@ -293,7 +307,7 @@ endef
 # floor is GLIBC_2.34. Its binutils 2.33.1 handles hardening fine, so HARDEN=basic.
 define ARCH_9
   ARCHNAME = arm
-  OSSLTARGET = linux-armv5-glibc
+  OSSLTARGET = linux-armv5sf-glibc
   CLASS    = generic
   XDIR     = $(PATH_ARM5)
   XPREFIX  = arm-linux-
@@ -405,11 +419,15 @@ define ARCH_26
   # in prose here at all). The shared ifdef-XDIR rule avoids the whole problem because it lives
   # outside any eval'd block, deferred until real use - not an option for a block that sets its
   # own CC directly.
-  # No glibc version pinned in the triple (unlike ARCH_32's own linux-aarch64-glibc row): this
-  # ARCHID is deliberately "general", meaning whatever's newest/native, distinct from ARCH_32's
-  # deliberately old floor - see targets.sh's own comment on why one archive serves both. Pinning
-  # a floor here would collapse that distinction. Previously: CC = aarch64-linux-gnu-gcc.
-  CC       = $(PATH_ZIG)zig cc -target aarch64-linux-gnu -Wno-date-time
+  # Pinned to glibc 2.40 on request, which keeps this ARCHID the "general/newest" aarch64 target
+  # and widens the gap from ARCH_32's older 2.31 pin - see targets.sh's own comment on why one
+  # archive serves both. The pin is a ceiling, not a floor: it lets the linker pick each symbol's
+  # newest version up to 2.40, so the binary now needs GLIBC_2.38 where the unpinned build needed
+  # 2.29. That is Ubuntu 24.04 or Debian 13 and newer, and it excludes Debian 12 (2.36), Ubuntu
+  # 22.04 (2.35) and RHEL 9 (2.34). The 2.38 requirement comes from __isoc23_sscanf,
+  # __isoc23_strtoull and fmod, which glibc versioned at 2.38.
+  # Previously: -target aarch64-linux-gnu (unpinned), and before that CC = aarch64-linux-gnu-gcc.
+  CC       = $(PATH_ZIG)zig cc -target aarch64-linux-gnu.2.40 -Wno-date-time
   # See ARCH_5's comment: zig's lld needs LEGACY_LD's plain-relative-path libjpeg linking.
   LEGACY_LD = 1
   STRIP    = aarch64-linux-gnu-strip
@@ -421,7 +439,7 @@ endef
 
 define ARCH_28
   ARCHNAME = mips24kc
-  OSSLTARGET = linux-mips-musl
+  OSSLTARGET = linux-mips32r2eb-musl
   CLASS    = openwrt
   XDIR     = $(PATH_MIPS24KC)
   XPREFIX  = mips-openwrt-linux-musl-
@@ -565,7 +583,7 @@ endef
 
 define ARCH_40
   ARCHNAME = mipsel24kc
-  OSSLTARGET = linux-mipsel-musl
+  OSSLTARGET = linux-mips32r2el-musl
   CLASS    = openwrt
   XDIR     = $(PATH_MIPSEL24KC)
   XPREFIX  = mipsel-openwrt-linux-musl-
@@ -731,7 +749,7 @@ $(eval $(ARCH_$(ARCHID)))
 # ARCH_47, ARCH_60, ARCH_70) - ?= leaves that override in place.
 SERVER_ARCHID ?= $(ARCHID)
 # These goals do not need a target selected.
-ifeq ($(filter $(MAKECMDGOALS),list list-archs print-archids clean cleanbin),)
+ifeq ($(filter $(MAKECMDGOALS),list list-archs listflags list-flags flags print-archids clean cleanbin),)
 $(if $(ARCHNAME),,$(error unknown or missing ARCHID '$(ARCHID)' - run 'make list'))
 endif
 
@@ -977,6 +995,9 @@ CFLAGS += $(OPT)
 # linux:/macos:/etc. always re-run, so a simple copy+strip step would overwrite DEBUGBIN's real
 # symbols with an already-stripped OUTBIN even when nothing changed. Comparing file times does not
 # work directly, since strip changes OUTBIN's time too - so that time is saved first.
+# For a zig-built ARCHID (see CCOVERRIDE/PATH_ZIG above), DEBUGBIN also inherits real file/line
+# debug info from OpenSSL itself - zig cc embeds DWARF by default with no -g needed, see
+# openssl/build/targets.sh's top-of-file comment. This strip step removes all of it from OUTBIN.
 SNAP_OUTBIN_MTIME = if [ -e "$(OUTBIN)" ]; then touch -r "$(OUTBIN)" "$(PREMTIME)"; else rm -f "$(PREMTIME)"; fi
 STRIP_AND_SYMBOLCP = if [ ! -e "$(PREMTIME)" ] || [ -n "$$(find "$(OUTBIN)" -newer "$(PREMTIME)" 2>/dev/null)" ] || [ ! -e "$(DEBUGBIN)" ]; then cp "$(OUTBIN)" "$(DEBUGBIN)" && $(STRIP) "$(OUTBIN)"; else echo "  $(OUTBIN) unchanged - keeping existing $(DEBUGBIN) symbols"; fi; rm -f "$(PREMTIME)"
 endif
@@ -1092,7 +1113,7 @@ $(shell git log -1 --format=%H | awk '{ printf "#define SOURCE_COMMIT_HASH \"%s\
 endif
 endif
 
-.PHONY: all clean cleanbin list list-archs print-toolchain print-ossldir print-ossltarget print-osslver print-bsdrel print-macosarch print-archids print-cflags-extra
+.PHONY: all clean cleanbin list list-archs listflags list-flags flags print-toolchain print-ossldir print-ossltarget print-osslver print-bsdrel print-macosarch print-archids print-archname print-cflags-extra
 
 # The OS recipes re-invoke make with EXENAME= and the full per-target CFLAGS, and that inner make
 # is the only one meant to reach the compile rules. A bare `make ARCHID=n` used to fall into them
@@ -1106,10 +1127,21 @@ all:
 	@$(MAKE) --no-print-directory $(OSGOAL) ARCHID=$(ARCHID)
 endif
 
+# 'flags' is a no-op goal, only so `make list flags` doesn't fail as "no rule to make target".
+flags: ;
+
+# EXTRA cflags cost one extra sub-make per ARCHID to compute, so they're only shown for
+# listflags/list-flags/`make list flags` - plain list/list-archs skip that work and the column.
+SHOWFLAGS := $(filter flags listflags list-flags,$(MAKECMDGOALS))
+
 # One line per ARCHID with its toolchain status. Narrow it with make list FILTER=openwrt
-list list-archs:
+list list-archs listflags list-flags:
 	@echo "default cflags: $(BASE_CFLAGS)"
-	@printf "%6s  %-20s %-8s %-9s %-30s %s\n" ARCHID TARGET CLASS TOOLCHAIN "EXTRA flags" COMPILER
+	@if [ -n "$(SHOWFLAGS)" ]; then \
+	  printf "%6s  %-20s %-8s %-9s %-30s %s\n" ARCHID TARGET CLASS TOOLCHAIN COMPILER "EXTRA flags"; \
+	else \
+	  printf "%6s  %-20s %-8s %-9s %s\n" ARCHID TARGET CLASS TOOLCHAIN COMPILER; \
+	fi
 	@awk '/^define ARCH_/{id=$$2; sub(/ARCH_/,"",id); n=""; c="-"} \
 	      /^  ARCHNAME/{n=$$3} /^  CLASS/{c=$$3} \
 	      /^endef/{if(id!="" && n!="" && (f=="" || c==f)) print id, n, c; id=""}' \
@@ -1118,13 +1150,17 @@ list list-archs:
 	  i=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-toolchain); \
 	  cc=$${i%%|*}; r=$${i#*|}; fetch=$${r%%|*}; r=$${r#*|}; \
 	  apt=$${r%%|*}; r=$${r#*|}; host=$${r%%|*}; hostok=$${r#*|}; \
-	  extra=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-cflags-extra); \
+	  if [ -n "$(SHOWFLAGS)" ]; then extra=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-cflags-extra); fi; \
 	  if [ -n "$$host" ] && [ -z "$$hostok" ]; then st=n/a; how="native build - run it on $$host"; \
 	  elif command -v "$$cc" >/dev/null 2>&1 || [ -x "$$cc" ]; then st=ready; how="$$cc"; \
 	  elif [ -n "$$fetch" ]; then st=MISSING; how="./fetch-toolchains.sh $$fetch"; \
 	  elif [ -n "$$apt" ]; then st=MISSING; how="apt-get install $$apt"; \
 	  else st=MISSING; how="bring your own ($$cc)"; fi; \
-	  printf "%6s  %-20s %-8s %-9s %-30s %s\n" "$$id" "$$n" "$$c" "$$st" "$${extra:--}" "$$how"; \
+	  if [ -n "$(SHOWFLAGS)" ]; then \
+	    printf "%6s  %-20s %-8s %-9s %-30s %s\n" "$$id" "$$n" "$$c" "$$st" "$$how" "$${extra:--}"; \
+	  else \
+	    printf "%6s  %-20s %-8s %-9s %s\n" "$$id" "$$n" "$$c" "$$st" "$$how"; \
+	  fi; \
 	done
 
 # Machine-readable ARCHID list, so CI can loop over it instead of hardcoding an ARCHID list of
@@ -1142,6 +1178,9 @@ print-archids:
 # series it resolved to, and print-ossldir the prefix made of both.
 print-toolchain:
 	@echo '$(CCBIN)|$(FETCH)|$(APTPKG)|$(HOST)|$(HOSTOK)'
+
+print-archname:
+	@echo '$(ARCHNAME)'
 
 print-ossltarget:
 	@echo '$(OSSLTARGET)'

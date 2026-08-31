@@ -57,15 +57,34 @@ done
 [ $rc -eq 0 ] && ok "targets.sh --names linux + macos + windows == BR_ALL_TARGETS"
 
 echo "== 5. windows/build.ps1's table names the same targets as targets.sh ======="
-# build-openssl-job.yml greps build.ps1's $Targets so the matrix resolves without PowerShell,
-# and the names must be targets.sh's, because verify audits the .lib prefixes by that name.
-WIN_NAMES=$(grep -oE "Name *= *'[^']+'" "$BR_SCRIPTS/windows/build.ps1" | sed "s/.*'\(.*\)'/\1/" | sort)
-[ -n "$WIN_NAMES" ] || fail "could not parse any Name from windows/build.ps1's \$Targets"
+# The CI matrix reads the windows names from targets.sh (T_CI=windows), but build.ps1 keeps
+# its own name list and VcConf map for the MSVC fields, and both must agree because verify
+# audits the .lib prefixes by that name and probe.sh gates platform: against T_CONF.
+WINPS1="$BR_SCRIPTS/windows/build.ps1"
+WIN_NAMES=$(grep -oE "'windows-[a-z0-9-]+'" "$WINPS1" | tr -d "'" | sort -u)
+[ -n "$WIN_NAMES" ] || fail "could not parse any windows-* name from windows/build.ps1"
 if [ "$WIN_NAMES" = "$(print_target_names windows | sort)" ]; then
     ok "$(echo "$WIN_NAMES" | wc -w) windows targets, build.ps1 and targets.sh agree"
 else
-    fail "windows/build.ps1's \$Targets ($(echo $WIN_NAMES)) differ from targets.sh --names windows ($(print_target_names windows | tr '\n' ' '))"
+    fail "windows/build.ps1's names ($(echo $WIN_NAMES)) differ from targets.sh --names windows ($(print_target_names windows | tr '\n' ' '))"
 fi
+# The fields build.ps1 derives must equal what targets.sh's row says: the Configure target from
+# the VcConf map, --debug from the -debug name suffix, and asm on everywhere but arm64.
+confmap=$(grep -F '$VcConfByArch' "$WINPS1" | head -1)
+fieldok=1
+for t in $(print_target_names windows); do
+    br_target "$t" || continue
+    arch=${t#windows-}; arch=${arch%-debug}
+    conf=$(echo "$confmap" | grep -oE "(^|[{; ])$arch = '[^']+'" | sed "s/.*'\(.*\)'/\1/")
+    [ "$conf" = "$T_CONF" ] || { fail "$t: build.ps1's VcConf map says '$conf' but targets.sh says T_CONF=$T_CONF"; fieldok=0; }
+    case "$t" in *-debug) w=--debug ;; *) w= ;; esac
+    case "$T_EXTRA" in *--debug*) s=--debug ;; *) s= ;; esac
+    [ "$w" = "$s" ] || { fail "$t: the -debug name suffix and T_EXTRA ('$T_EXTRA') disagree about --debug"; fieldok=0; }
+    case "$arch" in arm64) w=off ;; *) w=on ;; esac
+    case "$T_FLAGS" in *-no-asm*) s=off ;; *) s=on ;; esac
+    [ "$w" = "$s" ] || { fail "$t: build.ps1 builds asm=$w but targets.sh's T_FLAGS says asm=$s"; fieldok=0; }
+done
+[ "$fieldok" = 1 ] && ok "VcConf, --debug and asm agree with targets.sh for every windows target"
 
 echo "== 6. no pinned constant is restated in CI, scripts, the makefile or the props ="
 # Each constant has exactly one home: openssl/VERSION, build-env.sh, or the makefile's ARCH_ blocks.

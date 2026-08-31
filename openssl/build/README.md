@@ -3,7 +3,7 @@
 Everything under `openssl/` that builds, verifies or documents the static `libcrypto`/`libssl`
 archives this repo ships. The archives are laid out as OpenSSL install prefixes, one per version
 per target, and the agent build points at exactly one prefix at a time. `targets.sh` is the
-source of truth for what compiles each target, `openssl/build/verify` is the ledger of what is
+source of truth for what compiles each target, `openssl/build/verify.sh` is the ledger of what is
 actually committed. This file explains the layout and the gates.
 
 ## Map of `openssl/`
@@ -59,7 +59,7 @@ Include order is `-I$(OSSLPREFIX)/include -Iopenssl/$(OSSLVER)/include`, so the 
 openssl/build/build.sh list            # every target, its libc, toolchain readiness, ARCHIDs, prefix
 openssl/build/build.sh linux-riscv64-musl
 openssl/build/build.sh all             # every linux and macos target this host can build
-openssl/build/verify                   # audit every committed prefix of every installed version
+openssl/build/verify.sh                # audit every committed prefix of every installed version
 openssl/build/consistency.sh           # anti-drift gate
 ```
 
@@ -86,10 +86,11 @@ libc, their MSVC details live in `build.ps1`'s `$Targets`.
 | `linux-armv6hf-glibc` | linux-armv4 | apt `arm-linux-gnueabihf-gcc`, armv6 VFP hardfloat (2) | glibc | 25 | no | yes |
 | `linux-armv7hf-glibc` | linux-generic32 | Bootlin armv7-eabihf glibc 2.31 | glibc | 24 | none | yes |
 | `linux-armv7hf-musl` | linux-armv4 | musl.cc armhf, armv7-a VFP hardfloat (2) | musl | 35 | no | yes |
-| `linux-armv5-glibc` | linux-generic32 | Bootlin armv5-eabi glibc 2.31 (softfloat) | glibc | 9 | none | yes |
-| `linux-mipsel-uclibc` | linux-mips32 | Bootlin mips32el uClibc | uclibc | 7 | yes | yes |
-| `linux-mipsel-musl` | linux-mips32 | OpenWrt SDK mipsel_24kc | musl | 40 | yes | yes |
-| `linux-mips-musl` | linux-mips32 | OpenWrt SDK mips_24kc | musl | 28 | yes | yes |
+| `linux-armv5sf-glibc` | linux-generic32 | Bootlin armv5-eabi glibc 2.31 (softfloat) | glibc | 9 | none | yes |
+| `linux-mips32r1el-uclibc` | linux-mips32 | Bootlin mips32el uClibc | uclibc | 7 | yes | yes |
+| `linux-mips32r2el-musl` | linux-mips32 | OpenWrt SDK mipsel_24kc | musl | 40 | yes | yes |
+| `linux-mips32r1el-musl` | linux-mips32 | zig `mipsel-linux-musleabi -mcpu=mips32` (MIPS32r1) | musl | 7 | yes | yes |
+| `linux-mips32r2eb-musl` | linux-mips32 | OpenWrt SDK mips_24kc | musl | 28 | yes | yes |
 | `linux-riscv64-musl` | linux64-riscv64 | musl.cc riscv64 (rv64gc) | musl | 45, 46 | none | yes |
 | `linux-riscv32-musl` | linux-generic32 | musl.cc riscv32 | musl | 47 | none | yes |
 | `freebsd-x86_64` | BSD-x86_64 | clang + FreeBSD sysroot | bsd | 30 | yes | no |
@@ -143,7 +144,7 @@ archives and the 3.x apps and fuzz link needs 64-bit atomics the 32-bit targets 
 
 ## verify and the gates
 
-`openssl/build/verify [target ...]` walks every `openssl/<version>/<target>/` of every installed
+`openssl/build/verify.sh [target ...]` walks every `openssl/<version>/<target>/` of every installed
 version, Windows `.lib` prefixes included, on any host. Everything is read with `strings` and
 `archive-info.py`, so no target binutils are needed. It first checks that
 `openssl/<version>/include/openssl/opensslv.h` says that version, then runs `gate_target` from
@@ -222,7 +223,7 @@ RC2-40, `SSL_CTX_set_options` misuse, deprecated `ENGINE` headers) is separate f
    `T_LIBC`, `T_FETCH` and, if not linux, `T_CI`, plus a comment saying why the recipe is what it
    is. Add the name to `BR_ALL_TARGETS`. The name must follow `<os>-<arch>-<libc>` (check 1).
 2. Put `OSSLTARGET = <name>` in the `ARCH_<id>` block of every ARCHID that links it.
-3. `openssl/build/build.sh <name>`, then `openssl/build/verify <name>` and
+3. `openssl/build/build.sh <name>`, then `openssl/build/verify.sh <name>` and
    `openssl/build/consistency.sh`. CI picks the target up from `T_CI` with no YAML edit.
 4. Windows: add the row to `build.ps1`'s `$Targets` as well, check 5 keeps the two tables equal.
 
@@ -261,13 +262,13 @@ $BUILDROOT/
     freebsd-<rel>/                 FreeBSD base sysroot (clang cross)
     openbsd-<rel>/                 OpenBSD base sysroot (clang cross)
   toolchains/
-    openwrt-sdk-<rel>-*_musl.Linux-x86_64/     linux-mips-musl, linux-mipsel-musl (and the agent's 36)
+    openwrt-sdk-<rel>-*_musl.Linux-x86_64/     linux-mips32r2eb-musl, linux-mips32r2el-musl (and the agent's 36)
     aarch64-linux-musl-cross/                   linux-aarch64-musl (musl.cc)
     arm-linux-musleabihf-cross/                 linux-armv7hf-musl (musl.cc)
     riscv64-linux-musl-cross/                   linux-riscv64-musl (musl.cc)
     riscv32-linux-musl-cross/                   linux-riscv32-musl (musl.cc)
     riscv64-linux-musl-xthead/                  T-Head/Xuantie vendor toolchain (agent ARCHID 45 only)
-    mips32el--uclibc--stable-<rel>/             linux-mipsel-uclibc (Bootlin)
+    mips32el--uclibc--stable-<rel>/             linux-mips32r1el-uclibc (Bootlin)
     <family>--glibc--stable-<rel>/              armv5-eabi, armv7-eabihf, aarch64, x86-i686,
                                                 x86-64-core-i7 (Bootlin, pinned)
   osxcross/                        the osxcross install when built on this host
@@ -352,7 +353,7 @@ openssl\build\windows\toolset-check.ps1 -Platform x64 -Toolset v143   # audit vs
 version, `platform:`, `compiler:` and member count of each, and exits 1 only for a machine-type,
 CRT (`/MT` vs `/MTd` or `/MD`) or LTCG-build mismatch with the toolset about to link them. A
 different compiler build is a warning. `windows-build.yml` runs it before every agent build. It
-took over what `verify.ps1` used to report, and `openssl/build/verify` audits the same `.lib`
+took over what `verify.ps1` used to report, and `openssl/build/verify.sh` audits the same `.lib`
 files on Linux, so the Windows prefixes are covered by both.
 
 Known caveat: the six committed `-debug` archives were compiled `/MT /Od`, not `/MTd`, because
