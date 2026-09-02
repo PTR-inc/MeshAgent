@@ -68,6 +68,10 @@
     Skip the slow phases. On Windows that is the AddressSanitizer one, the .sh also has valgrind.
     Short form: -q.
 
+.PARAMETER Quicker
+    Everything -q skips, and phase 2 as well, leaving -b64exec as the only stress delivery.
+    That is the one that resembles how the server starts meshcore. Short form: -qq.
+
 .PARAMETER NoAsan
     Skip only the AddressSanitizer phase.
 
@@ -94,6 +98,7 @@ param(
     [switch]$Strict,
     [switch]$Lenient,
     [Alias('q')][switch]$Quick,
+    [Alias('qq')][switch]$Quicker,
     [switch]$NoAsan,
     [switch]$Ci
 )
@@ -104,6 +109,7 @@ if ($PSBoundParameters.Count -eq 0) { Get-Help -Detailed $PSCommandPath; exit 0 
 
 $ErrorActionPreference = 'Continue'
 if ($Ci -and -not $Lenient) { $Strict = $true }
+if ($Quicker) { $Quick = $true }
 
 # The cwd must be the repo root, because stress-test.js resolves its testmodules relative to it.
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -542,12 +548,19 @@ else {
 # reconnect-after-end() crash took the process down and every later check with it. That fix has
 # landed, so the split bought nothing but a second startup and a second set of totals to reconcile.
 Head2 '[2/5] stress test - every testmodule'
-Clear-TestResidue
-$r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('test\stress-test.js', '--watchdog=120000') -TimeoutSec 360
-Emit $r
-$core = Get-StressTotals $r.Output
-$verdict = Judge-Stress $r $core
-Record 'stress' $verdict[0] $verdict[1]
+$core = $null
+if ($Quicker) {
+    Say '  skipped by request (-qq)'
+    Record 'stress' 'SKIP' '-qq runs only the -b64exec delivery'
+}
+else {
+    Clear-TestResidue
+    $r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('test\stress-test.js', '--watchdog=120000') -TimeoutSec 360
+    Emit $r
+    $core = Get-StressTotals $r.Output
+    $verdict = Judge-Stress $r $core
+    Record 'stress' $verdict[0] $verdict[1]
+}
 
 
 # --- phase 3: the same run again, delivered the way meshcore is (-b64exec) -------------------
@@ -570,7 +583,7 @@ else {
     $b64r = Get-StressTotals $r.Output
     $verdict = Judge-Stress $r $b64r
     # Only the check count "(of N)" must match phase 2. The KNOWN split varies between runs.
-    if ($verdict[0] -ne 'FAIL' -and $b64r.Of -gt 0 -and $b64r.Of -ne $core.Of) {
+    if ($verdict[0] -ne 'FAIL' -and $null -ne $core -and $b64r.Of -gt 0 -and $b64r.Of -ne $core.Of) {
         Record 'stress (-b64exec)' 'FAIL' ("ran a different check count than phase 2: '{0}' vs '{1}'" -f $b64r.Line, $core.Line)
     }
     else { Record 'stress (-b64exec)' $verdict[0] $verdict[1] }
