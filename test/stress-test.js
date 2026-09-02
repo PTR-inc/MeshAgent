@@ -19,6 +19,9 @@ limitations under the License.
 // The test sections live under test/testmodules/, one file per section, run in filename order.
 // Each must export exports.name and exports.run(check, deepEqual, done). check.known(section, cond,
 // msg, ref) records a failure of a defect already in ISSUES.md as KNOWN instead of FAIL. See ISSUES.md.
+// A known defect is declared there, in the testmodule that exercises it, and nowhere else: the
+// TOTAL line carries the KNOWN count, and test-agent.sh turns it into a KNOWN verdict that
+// --lenient accepts and --strict fails. Turn a check.known() back into a check() once it is fixed.
 //
 // Run from the repo root, because module paths are cwd-relative. Scratch files do not go to the
 // working directory, see scratch() below:
@@ -27,7 +30,8 @@ limitations under the License.
 //
 // A timer only fires while its return value stays referenced, so every setTimeout() here and in
 // the testmodules is assigned to a variable that stays in scope.
-// A native crash in the 06-* sections kills the process outright, so automate with an external timeout.
+// A native crash kills the process outright, taking the TOTAL line with it, so automate with an
+// external timeout.
 //
 
 // ---------------------------------------------------------------------------------------------

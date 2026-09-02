@@ -56,9 +56,12 @@ Include order is `-I$(OSSLPREFIX)/include -Iopenssl/$(OSSLVER)/include`, so the 
 ```sh
 ./fetch-toolchains.sh                  # fresh machine: download, verify and extract everything fetchable
 . build-env.sh && br_check             # every toolchain, sysroot and tarball present?
-openssl/build/build.sh list            # every target, its libc, toolchain readiness, ARCHIDs, prefix
+openssl/build/build.sh list            # one row per ARCHID, with a STAMP column saying what a
+                                       # build would do now: current, stale, unstamped or absent
+openssl/build/build.sh list-targets    # every target, its libc, toolchain readiness, ARCHIDs, prefix
 openssl/build/build.sh linux-riscv64-musl
 openssl/build/build.sh all             # every linux and macos target this host can build
+openssl/build/build.sh -f <target>     # build even when the stamp says the prefix is current
 openssl/build/verify.sh                # audit every committed prefix of every installed version
 openssl/build/consistency.sh           # anti-drift gate
 ```
@@ -107,7 +110,7 @@ FPU and thumb has no hard-float ABI. Every `-m` flag of `T_CC` is checked agains
 
 "none" in the asm column means the Configure target has no asm modules whatever the flag says
 (`linux-generic32`, and 1.1.1 has no RISC-V asm). Every 64-bit target also gets
-`enable-ec_nistp_64_gcc_128`. `build.sh list` prints the same table live, with the ARCHIDs asked
+`enable-ec_nistp_64_gcc_128`. `build.sh list-targets` prints the same table live, with the ARCHIDs asked
 from the makefile and whether the prefix exists. Read the comment on a target in `targets.sh`
 before touching it, most encode a debugged reason.
 
@@ -153,6 +156,27 @@ version, Windows `.lib` prefixes included, on any host. Everything is read with 
 target of `targets.sh` with no prefix for a version is reported as `missing`, not rejected, since
 a new version is filled in one target at a time. A prefix directory that is no target is rejected:
 add the target or move the directory to `openssl/legacy/`.
+
+`build.sh` skips a target whose installed prefix still carries a `build-stamp.txt` matching the
+current configuration, reporting it as `UP TO DATE` in roughly a tenth of a second instead of
+rebuilding identical bytes, so `build.sh all` after a one-target change costs one build rather than
+27. A prefix with no stamp predates the mechanism, so nothing can be concluded about it and it is
+rebuilt. `-f`/`--force`, or `BR_FORCE=1` for a caller that cannot pass a flag, builds regardless;
+that is what the workflow's `force` input now sets. When the stamp disagrees, the build runs and
+prints which fields drifted before it starts.
+
+Each prefix also carries a `build-stamp.txt`, written by `build.sh` when it installs. The fields
+above its `stamp_key` line are what decides a rebuild - the source release and its sha256, the
+Configure target and arguments, the compiler, archiver and their versions, the libc and its
+version, whether asm is on, and any patch `build.sh` applied to the generated asm. The fields below
+the `---` describe the finished archive and are deliberately not part of the key, so a plain
+rebuild of unchanged configuration does not read as a configuration change. `verify.sh` recomputes
+those fields from `targets.sh` and rejects a prefix whose stamp disagrees, naming each field that
+drifted. Two fields are never compared: `patches`, which cannot be recomputed without building, and
+`source_sha256` when the release tarball is not on the auditing host. A prefix with no stamp at all
+predates the mechanism and is counted, not rejected, and a prefix from a version series other than
+the pinned one is skipped rather than compared against the wrong tarball. The closing `STAMPS:`
+line reports both counts.
 
 The gates, in the order `probe.sh` applies them:
 
@@ -207,7 +231,7 @@ nothing consumes it until asked.
    target, `openssl/3.x.y/include/openssl/`.
 3. `make ARCHID=n OSSLVER=3.x.y` links that prefix, or set `OSSLVER = 3.x.y` in that ARCHID's
    `ARCH_` block to make the pin permanent for that target only. `verify` audits both versions
-   from now on, and `build.sh list` marks such ARCHIDs as `id@version`.
+   from now on, and `build.sh list-targets` marks such ARCHIDs as `id@version`.
 4. Switching the repo means editing `openssl/VERSION`. `consistency.sh` check 2 fails until every
    ARCHID's target is installed under the new version, and check 6 fails if the old literal is
    still written anywhere.

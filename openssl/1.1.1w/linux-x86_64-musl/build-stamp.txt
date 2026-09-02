@@ -1,0 +1,27 @@
+# Written by openssl/build/build.sh. The fields above 'stamp_key' decide whether a
+# rebuild is needed; the ones below it only describe the build that produced this.
+target: linux-x86_64-musl
+openssl_version: 1.1.1w
+source_sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+configure_target: linux-x86_64
+configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared  no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  enable-ec_nistp_64_gcc_128
+make_target: build_libs
+cc: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target x86_64-linux-musl
+cc_version: clang version 20.1.2 (https://github.com/ziglang/zig-bootstrap 7ef74e656cf8ddbd6bf891a8475892aa1afa6891)
+ar: /opt/buildroot/toolchains/zig-0.15.2/zig ar
+ar_version: LLVM version 20.1.2
+ranlib: /opt/buildroot/toolchains/zig-0.15.2/zig ranlib
+libc: musl
+libc_version: musl as shipped by zig-0.15.2
+asm: on
+patches: none
+stamp_key: 729d600512db3e921818a995da68150b744a93847592cca50431253878a3af4d
+---
+built_at: 2026-08-31T20:06:20Z
+archive_platform: linux-x86_64
+archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target x86_64-linux-musl -fPIC -pthread -m64 -Wa,--noexecstack -Qunused-arguments -Wall -O3 -fPIC -std=gnu11 -DOPENSSL_USE_NODELETE -DL_ENDIAN -DOPENSSL_PIC -DOPENSSL_CPUID_OBJ -DOPENSSL_IA32_SSE2 -DOPENSSL_BN_ASM_MONT -DOPENSSL_BN_ASM_MONT5 -DOPENSSL_BN_ASM_GF2m -DSHA1_ASM -DSHA256_ASM -DSHA512_ASM -DKECCAK1600_ASM -DRC4_ASM -DMD5_ASM -DAESNI_ASM -DVPAES_ASM -DGHASH_ASM -DECP_NISTZ256_ASM -DX25519_ASM -DPOLY1305_ASM -DNDEBUG
+objects: 576 (ELF/64 x86_64)
+glibc_only_refs: 0
+ucontext_refs: 0
+libcrypto_sha256: 6e0624a1022b1e81c04c73324a40d28adefa8b12c97d52a62ae9c9a8d1eebb66
+libssl_sha256: 69845b630684b7e712763cafa10ad2058a600356085922e0293c37bc5e06d785

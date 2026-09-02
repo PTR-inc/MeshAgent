@@ -26,12 +26,15 @@ exports.run = function (check, deepEqual, done) {
     var isWin = process.platform == 'win32';
     var shell = isWin ? (process.env['ComSpec'] || 'C:\\Windows\\System32\\cmd.exe') : '/bin/sh';
     var shellArgv0 = isWin ? 'cmd.exe' : 'sh';
+    // cmd echoes every piped stdin line back on stdout, which both trips the stderr-isolation
+    // check below and lets the marker checks match the echo instead of the child's real output.
+    var shellArgv = isWin ? [shellArgv0, '/Q'] : [shellArgv0];
     var NL = isWin ? '\r\n' : '\n';
 
     // The exit code is delivered on the 'exit' event only, because there is no exitCode property
     // and waitExit() returns nothing.
     function spawnShell() {
-        var c = cp.execFile(shell, [shellArgv0]);
+        var c = cp.execFile(shell, shellArgv);
         c.stdout.str = ''; c.stderr.str = ''; c.code = null;
         c.on('exit', function (code) { this.code = code; });
         c.stdout.on('data', function (d) { this.str += d.toString(); });
@@ -66,7 +69,7 @@ exports.run = function (check, deepEqual, done) {
     check(S, okOrder, 'five sequential stdin writes were not all echoed in order: ' + JSON.stringify(idx));
 
     // --- environment reaches the child ---
-    var c4 = cp.execFile(shell, [shellArgv0], { env: { CP_TEST_VAR: 'cpv-9182' } });
+    var c4 = cp.execFile(shell, shellArgv, { env: { CP_TEST_VAR: 'cpv-9182' } });
     c4.stdout.str = ''; c4.stdout.on('data', function (d) { this.str += d.toString(); });
     c4.stdin.write((isWin ? 'echo %CP_TEST_VAR%' : 'echo $CP_TEST_VAR') + NL + 'exit' + NL);
     c4.waitExit();
@@ -87,7 +90,7 @@ exports.run = function (check, deepEqual, done) {
     // child's PID and on POSIX the agent learns of the exit from the stdout pipe breaking. A shell's
     // orphaned sleep grandchild keeps that pipe open, which on macOS meant no 'exit' for 30 s.
     var guard = null, settled = false;
-    var c5 = isWin ? cp.execFile(shell, [shellArgv0]) : cp.execFile('/bin/sleep', ['sleep', '30']);
+    var c5 = isWin ? cp.execFile(shell, shellArgv) : cp.execFile('/bin/sleep', ['sleep', '30']);
     c5.stdout.on('data', function () { });
     c5.on('exit', function (code) {
         if (settled) { return; }

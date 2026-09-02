@@ -1,0 +1,27 @@
+# Written by openssl/build/build.sh. The fields above 'stamp_key' decide whether a
+# rebuild is needed; the ones below it only describe the build that produced this.
+target: linux-mips32r1el-uclibc
+openssl_version: 1.1.1w
+source_sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+configure_target: linux-mips32
+configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared  no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  -Os
+make_target: build_libs
+cc: /opt/buildroot/toolchains/mips32el--uclibc--stable-2020.08-1/bin/mipsel-linux-gcc
+cc_version: mipsel-linux-gcc.br_real (Buildroot 2020.08-14-ge5a2a90) 9.3.0
+ar: ar
+ar_version: GNU ar (GNU Binutils for Debian) 2.44
+ranlib: ranlib
+libc: uclibc
+libc_version: uclibc, from mips32el--uclibc--stable-2020.08-1
+asm: on
+patches: none
+stamp_key: 09da8604a59db84cb7f83630b8c296dea46af247cc44ecf6d1bc744f3b69fd66
+---
+built_at: 2026-08-31T20:07:07Z
+archive_platform: linux-mips32
+archive_compiler: /opt/buildroot/toolchains/mips32el--uclibc--stable-2020.08-1/bin/mipsel-linux-gcc -fPIC -pthread -mabi=32 -mips2 -Wa,--noexecstack -Wall -O3 -fPIC -std=gnu11 -Os -DOPENSSL_USE_NODELETE -DOPENSSL_PIC -DOPENSSL_BN_ASM_MONT -DSHA1_ASM -DSHA256_ASM -DAES_ASM -DNDEBUG
+objects: 556 (ELF/32 mips)
+glibc_only_refs: 0
+ucontext_refs: 0
+libcrypto_sha256: 6574780d045b2230fe45b1c9497f298be749f6958b6d713f06fa3e6f62e511ab
+libssl_sha256: d8b9704612d4f2d3b7ade57843f410bd458028989e3c7a1fe91674f9ab23c776

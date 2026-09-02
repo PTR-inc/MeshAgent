@@ -1,0 +1,27 @@
+# Written by openssl/build/build.sh. The fields above 'stamp_key' decide whether a
+# rebuild is needed; the ones below it only describe the build that produced this.
+target: macos-arm64
+openssl_version: 1.1.1w
+source_sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+configure_target: darwin64-arm64-cc
+configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared  no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  enable-ec_nistp_64_gcc_128
+make_target: build_libs
+cc: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target aarch64-macos.11.0 --sysroot=/opt/buildroot/osxcross/target/SDK/MacOSX26.5.sdk -isystem /opt/buildroot/osxcross/target/SDK/MacOSX26.5.sdk/usr/include
+cc_version: clang version 20.1.2 (https://github.com/ziglang/zig-bootstrap 7ef74e656cf8ddbd6bf891a8475892aa1afa6891)
+ar: /opt/buildroot/toolchains/zig-0.15.2/zig ar
+ar_version: LLVM version 20.1.2
+ranlib: /opt/buildroot/toolchains/zig-0.15.2/zig ranlib
+libc: macos
+libc_version: macos, unpinned
+asm: on
+patches: none
+stamp_key: 2c7cdbfb65980b304fbfa595a715de6b2040fd4f7e7aef401de52c67cbc8f95e
+---
+built_at: 2026-08-31T20:08:06Z
+archive_platform: darwin64-arm64-cc
+archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target aarch64-macos.11.0 --sysroot=/opt/buildroot/osxcross/target/SDK/MacOSX26.5.sdk -isystem /opt/buildroot/osxcross/target/SDK/MacOSX26.5.sdk/usr/include -fPIC -arch arm64 -O3 -Wall -fPIC -std=gnu11 -DL_ENDIAN -DOPENSSL_PIC -DOPENSSL_CPUID_OBJ -DOPENSSL_BN_ASM_MONT -DSHA1_ASM -DSHA256_ASM -DSHA512_ASM -DKECCAK1600_ASM -DVPAES_ASM -DECP_NISTZ256_ASM -DPOLY1305_ASM -D_REENTRANT -DNDEBUG
+objects: 564 (MACHO/64 arm64)
+glibc_only_refs: 0
+ucontext_refs: 0
+libcrypto_sha256: 9193ca6636580775f1bc0928f23c175876ca384869ff649b3e844bb413d817d8
+libssl_sha256: cd423158ed0f716f16952fa9f0e11c4a4a0d50ba1f5d520f369a883fa44c3eed

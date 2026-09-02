@@ -35,15 +35,20 @@ This document maps each MeshAgent ARCHID to typical hardware platforms that use 
 - Soft-float ABI (gnueabi), because these cores have no VFP unit. ARCHID 24 and 25 are the
   hard-float ARMv7/ARMv6 targets
 
-### ARCHID 24 — Linux ARM 32-bit (Linaro hardfloat/ARMv7)
+### ARCHID 24 — Linux ARM 32-bit (ARMv7 hardfloat)
 - Industrial embedded systems (2012-2016 era)
-- Generic ARMv7 devices
+- Generic ARMv7 devices, and every Raspberry Pi from the 2 up on a 32-bit userland, including
+  the Pi Zero 2 W, which is Cortex-A53 and not ARMv6 despite the name
 - Embedded gateways and appliances
+- Has KVM since 2026-08-31, so it is the 32-bit ARM target with remote desktop
 
-### ARCHID 25 — Linux ARM 32-bit (Raspberry Pi hardfloat)
-- Raspberry Pi Zero, Pi 1, Pi 2
-- Older Pi installations
-- ARM32 embedded single-board computers
+### ARCHID 25 — Linux ARM 32-bit (ARMv6 hardfloat, ARM1176JZF-S)
+- Raspberry Pi 1 A/B/B+, Pi Zero and Pi Zero W only, the ARMv6 + VFPv2 boards
+- Built with -mcpu=arm1176jzf_s against an ARMv6 OpenSSL archive. Anything ARMv7 (Pi 2 and
+  newer, Pi Zero 2 W) belongs to ARCHID 24: an ARMv7 binary will not start on these boards,
+  which is what shipped before 2026-08-31
+- glibc floor 2.28, which is Raspbian Buster. Debian is retiring ARMEL and Raspberry Pi OS
+  32-bit is the last mainstream ARMv6 hardfloat build, supported to roughly 2030
 
 ## Linux ARM 64-bit
 

@@ -1,0 +1,27 @@
+# Written by openssl/build/build.sh. The fields above 'stamp_key' decide whether a
+# rebuild is needed; the ones below it only describe the build that produced this.
+target: macos-x86_64
+openssl_version: 1.1.1w
+source_sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+configure_target: darwin64-x86_64-cc
+configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared  no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  enable-ec_nistp_64_gcc_128
+make_target: build_libs
+cc: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target x86_64-macos.10.15 --sysroot=/opt/buildroot/osxcross/target/SDK/MacOSX26.5.sdk -isystem /opt/buildroot/osxcross/target/SDK/MacOSX26.5.sdk/usr/include
+cc_version: clang version 20.1.2 (https://github.com/ziglang/zig-bootstrap 7ef74e656cf8ddbd6bf891a8475892aa1afa6891)
+ar: /opt/buildroot/toolchains/zig-0.15.2/zig ar
+ar_version: LLVM version 20.1.2
+ranlib: /opt/buildroot/toolchains/zig-0.15.2/zig ranlib
+libc: macos
+libc_version: macos, unpinned
+asm: on
+patches: none
+stamp_key: 8038230f9aaa3c45b78bac48d1bda333982c7b5a86fa66f09ded8876f52f6d72
+---
+built_at: 2026-08-31T20:08:15Z
+archive_platform: darwin64-x86_64-cc
+archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target x86_64-macos.10.15 --sysroot=/opt/buildroot/osxcross/target/SDK/MacOSX26.5.sdk -isystem /opt/buildroot/osxcross/target/SDK/MacOSX26.5.sdk/usr/include -fPIC -arch x86_64 -O3 -Wall -fPIC -std=gnu11 -DL_ENDIAN -DOPENSSL_PIC -DOPENSSL_CPUID_OBJ -DOPENSSL_IA32_SSE2 -DOPENSSL_BN_ASM_MONT -DOPENSSL_BN_ASM_MONT5 -DOPENSSL_BN_ASM_GF2m -DSHA1_ASM -DSHA256_ASM -DSHA512_ASM -DKECCAK1600_ASM -DRC4_ASM -DMD5_ASM -DAESNI_ASM -DVPAES_ASM -DGHASH_ASM -DECP_NISTZ256_ASM -DX25519_ASM -DPOLY1305_ASM -D_REENTRANT -DNDEBUG
+objects: 576 (MACHO/64 x86_64)
+glibc_only_refs: 0
+ucontext_refs: 0
+libcrypto_sha256: 3dffbf4d5dc0395ea4d41cb1d1aa8fd93684c34ef7c059eee763efa1605ddb5c
+libssl_sha256: 4ee5c4c9c6e2f980f3f3d084c8fc9ebd525c20ef568adb0d99f00a0b95caeccf

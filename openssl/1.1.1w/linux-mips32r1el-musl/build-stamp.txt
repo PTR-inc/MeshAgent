@@ -1,0 +1,27 @@
+# Written by openssl/build/build.sh. The fields above 'stamp_key' decide whether a
+# rebuild is needed; the ones below it only describe the build that produced this.
+target: linux-mips32r1el-musl
+openssl_version: 1.1.1w
+source_sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+configure_target: linux-mips32
+configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared  no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  -Os
+make_target: build_libs
+cc: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target mipsel-linux-musleabi -mcpu=mips32
+cc_version: clang version 20.1.2 (https://github.com/ziglang/zig-bootstrap 7ef74e656cf8ddbd6bf891a8475892aa1afa6891)
+ar: /opt/buildroot/toolchains/zig-0.15.2/zig ar
+ar_version: LLVM version 20.1.2
+ranlib: /opt/buildroot/toolchains/zig-0.15.2/zig ranlib
+libc: musl
+libc_version: musl as shipped by zig-0.15.2
+asm: on
+patches: mips-la:aes-mips.S:AES_Td mips-la:aes-mips.S:AES_Te mips-la:aes-mips.S:AES_Te4 mips-la:sha256-mips.S:K256
+stamp_key: cd3bc3562b98e98468331b6f385325fc1c635c4220973bbe5f60f24219020197
+---
+built_at: 2026-08-31T19:54:27Z
+archive_platform: linux-mips32
+archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target mipsel-linux-musleabi -mcpu=mips32 -fPIC -pthread -mabi=32 -mips2 -Wa,--noexecstack -Qunused-arguments -Wall -O3 -fPIC -std=gnu11 -Os -DOPENSSL_USE_NODELETE -DOPENSSL_PIC -DOPENSSL_BN_ASM_MONT -DSHA1_ASM -DSHA256_ASM -DAES_ASM -DNDEBUG
+objects: 556 (ELF/32 mips)
+glibc_only_refs: 0
+ucontext_refs: 0
+libcrypto_sha256: b55280e61aded3f50bb92075517e796b5819878a91a5b99a35c4a5113402761e
+libssl_sha256: 041abcd27a9c118858b109d2ad6c20a75a8f14ed56b9389aa3453b2b29acb6b9

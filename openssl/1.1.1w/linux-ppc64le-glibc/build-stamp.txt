@@ -1,0 +1,27 @@
+# Written by openssl/build/build.sh. The fields above 'stamp_key' decide whether a
+# rebuild is needed; the ones below it only describe the build that produced this.
+target: linux-ppc64le-glibc
+openssl_version: 1.1.1w
+source_sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+configure_target: linux-ppc64le
+configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared  no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  -Os
+make_target: build_libs
+cc: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target powerpc64le-linux-gnu.2.31
+cc_version: clang version 20.1.2 (https://github.com/ziglang/zig-bootstrap 7ef74e656cf8ddbd6bf891a8475892aa1afa6891)
+ar: /opt/buildroot/toolchains/zig-0.15.2/zig ar
+ar_version: LLVM version 20.1.2
+ranlib: /opt/buildroot/toolchains/zig-0.15.2/zig ranlib
+libc: glibc
+libc_version: glibc 31 pinned in the triple
+asm: on
+patches: none
+stamp_key: 60c263b76c78d2451f42a5f7813ee36da0f4409f704702de050fefe66e4e05c0
+---
+built_at: 2026-08-31T20:07:42Z
+archive_platform: linux-ppc64le
+archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target powerpc64le-linux-gnu.2.31 -fPIC -pthread -m64 -Wa,--noexecstack -Qunused-arguments -Wall -O3 -fPIC -std=gnu11 -Os -DOPENSSL_USE_NODELETE -DL_ENDIAN -DOPENSSL_PIC -DOPENSSL_CPUID_OBJ -DOPENSSL_BN_ASM_MONT -DSHA1_ASM -DSHA256_ASM -DSHA512_ASM -DKECCAK1600_ASM -DAES_ASM -DVPAES_ASM -DECP_NISTZ256_ASM -DX25519_ASM -DPOLY1305_ASM -DNDEBUG
+objects: 569 (ELF/64 unknown)
+glibc_only_refs: 2
+ucontext_refs: 0
+libcrypto_sha256: 5080b1bc0ac47dafc80ab7c19d48bec63f3b6a873437d1c20a0d81d6443726e8
+libssl_sha256: 8001e5da69be15f90486ed9f6dd32fe726d8285ef863495822cefcb8f6d70cdb

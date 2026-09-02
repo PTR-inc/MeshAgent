@@ -77,6 +77,7 @@
 #	DEBUG                    0 = Release, 1 = DEBUG                         : Default is Release
 #	DYNAMICTLS               1 = Link OpenSSL dynamically                   : Default is static, from the LINUXSSL, MACSSL and BSDSSL archives
 #	FIPS                     1 = FIPS mode (implies DYNAMICTLS and NOWEBRTC) : Default is disabled
+#	FORCE                    1 = Recompile and relink even if nothing changed : Default is 0 (make's own up-to-date checks decide)
 #	FSWATCH_DISABLE          1 = Remove fswatcher support                   : Default is fswatcher supported
 #	GLIBCVER                 Pin the glibc floor, such as 2.28              : Default is 2.24 for ARCHID 5, 6, 19 and 20, or the shared Bootlin pin 2.31 for the others
 #	IPADDR_MONITOR_DISABLE   1 = No IPAddress Monitoring                    : Default is IPAddress Monitoring Enabled
@@ -100,7 +101,19 @@
 #	WatchDog                 WatchDog timer interval.                       : Default is 180000 (3 minutes, above the 2 minute timeouts of the wmi and exec functions)
 #	WEBLOG                   1 = Enable WebLogging Interface                : Default is disabled
 #	WEBRTCDEBUG              1 = Enable WebRTC Instrumentation              : Default is disabled
+#	V                        1 = Verbose, echo every command                : Default prints only phase lines and tool warnings/errors. VERBOSE=1 and the older quiet spelling V=@ are also accepted
 #
+
+# Default output is the phase lines plus whatever the tools print themselves (warnings and
+# errors). V=1 or VERBOSE=1 echoes every command instead; the CI's older V=@ quiet spelling
+# still works, since quiet is now the default.
+ifeq ($(filter 1,$(V) $(VERBOSE)),)
+override V := @
+MAKEFLAGS += --no-print-directory
+.SILENT:
+else
+override V :=
+endif
 
 # Microstack & Microscript
 SOURCES = microstack/ILibAsyncServerSocket.c microstack/ILibAsyncSocket.c microstack/ILibAsyncUDPSocket.c microstack/ILibParsers.c microstack/ILibMulticastSocket.c
@@ -154,7 +167,8 @@ WatchDog = 180000
 KVMMaxTile = 0
 
 # One directory per target and variant under build/, so the binary, its unstripped DEBUG_ copy,
-# the objects and the agent's runtime side-files (.msh, .db and .log) stay with their own arch.
+# the objects, a build-stamp.txt recording what produced the binary, and the agent's runtime
+# side-files (.msh, .db and .log) stay with their own arch.
 # Switching ARCHID therefore needs no `make clean`, and -MMD -MP tracks header changes.
 OUTDIR  = build/$(ARCHNAME)$(EXENAME2)$(if $(DEBUG),-debug)
 OUTBIN  = $(OUTDIR)/$(EXENAME)_$(ARCHNAME)$(EXENAME2)
@@ -383,22 +397,37 @@ define ARCH_24
   CFLAGS  += -D_NOFSWATCHER
   # 2026-08-30: CC moved to zig via CCOVERRIDE, same glibc 2.31 floor.
   CCOVERRIDE = $(PATH_ZIG)zig cc -target arm-linux-gnueabihf.2.31 -Wno-date-time
-  KVM      = 0
+  # See ARCH_5's comment: zig's lld needs LEGACY_LD's plain-relative-path libjpeg linking.
+  LEGACY_LD = 1
+  # 2026-08-31: KVM on. This is the ARMv7 32-bit target, so it covers every Pi from the 2 up on a
+  # 32-bit userland, which ARCH_25 no longer does now that ARCH_25 is a real ARMv6 build.
+  # No arm-linaro jpeg archive exists, and the ARMv6 one links and runs here - see JPEGARCH.
+  JPEGARCH = arm6hf
+  KVM      = 1
   LMS      = 0
 endef
 
 # Cross-compiles by default. CROSS=0 builds natively on the Pi instead.
+# Raspberry Pi 1 and Zero / Zero W, the ARM1176JZF-S boards: ARMv6 with VFPv2, which no
+# Debian-style armhf toolchain defaults to - both apt's gcc and zig's own default land on
+# ARMv7+VFPv3. 2026-08-31: -mcpu=arm1176jzf_s makes this the ARMv6 build the target was always
+# named for; measured before that, the shipped binary was v7 and could not run on a Pi 1 or Zero
+# at all, even though the committed lib-jpeg-turbo/linux/arm6hf archive is v6/VFPv2. Pi 2 and
+# newer are ARCH_24's, which is the same 32-bit userland one ISA level up.
+# glibc 2.28 is Raspbian Buster, the oldest Pi OS still seen in the field.
 define ARCH_25
-  ARCHNAME = armhf
+  ARCHNAME = arm6hf
   OSSLTARGET = linux-armv6hf-glibc
   CLASS    = generic
-  CC       = arm-linux-gnueabihf-gcc
+  CC       = $(PATH_ZIG)zig cc -target arm-linux-gnueabihf.2.28 -mcpu=arm1176jzf_s -Wno-date-time
   STRIP    = arm-linux-gnueabihf-strip
+  # See ARCH_5's comment: zig's lld needs LEGACY_LD's plain-relative-path libjpeg linking.
+  LEGACY_LD = 1
   HARDEN   = none
   NOLDHARDEN = 1
   KVM      = 1
   LMS      = 0
-  APTPKG   = gcc-arm-linux-gnueabihf
+  APTPKG   = binutils-arm-linux-gnueabihf
 endef
 
 # apt gcc-aarch64-linux-gnu is a real cross toolchain, so this target is not HOST-gated and
@@ -757,13 +786,16 @@ endif
 # Assigned with ?= so a command-line CROSS= still wins.
 CROSS ?= 1
 
-# ARCHID 25 cross-compiles by default with the Raspberry Pi buildroot toolchain, which works from
-# any host. CROSS=0 builds natively on the Pi instead, using the plain apt
-# arm-linux-gnueabihf-gcc already set as CC in the ARCH_25 block above.
+# ARCHID 25 cross-compiles with the zig CC in its own ARCH_25 block, which needs no sysroot and
+# pins the ARMv6 core. CROSS=0 builds natively on the Pi instead, with the apt
+# arm-linux-gnueabihf-gcc; -march is then the board's own, so pass MFLAGS if that board is a Pi 1.
+# 2026-08-31: this used to override CC with the Raspberry Pi buildroot toolchain
+# ($(PATH_RPI)bin/arm-linux-gnueabihf-gcc --sysroot=...), a gcc 4.9.3 from 2015 that also defaults
+# to ARMv7. It stays only as STRIP's source when it happens to be installed.
 ifeq ($(ARCHID),25)
-ifneq ($(CROSS),0)
-CC = $(PATH_RPI)bin/arm-linux-gnueabihf-gcc --sysroot=$(PATH_RPI)arm-linux-gnueabihf/sysroot
-STRIP = $(PATH_RPI)bin/arm-linux-gnueabihf-strip
+ifeq ($(CROSS),0)
+CC = arm-linux-gnueabihf-gcc
+STRIP = arm-linux-gnueabihf-strip
 HOST =
 endif
 endif
@@ -910,6 +942,11 @@ ifeq ($(WEBLOG),1)
 CFLAGS += -D_REMOTELOGGINGSERVER -D_REMOTELOGGING
 endif
 
+# The jpeg archive directory is the ARCHNAME by default, but an ARCH block can point elsewhere when
+# a suitable archive already exists: ARCH_24 (ARMv7) links the ARMv6 one, whose objects run
+# unchanged on ARMv7 and whose VFPv2 is a subset of VFPv3, rather than carrying a second copy.
+JPEGARCH ?= $(ARCHNAME)
+
 ifeq ($(KVM),1)
 # Mesh Agent KVM sources, only included in builds that have KVM support.
 LINUXKVMSOURCES = meshcore/KVM/Linux/linux_kvm.c meshcore/KVM/Linux/linux_events.c meshcore/KVM/Linux/linux_tile.c meshcore/KVM/Linux/linux_compression.c
@@ -917,21 +954,21 @@ MACOSKVMSOURCES = meshcore/KVM/MacOS/mac_kvm.c meshcore/KVM/MacOS/mac_events.c m
 CFLAGS += -D_LINKVM
 	ifneq ($(JPEGVER),)
 		ifeq ($(LEGACY_LD),1)
-			LINUXFLAGS = lib-jpeg-turbo/linux/$(ARCHNAME)/$(JPEGVER)/libturbojpeg.a
+			LINUXFLAGS = lib-jpeg-turbo/linux/$(JPEGARCH)/$(JPEGVER)/libturbojpeg.a
 		else
-			LINUXFLAGS = -l:lib-jpeg-turbo/linux/$(ARCHNAME)/$(JPEGVER)/libturbojpeg.a
+			LINUXFLAGS = -l:lib-jpeg-turbo/linux/$(JPEGARCH)/$(JPEGVER)/libturbojpeg.a
 		endif
-		MACOSFLAGS = ./lib-jpeg-turbo/macos/$(ARCHNAME)/$(JPEGVER)/libturbojpeg.a
+		MACOSFLAGS = ./lib-jpeg-turbo/macos/$(JPEGARCH)/$(JPEGVER)/libturbojpeg.a
 	else
 		ifeq ($(NOTURBOJPEG),1)
 			LINUXFLAGS = -ljpeg
 		else
 			ifeq ($(LEGACY_LD),1)
-				LINUXFLAGS = lib-jpeg-turbo/linux/$(ARCHNAME)/libturbojpeg.a
+				LINUXFLAGS = lib-jpeg-turbo/linux/$(JPEGARCH)/libturbojpeg.a
 			else
-				LINUXFLAGS = -l:lib-jpeg-turbo/linux/$(ARCHNAME)/libturbojpeg.a
+				LINUXFLAGS = -l:lib-jpeg-turbo/linux/$(JPEGARCH)/libturbojpeg.a
 			endif
-			MACOSFLAGS = ./lib-jpeg-turbo/macos/$(ARCHNAME)/libturbojpeg.a
+			MACOSFLAGS = ./lib-jpeg-turbo/macos/$(JPEGARCH)/libturbojpeg.a
 		endif
 	endif
 	BSDFLAGS = /usr/local/lib/libjpeg.a
@@ -999,7 +1036,7 @@ CFLAGS += $(OPT)
 # debug info from OpenSSL itself - zig cc embeds DWARF by default with no -g needed, see
 # openssl/build/targets.sh's top-of-file comment. This strip step removes all of it from OUTBIN.
 SNAP_OUTBIN_MTIME = if [ -e "$(OUTBIN)" ]; then touch -r "$(OUTBIN)" "$(PREMTIME)"; else rm -f "$(PREMTIME)"; fi
-STRIP_AND_SYMBOLCP = if [ ! -e "$(PREMTIME)" ] || [ -n "$$(find "$(OUTBIN)" -newer "$(PREMTIME)" 2>/dev/null)" ] || [ ! -e "$(DEBUGBIN)" ]; then cp "$(OUTBIN)" "$(DEBUGBIN)" && $(STRIP) "$(OUTBIN)"; else echo "  $(OUTBIN) unchanged - keeping existing $(DEBUGBIN) symbols"; fi; rm -f "$(PREMTIME)"
+STRIP_AND_SYMBOLCP = if [ ! -e "$(PREMTIME)" ] || [ -n "$$(find "$(OUTBIN)" -newer "$(PREMTIME)" 2>/dev/null)" ] || [ ! -e "$(DEBUGBIN)" ]; then cp "$(OUTBIN)" "$(DEBUGBIN)" && $(STRIP) "$(OUTBIN)" && echo "strip   $(OUTBIN)  (symbols kept in $(DEBUGBIN))"; else echo "  $(OUTBIN) unchanged - keeping existing $(DEBUGBIN) symbols"; fi; rm -f "$(PREMTIME)"; $(REFRESH_STAMP_SIZE)
 endif
 
 ifeq ($(ASAN),1)
@@ -1113,7 +1150,7 @@ $(shell git log -1 --format=%H | awk '{ printf "#define SOURCE_COMMIT_HASH \"%s\
 endif
 endif
 
-.PHONY: all clean cleanbin list list-archs listflags list-flags flags print-toolchain print-ossldir print-ossltarget print-osslver print-bsdrel print-macosarch print-archids print-archname print-cflags-extra
+.PHONY: all clean cleanbin force-rebuild list list-archs listflags list-flags flags print-toolchain print-ossldir print-ossltarget print-osslver print-bsdrel print-macosarch print-archids print-archname print-cclabel print-linkmode print-cflags-extra print-outdir print-stampfields
 
 # The OS recipes re-invoke make with EXENAME= and the full per-target CFLAGS, and that inner make
 # is the only one meant to reach the compile rules. A bare `make ARCHID=n` used to fall into them
@@ -1134,13 +1171,37 @@ flags: ;
 # listflags/list-flags/`make list flags` - plain list/list-archs skip that work and the column.
 SHOWFLAGS := $(filter flags listflags list-flags,$(MAKECMDGOALS))
 
+# The STAMP column of `make list`, expecting $$id, $$n and $$st from the loop and setting $$sp.
+# print-stampfields is only run when there is a stored stamp to compare it against, so an ARCHID
+# that was never built costs nothing. The field names, not just "stale", so the row says why.
+define AGENT_STAMP_STATE
+	  sd=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-outdir); sf="$$sd/build-stamp.txt"; \
+	  if [ ! -f "$$sf" ]; then [ -d "$$sd" ] && sp=unstamped || sp=absent; \
+	  elif [ "$$st" != ready ]; then sp='?'; \
+	  else \
+	    sp=$$( { $(MAKE) -s --no-print-directory ARCHID=$$id print-stampfields; echo '@@@'; \
+	             sed -e '/^#/d' -e '/^stamp_key:/,$$d' "$$sf"; } | \
+	           awk '$$0=="@@@"{s=1;next} {k=$$1; v=""; i=index($$0,": "); if(i)v=substr($$0,i+2); \
+	                if(!s){if(!(k in now))order[++c]=k; now[k]=v} else had[k]=v} \
+	                END{for(j=1;j<=c;j++){k=order[j]; if(now[k]!=had[k]) \
+	                    printf "%s%s",(o++?",":""),substr(k,1,length(k)-1)}}' ); \
+	    [ -z "$$sp" ] && sp=current || sp="stale($$sp)"; \
+	  fi
+endef
+
 # One line per ARCHID with its toolchain status. Narrow it with make list FILTER=openwrt
 list list-archs listflags list-flags:
+	@echo "usage:    make ARCHID=<id> [switch=value ...]      the ARCHID picks the OS recipe (linux, macos, freebsd or openbsd)"
+	@echo "          make list | list-archs FILTER=<class> | listflags    this table; narrowed to one class; with per-ARCHID EXTRA cflags"
+	@echo "          make clean | cleanbin                    drop the object trees | drop the built binaries"
+	@echo "switches: DEBUG=1  ASAN=1  KVM=0|1  CCACHE=1  FORCE=1 (rebuild anyway)  V=1 (verbose)  YES=1 (auto-install toolchains)  CROSS=0  OSSLVER=<ver>  OPT=-Os"
+	@echo "          the full switch list with defaults is in this makefile's header."
+	@echo ""
 	@echo "default cflags: $(BASE_CFLAGS)"
 	@if [ -n "$(SHOWFLAGS)" ]; then \
-	  printf "%6s  %-20s %-8s %-9s %-30s %s\n" ARCHID TARGET CLASS TOOLCHAIN COMPILER "EXTRA flags"; \
+	  printf "%6s  %-20s %-26s %-8s %-9s %-30s %s\n" ARCHID TARGET STAMP CLASS TOOLCHAIN COMPILER "EXTRA flags"; \
 	else \
-	  printf "%6s  %-20s %-8s %-9s %s\n" ARCHID TARGET CLASS TOOLCHAIN COMPILER; \
+	  printf "%6s  %-20s %-26s %-8s %-9s %s\n" ARCHID TARGET STAMP CLASS TOOLCHAIN COMPILER; \
 	fi
 	@awk '/^define ARCH_/{id=$$2; sub(/ARCH_/,"",id); n=""; c="-"} \
 	      /^  ARCHNAME/{n=$$3} /^  CLASS/{c=$$3} \
@@ -1156,12 +1217,18 @@ list list-archs listflags list-flags:
 	  elif [ -n "$$fetch" ]; then st=MISSING; how="./fetch-toolchains.sh $$fetch"; \
 	  elif [ -n "$$apt" ]; then st=MISSING; how="apt-get install $$apt"; \
 	  else st=MISSING; how="bring your own ($$cc)"; fi; \
+	  $(AGENT_STAMP_STATE); \
 	  if [ -n "$(SHOWFLAGS)" ]; then \
-	    printf "%6s  %-20s %-8s %-9s %-30s %s\n" "$$id" "$$n" "$$c" "$$st" "$$how" "$${extra:--}"; \
+	    printf "%6s  %-20s %-26s %-8s %-9s %-30s %s\n" "$$id" "$$n" "$$sp" "$$c" "$$st" "$$how" "$${extra:--}"; \
 	  else \
-	    printf "%6s  %-20s %-8s %-9s %s\n" "$$id" "$$n" "$$c" "$$st" "$$how"; \
+	    printf "%6s  %-20s %-26s %-8s %-9s %s\n" "$$id" "$$n" "$$sp" "$$c" "$$st" "$$how"; \
 	  fi; \
 	done
+	@echo
+	@echo "  STAMP = what this ARCHID's build/<dir>/build-stamp.txt says about the binary sitting"
+	@echo "  there: current = the recorded flags, compiler and OpenSSL prefix still match, stale(fields)"
+	@echo "  = those fields have moved since, unstamped = a build dir with no stamp (built before the"
+	@echo "  stamp existed), absent = never built here, ? = toolchain missing, nothing to compare against."
 
 # Machine-readable ARCHID list, so CI can loop over it instead of hardcoding an ARCHID list of
 # its own. `make print-archids` lists every ARCHID and `make print-archids CLASS=generic`
@@ -1182,11 +1249,33 @@ print-toolchain:
 print-archname:
 	@echo '$(ARCHNAME)'
 
+# A single whitespace-free compiler label for build.sh's ARCHID table. A zig-compiled block is
+# named by the triple it targets plus any -mcpu, since that, not the binary's name, is what
+# decides the ABI and the ISA floor. Anything else is named by its compiler binary.
+# static or dynamic, for build.sh's ARCHID table. LDINT carries -static only for the blocks that
+# link the whole binary that way; everything else resolves its libc at run time on the device.
+print-linkmode:
+	@echo '$(if $(findstring -static,$(LDINT)),static,dynamic)'
+
+print-cclabel:
+	@echo '$(CC)' | awk '{ for (i = 1; i <= NF; i++) { if ($$i == "-target") t = $$(i+1); if ($$i ~ /^-mcpu=/) c = substr($$i, 7) } \
+	                       if (t != "") printf "zig:%s%s\n", t, (c != "" ? "/" c : ""); \
+	                       else { n = $$1; sub(/.*\//, "", n); print n } }'
+
 print-ossltarget:
 	@echo '$(OSSLTARGET)'
 
 print-osslver:
 	@echo '$(OSSLVER)'
+
+# The agent's own build stamp, for `make list`: print-outdir says where it would be, and
+# print-stampfields recomputes the gate-able half so a stored stamp can be compared line by line.
+# Both are outer-make probes, so they never touch $(OBJDIR) the way an EXENAME= sub-make would.
+print-outdir:
+	@echo '$(OUTDIR)'
+
+print-stampfields:
+	@{ $(AGENT_STAMP_FIELDS); }
 
 print-ossldir:
 	@echo '$(OSSLPREFIX)'
@@ -1210,10 +1299,26 @@ print-macosarch:
 # Objects depend on the flags they were built with. $(OBJDIR)/.cflags is rewritten at parse time,
 # only when CC or CFLAGS change, so a tree half-built with other flags recompiles instead of linking
 # stale objects ("undefined reference to ILib_POSIX_CrashHandler"). Only the inner EXENAME= make does this.
+# The compiler's own version is part of that line: a toolchain upgraded in place keeps its path and
+# flags, so nothing else here would notice it. CCACHE_COMPILERCHECK=content covers the same case,
+# but only when CCACHE=1.
 FLAGSTAMP = $(OBJDIR)/.cflags
+# The link has its own stamp, because LDFLAGS can change with CFLAGS untouched (-static, a hardening
+# flag, a different jpeg archive) and every object would then still be current. $(OSSLLIBS) makes a
+# rebuilt or refetched OpenSSL archive relink too - the case no source or header timestamp can show.
+LDSTAMP  = $(OBJDIR)/.ldflags
+# FORCE=1 rebuilds this ARCHID even when make would skip it, for the cases the stamps cannot see:
+# a changed vendored archive with an old mtime, a suspect ccache hit, or just proving a clean build.
+# It is a phony prerequisite rather than a `rm -rf`, so nothing is deleted and other ARCHIDs are untouched.
+FORCEDEP = $(if $(filter 1,$(FORCE)),force-rebuild)
+force-rebuild: ;
+OSSLLIBS = $(wildcard $(OSSLPREFIX)/lib/libcrypto.a $(OSSLPREFIX)/lib/libssl.a)
 ifeq ($(origin EXENAME),command line)
-_FLAGLINE = $(subst ','"'"',$(CC) $(CFLAGS))
+_CCVER    = $(shell { $(CCBIN) --version 2>/dev/null || $(CCBIN) version 2>/dev/null; } | head -1)
+_FLAGLINE = $(subst ','"'"',$(CC) [$(_CCVER)] $(CFLAGS))
+_LDLINE   = $(subst ','"'"',$(CC) $(LDFLAGS) $(ADDITIONALFLAGS))
 $(shell mkdir -p $(OBJDIR); printf '%s\n' '$(_FLAGLINE)' | cmp -s - $(FLAGSTAMP) 2>/dev/null || printf '%s\n' '$(_FLAGLINE)' > $(FLAGSTAMP))
+$(shell mkdir -p $(OBJDIR); printf '%s\n' '$(_LDLINE)'   | cmp -s - $(LDSTAMP)   2>/dev/null || printf '%s\n' '$(_LDLINE)'   > $(LDSTAMP))
 endif
 
 # CCACHE=1 wraps only the compile step. Linking always runs, so a changed archive, header or
@@ -1224,18 +1329,81 @@ CCWRAP = ccache
 export CCACHE_COMPILERCHECK ?= content
 endif
 
-$(OBJDIR)/%.o: %.c $(FLAGSTAMP)
+$(OBJDIR)/%.o: %.c $(FLAGSTAMP) $(FORCEDEP)
 	@mkdir -p $(@D)
 	$(V)$(CCWRAP) $(CC) $(CFLAGS) -MMD -MP -c $< -o $@ $(WARNFLAGS)
 
 -include $(shell find $(OBJDIR) -name '*.d' 2>/dev/null)
 
-$(EXENAME): $(OBJECTS)
-ifeq ($(SKIPFLAGS), 1)
-	$(V)$(CC) $^ $(LDFLAGS) -lrt -o $@ $(WARNFLAGS)
+# One build-stamp.txt per output directory, written by the link rule so it records the flags that
+# actually compiled this binary, not the ones a later reader's environment would produce. Make
+# rebuilds on changed sources and headers, never on changed flags, so this is the only record of
+# which toolchain and which OpenSSL prefix produced the binary sitting in build/.
+# The fields above 'stamp_key' are the gate-able ones; everything below it describes the result.
+# openssl_stamp_key ties the two stamps together: a rebuilt OpenSSL prefix changes it, which is
+# the case a source timestamp cannot see.
+# One inner-make flag set per OS recipe, picked the same way $(OSGOAL) picks the recipe itself.
+ICFLAGS   = $(if $(filter macos,$(CLASS)),$(MACOS_ICFLAGS),$(if $(filter bsd,$(CLASS)),$(if $(filter openbsd,$(BSDHOST)),$(OPENBSD_ICFLAGS),$(FREEBSD_ICFLAGS)),$(LINUX_ICFLAGS)))
+ILDFLAGS  = $(if $(filter macos,$(CLASS)),$(MACOS_ILDFLAGS),$(if $(filter bsd,$(CLASS)),$(if $(filter openbsd,$(BSDHOST)),$(OPENBSD_ILDFLAGS),$(FREEBSD_ILDFLAGS)),$(LINUX_ILDFLAGS)))
+IADDFLAGS = $(if $(filter macos bsd,$(CLASS)),,$(LINUX_IADDFLAGS))
+ifeq ($(origin EXENAME),command line)
+STAMP_CFLAGS  = $(CFLAGS)
+STAMP_LDFLAGS = $(LDFLAGS) $(ADDITIONALFLAGS)
 else
-	$(V)$(CC) $^ $(LDFLAGS) $(ADDITIONALFLAGS) -o $@ $(WARNFLAGS)
+STAMP_CFLAGS  = $(ICFLAGS)
+STAMP_LDFLAGS = $(ILDFLAGS) $(IADDFLAGS)
 endif
+
+STAMPFILE = $(dir $(EXENAME))build-stamp.txt
+# The link rule writes the stamp before the binary is stripped, so the two size fields below the
+# '---' describe the unstripped file until this refreshes them. stamp_key never covers them.
+REFRESH_STAMP_SIZE = f="$(dir $(OUTBIN))build-stamp.txt"; [ -f "$$f" ] && sed -i -e "s|^size: .*|size: $$(wc -c < "$(OUTBIN)")|" -e "s|^sha256: .*|sha256: $$(sha256sum "$(OUTBIN)" | cut -d' ' -f1)|" "$$f" || true
+# The gate-able fields, in one place, because both the link rule that writes them and `make list`,
+# which recomputes them to see whether a binary is still current, must produce the same bytes.
+# CFLAGS and LDFLAGS come through $(STAMP_CFLAGS)/$(STAMP_LDFLAGS): the inner make already has the
+# full strings, the outer one rebuilds them from $(ICFLAGS)/$(ILDFLAGS).
+define AGENT_STAMP_FIELDS
+	  echo "archid: $(ARCHID)"; \
+	  echo "archname: $(ARCHNAME)"; \
+	  echo "server_archid: $(SERVER_ARCHID)"; \
+	  echo "class: $(CLASS)"; \
+	  echo "cc: $(CC)"; \
+	  echo "cc_version: $$( { $(CCBIN) --version 2>/dev/null || $(CCBIN) version 2>/dev/null; } | head -1 )"; \
+	  echo "cflags: $(STAMP_CFLAGS)"; \
+	  echo "ldflags: $(STAMP_LDFLAGS)"; \
+	  echo "strip: $(STRIP)"; \
+	  echo "ossltarget: $(OSSLTARGET)"; \
+	  echo "osslver: $(OSSLVER)"; \
+	  echo "openssl_stamp_key: $$(sed -n 's/^stamp_key: //p' $(OSSLPREFIX)/build-stamp.txt 2>/dev/null | head -1)"; \
+	  echo "kvm: $(KVM)  lms: $(LMS)  harden: $(HARDEN)  debug: $(DEBUG)  asan: $(ASAN)"; \
+	  echo "git_rev: $$(git rev-parse --short HEAD 2>/dev/null)$$(git diff --quiet 2>/dev/null || echo '-dirty')"
+endef
+
+define WRITE_AGENT_STAMP
+	{ echo "# Written by the makefile's link rule. The fields above 'stamp_key' decide whether a"; \
+	  echo "# rebuild is needed; the ones below it only describe the binary that was produced."; \
+	  $(AGENT_STAMP_FIELDS); \
+	} > $(STAMPFILE); \
+	echo "stamp_key: $$(sed '/^#/d' $(STAMPFILE) | sha256sum | cut -d' ' -f1)" >> $(STAMPFILE); \
+	{ echo "---"; \
+	  echo "built_at: $$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+	  echo "binary: $(EXENAME)"; \
+	  echo "size: $$(wc -c < $(EXENAME) 2>/dev/null)"; \
+	  echo "sha256: $$(sha256sum $(EXENAME) 2>/dev/null | cut -d' ' -f1)"; \
+	} >> $(STAMPFILE)
+endef
+
+# $(OBJECTS) rather than $^, because the stamp and the archives are prerequisites that must not
+# reach the command line: the linker rejects .ldflags outright, and the archives already arrive
+# through -lssl -lcrypto.
+$(EXENAME): $(OBJECTS) $(LDSTAMP) $(OSSLLIBS) $(FORCEDEP)
+	@echo "link    $@"
+ifeq ($(SKIPFLAGS), 1)
+	$(V)$(CC) $(OBJECTS) $(LDFLAGS) -lrt -o $@ $(WARNFLAGS)
+else
+	$(V)$(CC) $(OBJECTS) $(LDFLAGS) $(ADDITIONALFLAGS) -o $@ $(WARNFLAGS)
+endif
+	$(V)$(WRITE_AGENT_STAMP)
 clean:
 	rm -rf build/*/obj
 
@@ -1250,11 +1418,19 @@ X11INC  = build/hostinc
 KVMINC  = $(if $(filter 1,$(KVM)), -idirafter $(X11INC))
 STAGE_X11 = $(if $(filter 1,$(KVM)), mkdir -p $(X11INC) && ln -sfn /usr/include/X11 $(X11INC)/X11, :)
 
+# The flags the inner make is handed, named rather than written inline, so `make list` can rebuild
+# the same strings without recursing into a build. They are exact: a variable set on make's command
+# line cannot be appended to from the makefile, so the inner make sees precisely what is passed here.
+LINUX_ICFLAGS   = -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) $(CFLAGS) $(CHARDEN) $(CEXTRA) $(KVMINC)
+LINUX_ILDFLAGS  = $(LINUXSSL) $(LINUXFLAGS) $(LDFLAGS) $(LDINT) $(LDEXTRA) -ldl
+LINUX_IADDFLAGS = -lrt -z noexecstack -z relro -z now
+
 linux:
+	@echo "build   $(OUTBIN)  (ARCHID $(ARCHID), $(ARCHNAME), $(CLASS))"
 	$(ensure_toolchain)
 	$(V)$(STAGE_X11)
 	$(SNAP_OUTBIN_MTIME)
-	$(MAKE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)" ADDITIONALFLAGS="-lrt -z noexecstack -z relro -z now" CFLAGS="-DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) $(CFLAGS) $(CHARDEN) $(CEXTRA) $(KVMINC)" LDFLAGS="$(LINUXSSL) $(LINUXFLAGS) $(LDFLAGS) $(LDINT) $(LDEXTRA) -ldl"
+	$(MAKE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)" ADDITIONALFLAGS="$(LINUX_IADDFLAGS)" CFLAGS="$(LINUX_ICFLAGS)" LDFLAGS="$(LINUX_ILDFLAGS)"
 	$(STRIP_AND_SYMBOLCP)
 
 # MACOSOPT trails $(CFLAGS), which carries $(OPT), so -O3 wins. It is repeated on the link line
@@ -1264,23 +1440,34 @@ MACOSOPT = -O3 -flto
 # Apple Silicon executes nothing whose signature does not match the file, and strip invalidates
 # ld64's linker signature, so re-sign after strip with macos_sign from build-env.sh (a self-signed
 # identity in $BUILDROOT/private). SIGN=0 skips it and SIGN_ADHOC=1 signs ad-hoc without an identity.
+MACOS_ICFLAGS  = $(MACOSARCH) -std=$(CSTD) -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) -D_POSIX -D_NOHECI -DMICROSTACK_PROXY -D__APPLE__ $(CWEBLOG) -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CHARDEN) -fstack-protector-strong $(MACOSOPT) $(CEXTRA)
+MACOS_ILDFLAGS = $(MACOSARCH) $(MACSSL) $(MACOSFLAGS) -L. -lpthread -lz -framework IOKit -framework ApplicationServices -framework SystemConfiguration -framework CoreServices -framework CoreGraphics -framework CoreFoundation -Wl,-dead_strip $(MACOSOPT) $(LDFLAGS) $(LDINT) $(LDEXTRA)
 MACOS_SIGN = $(if $(filter 0,$(SIGN)),@echo "  not signed (SIGN=0)",@bash -c '. ./build-env.sh >/dev/null && macos_sign "$$1"' _ "$(OUTBIN)")
 macos:
+	@echo "build   $(OUTBIN)  (ARCHID $(ARCHID), $(ARCHNAME), $(CLASS))"
 	$(ensure_toolchain)
 	$(SNAP_OUTBIN_MTIME)
-	$(MAKE) $(MAKEFILE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(MACOSKVMSOURCES)" CFLAGS="$(MACOSARCH) -std=$(CSTD) -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) -D_POSIX -D_NOHECI -DMICROSTACK_PROXY -D__APPLE__ $(CWEBLOG) -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CHARDEN) -fstack-protector-strong $(MACOSOPT) $(CEXTRA)" LDFLAGS="$(MACOSARCH) $(MACSSL) $(MACOSFLAGS) -L. -lpthread -lz -framework IOKit -framework ApplicationServices -framework SystemConfiguration -framework CoreServices -framework CoreGraphics -framework CoreFoundation -Wl,-dead_strip $(MACOSOPT) $(LDFLAGS) $(LDINT) $(LDEXTRA)"
+	$(MAKE) $(MAKEFILE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(MACOSKVMSOURCES)" CFLAGS="$(MACOS_ICFLAGS)" LDFLAGS="$(MACOS_ILDFLAGS)"
 	$(STRIP_AND_SYMBOLCP)
 	$(MACOS_SIGN)
 
+FREEBSD_ICFLAGS  = -std=$(CSTD) -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) -D_POSIX -D_FREEBSD -D_NOHECI -DMICROSTACK_PROXY -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CHARDEN) $(CEXTRA)
+FREEBSD_ILDFLAGS = $(BSDSSL) $(BSDFLAGS) -L. -lpthread -ldl -lz -lutil $(LDFLAGS) $(LDINT) $(LDEXTRA)
+
 freebsd:
+	@echo "build   $(OUTBIN)  (ARCHID $(ARCHID), $(ARCHNAME), $(CLASS))"
 	$(ensure_toolchain)
 	$(SNAP_OUTBIN_MTIME)
-	$(MAKE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)"  CFLAGS="-std=$(CSTD) -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) -D_POSIX -D_FREEBSD -D_NOHECI -DMICROSTACK_PROXY -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CHARDEN) $(CEXTRA)" LDFLAGS="$(BSDSSL) $(BSDFLAGS) -L. -lpthread -ldl -lz -lutil $(LDFLAGS) $(LDINT) $(LDEXTRA)"
+	$(MAKE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)"  CFLAGS="$(FREEBSD_ICFLAGS)" LDFLAGS="$(FREEBSD_ILDFLAGS)"
 	$(STRIP_AND_SYMBOLCP)
 
+OPENBSD_ICFLAGS  = -std=$(CSTD) -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) -D_POSIX -D_FREEBSD -D_OPENBSD -D_NOHECI -DMICROSTACK_PROXY -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CHARDEN) $(CEXTRA)
+OPENBSD_ILDFLAGS = $(BSDSSL) $(BSDFLAGS) -L. -lpthread -lz -lutil $(LDFLAGS) $(LDINT) $(LDEXTRA)
+
 openbsd:
+	@echo "build   $(OUTBIN)  (ARCHID $(ARCHID), $(ARCHNAME), $(CLASS))"
 	$(ensure_toolchain)
 	$(SNAP_OUTBIN_MTIME)
-	$(MAKE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)"  CFLAGS="-std=$(CSTD) -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) -D_POSIX -D_FREEBSD -D_OPENBSD -D_NOHECI -DMICROSTACK_PROXY -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CHARDEN) $(CEXTRA)" LDFLAGS="$(BSDSSL) $(BSDFLAGS) -L. -lpthread -lz -lutil $(LDFLAGS) $(LDINT) $(LDEXTRA)"
+	$(MAKE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)"  CFLAGS="$(OPENBSD_ICFLAGS)" LDFLAGS="$(OPENBSD_ILDFLAGS)"
 	$(STRIP_AND_SYMBOLCP)
 

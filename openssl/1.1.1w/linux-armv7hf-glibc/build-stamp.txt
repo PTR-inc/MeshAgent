@@ -1,0 +1,27 @@
+# Written by openssl/build/build.sh. The fields above 'stamp_key' decide whether a
+# rebuild is needed; the ones below it only describe the build that produced this.
+target: linux-armv7hf-glibc
+openssl_version: 1.1.1w
+source_sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+configure_target: linux-generic32
+configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared -no-asm no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  -Os
+make_target: build_libs
+cc: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target arm-linux-gnueabihf.2.31
+cc_version: clang version 20.1.2 (https://github.com/ziglang/zig-bootstrap 7ef74e656cf8ddbd6bf891a8475892aa1afa6891)
+ar: /opt/buildroot/toolchains/zig-0.15.2/zig ar
+ar_version: LLVM version 20.1.2
+ranlib: /opt/buildroot/toolchains/zig-0.15.2/zig ranlib
+libc: glibc
+libc_version: glibc 31 pinned in the triple
+asm: off
+patches: none
+stamp_key: 26e9a5f754029ffb6f6f58be2c3af6de7e87c14fba40ed9c1531345b27fb2a82
+---
+built_at: 2026-08-31T20:06:49Z
+archive_platform: linux-generic32
+archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target arm-linux-gnueabihf.2.31 -fPIC -pthread -Wall -O3 -fPIC -std=gnu11 -Os -DOPENSSL_USE_NODELETE -DOPENSSL_PIC -DNDEBUG
+objects: 553 (ELF/32 arm)
+glibc_only_refs: 2
+ucontext_refs: 0
+libcrypto_sha256: 4c648c8ed812bf310a88a3e246ce52e2f99ce50242bba8e2f7f1117cb7d18442
+libssl_sha256: 56b1e8894f6e680f97f9413047c560c46b12931586ea39bf80b041ece25a2274

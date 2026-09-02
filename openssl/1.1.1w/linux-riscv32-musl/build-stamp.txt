@@ -1,0 +1,27 @@
+# Written by openssl/build/build.sh. The fields above 'stamp_key' decide whether a
+# rebuild is needed; the ones below it only describe the build that produced this.
+target: linux-riscv32-musl
+openssl_version: 1.1.1w
+source_sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+configure_target: linux-generic32
+configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared -no-asm no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  -Os
+make_target: build_libs
+cc: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target riscv32-linux-musl
+cc_version: clang version 20.1.2 (https://github.com/ziglang/zig-bootstrap 7ef74e656cf8ddbd6bf891a8475892aa1afa6891)
+ar: /opt/buildroot/toolchains/zig-0.15.2/zig ar
+ar_version: LLVM version 20.1.2
+ranlib: /opt/buildroot/toolchains/zig-0.15.2/zig ranlib
+libc: musl
+libc_version: musl as shipped by zig-0.15.2
+asm: off
+patches: none
+stamp_key: ed01c17e0bcae91e02518a4ec5e94a185cac68c733ef4c4bcb5cad5f4a58426d
+---
+built_at: 2026-08-31T20:07:30Z
+archive_platform: linux-generic32
+archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target riscv32-linux-musl -fPIC -pthread -Wall -O3 -fPIC -std=gnu11 -Os -DOPENSSL_USE_NODELETE -DOPENSSL_PIC -DNDEBUG
+objects: 553 (ELF/32 riscv)
+glibc_only_refs: 0
+ucontext_refs: 0
+libcrypto_sha256: 84aece5b3b52e42b044c706c468c39a2660011075a2e4d239c5b1f2196e2dd4b
+libssl_sha256: dc5b33b402e3ce5de46e9b71946c26958f7f2ce09ef34e8dcc7fd735b927ec3b

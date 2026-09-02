@@ -103,7 +103,12 @@ br_target() {
     # No glibc floor was ever pinned for this row (apt's cross gcc, whatever floor that carries),
     # so none is pinned in the zig triple either - same floor behaviour as before the switch.
     # Previously: apt's arm-linux-gnueabihf-gcc -march=armv6 -marm -mfpu=vfp -mfloat-abi=hard.
-    linux-armv6hf-glibc) T_CONF=linux-armv4 ; T_CC="$TC_ZIG/zig cc -target arm-linux-gnueabihf" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_EXTRA="-Os" ; T_FETCH="zig" ;;
+    # -mcpu=arm1176jzf_s, because this target is named for the ARM1176JZF-S boards (Pi 1, Zero,
+    # Zero W) and neither zig's default nor any Debian armhf gcc targets them: both emit ARMv7 with
+    # VFPv3. Measured 2026-08-31, before the flag: every object here was Tag_CPU_arch v7, so an
+    # agent linking it could not run on the hardware the target exists for. ARCHID 24 is the ARMv7
+    # target and keeps linux-armv7hf-glibc.
+    linux-armv6hf-glibc) T_CONF=linux-armv4 ; T_CC="$TC_ZIG/zig cc -target arm-linux-gnueabihf -mcpu=arm1176jzf_s" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_EXTRA="-Os" ; T_FETCH="zig" ;;
     # linux-generic32 has no asm modules regardless of flags. Previously: pinned Bootlin glibc
     # 2.31 toolchain ($TC_ARMV7HF_BOOTLIN/bin/arm-linux-gcc).
     linux-armv7hf-glibc) T_CONF=linux-generic32 ; T_CC="$TC_ZIG/zig cc -target arm-linux-gnueabihf.2.31" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_EXTRA="-Os" ; T_FETCH="zig" ;;
@@ -194,6 +199,87 @@ br_target() {
     # The install prefix this target's archives and generated header live in.
     T_PREFIX="$OPENSSL_PREFIX_ROOT/$1"
     return 0
+}
+
+# ---------------------------------------------------------------- build stamp ----
+# One build-stamp.txt per target, written into openssl/<version>/<target>/ by build.sh, so a
+# rebuild decision needs no archive forensics. It lives here rather than in build.sh because
+# verify.sh sources this file too, and a gate has to recompute the same key it compares against.
+#
+# What gates a rebuild: anything that changes the bytes of the archive. That is the source
+# release, the Configure target and arguments, the compiler and archiver commands with their
+# versions, the libc, and any patch build.sh applies to the generated asm. Everything else in the
+# file is recorded for the reader, not compared. br_target "$1" must already have been called.
+#
+# The recorded compiler version is the toolchain's own, not the triple's: two zig releases with
+# the same triple can emit different code, which is exactly the case the object-count gate missed.
+stamp_libc_version() {
+    case "$T_CC" in
+        # A zig triple carries its libc floor as a version suffix (gnu.2.31), and its musl comes
+        # from the zig release itself, so the zig version is the musl version for these targets.
+        *zig*)  local suffix="${T_CC#*-target }"; suffix="${suffix%% *}"
+                case "$suffix" in *gnu.[0-9]*|*gnueabi.[0-9]*|*gnueabihf.[0-9]*) echo "glibc ${suffix##*.} pinned in the triple" ;;
+                                  *musl*) echo "musl as shipped by $(basename "$TC_ZIG")" ;;
+                                  *) echo "$T_LIBC, unpinned" ;; esac ;;
+        *)      echo "$T_LIBC, from $(dirname "$(dirname "${T_CC%% *}")" | sed 's|.*/||')" ;;
+    esac
+}
+
+# The gating fields, one "key: value" per line, in a fixed order so the key is stable.
+stamp_gating_fields() {
+    local cc_ver ar_ver
+    cc_ver=$("${T_CC%% *}" ${T_CC#* } --version 2>/dev/null | head -1)
+    # llvm-ar prints its banner first and the version on the next line, GNU ar puts both on one.
+    ar_ver=$(${T_AR:-ar} --version 2>/dev/null | tr '\n' ' ' | grep -oE '(LLVM version|GNU ar[^0-9]*) *[0-9][0-9.]*' | head -1)
+    cat <<EOF
+target: $1
+openssl_version: $OPENSSL_VERSION
+source_sha256: $(sha256sum "$OPENSSL_TARBALL" 2>/dev/null | cut -d' ' -f1)
+configure_target: $T_CONF
+configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl $T_FLAGS $T_EXTRA
+make_target: $T_MAKE
+cc: $T_CC
+cc_version: ${cc_ver:-unknown}
+ar: ${T_AR:-ar}
+ar_version: ${ar_ver:-unknown}
+ranlib: ${T_RANLIB:-ranlib}
+libc: $T_LIBC
+libc_version: $(stamp_libc_version)
+asm: $(case "$T_FLAGS" in *-no-asm*) echo off ;; *) echo on ;; esac)
+patches: ${2:-none}
+EOF
+}
+
+# sha256 of the gating fields. A rebuild is needed when this differs from the installed stamp's.
+stamp_key() { stamp_gating_fields "$@" | sha256sum | cut -d' ' -f1; }
+
+# Compares an installed prefix's stamp against what targets.sh would produce now, and prints one
+# indented block per field that differs. Empty output means the prefix is up to date. Returns 1
+# when the prefix carries no stamp at all, which is not the same as a mismatch: it predates the
+# mechanism, so nothing can be concluded and the caller decides what to do. build.sh treats that
+# as "rebuild", verify.sh as "cannot check". br_target "$1" must already have been called.
+#
+# Field by field rather than on stamp_key alone, so a caller can say what drifted. Two fields are
+# never compared: 'patches' records what the build did to the generated asm and cannot be
+# recomputed without building, and 'source_sha256' is skipped when the release tarball is not on
+# this host, which is normal for a checkout that has never run build.sh.
+stamp_diff() {   # $1 target, $2 prefix
+    local f="$2/build-stamp.txt" line k have want skip_src=0 out=""
+    [ -f "$f" ] || return 1
+    [ -r "$OPENSSL_TARBALL" ] || skip_src=1
+    while IFS= read -r line; do
+        k=${line%%:*}; want=${line#*: }
+        case "$k" in patches) continue ;; source_sha256) [ "$skip_src" = 1 ] && continue ;; esac
+        have=$(sed -n "s/^$k: //p" "$f" | head -1)
+        [ "$have" = "$want" ] && continue
+        out="$out
+      $k:
+        stamp: ${have:-<absent>}
+        now:   $want"
+    done <<EOF
+$(stamp_gating_fields "$1" "$(sed -n 's/^patches: //p' "$f" | head -1)")
+EOF
+    printf '%s' "$out"
 }
 
 BR_ALL_TARGETS="linux-x86_64-glibc linux-i686-glibc linux-x86_64-musl \

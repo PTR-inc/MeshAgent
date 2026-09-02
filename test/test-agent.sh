@@ -7,14 +7,16 @@
 #
 # The single entry point for automated agent testing. Runs these phases, in order, against one binary:
 #   1. -info sanity banner (version, ARCHID, OpenSSL), and the linked OpenSSL must be openssl/VERSION
-#   2. test/stress-test.js, every testmodule except 06-*   must pass
-#   3. test/stress-test.js, the 06-* sections only          known native crashes (TLS reconnect,
-#                                                           WebSocket teardown)
-#   4. the same core run delivered via -b64exec             the meshcore delivery path, must pass
-#   5. connection test against <binary>.msh                 connect, authenticate, launch meshcore,
+#   2. test/stress-test.js, every testmodule                must pass
+#   3. the same run delivered via -b64exec                  the meshcore delivery path, must pass
+#   4. connection test against <binary>.msh                 connect, authenticate, launch meshcore,
 #                                                           and persist the identity into <binary>.db
-#   6. valgrind memcheck over the core stress run           leak report
-#   7. AddressSanitizer over the core stress run            needs an ASAN=1 build, see --asan
+#   5. valgrind memcheck over the stress run                leak report
+#   6. AddressSanitizer over the stress run                 needs an ASAN=1 build, see --asan
+#
+# A defect that is already on record is marked in the testmodule itself, with check.known() instead
+# of check(). Such a check counts as KNOWN rather than FAIL, which --lenient accepts and --strict
+# does not. The driver holds no list of its own, so nothing here goes stale when a fix lands.
 #
 # Every check lives in test/testmodules/*.js, which stress-test.js discovers on its own. This
 # script only launches the runs, judges exit codes and markers, and tabulates. The legacy
@@ -30,8 +32,9 @@
 #       --qemu "CMD"      run the agent under qemu, for example --qemu "qemu-riscv64 -cpu thead-c906".
 #                         Auto-detected from the binary's architecture when not given.
 #       --no-qemu         never use qemu (fails fast on a foreign-arch binary instead)
-#   -q, --quick           skip the valgrind phases
-#       --no-valgrind     same as --quick
+#   -q, --quick           skip the slow phases: valgrind and AddressSanitizer
+#       --no-valgrind     skip only the valgrind phases
+#       --no-asan         skip only the AddressSanitizer phase
 #       --no-connect      skip the .msh connection test
 #       --msh PATH        .msh to connect with. The agent only ever reads <binary>.msh next to
 #                         itself, so PATH is copied there, overwriting whatever was beside the binary.
@@ -44,8 +47,8 @@
 #       --ci              GitHub Actions mode: ::group:: folding, ::error:: and ::warning::
 #                         annotations, a job-summary table in $GITHUB_STEP_SUMMARY, never
 #                         prompts, never truncates output. Implies --yes.
-#       --strict          the known TLS crash counts as a failure too (default under --ci)
-#       --lenient         under --ci, keep reporting the known TLS crash as KNOWN, not FAIL
+#       --strict          a KNOWN check counts as a failure too (default under --ci)
+#       --lenient         under --ci, keep reporting KNOWN checks as KNOWN, not FAIL
 #   -h, --help            this text
 #
 # Notes: phase output is captured to a file rather than piped, because spawned children can hold
@@ -69,6 +72,7 @@ LOGFILE=""
 QEMU=""
 QEMU_AUTO=1
 RUN_VALGRIND=1
+RUN_ASAN=1
 ASSUME_YES=0
 STRICT=0
 LENIENT=0
@@ -78,7 +82,9 @@ ASAN_BIN=""
 MSH_SRC=""
 CONNECT_TIMEOUT=""
 
-usage() { sed -n '2,53p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+# The manual is the comment block at the top of this file, so it can never drift out of range:
+# every leading # line after the shebang, up to the first line that is not one.
+usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"; }
 
 # With no arguments at all, show the manual instead of starting a run. Any option starts a
 # run, so an unattended full run against the newest binary is just `test/test-agent.sh -y`.
@@ -91,7 +97,9 @@ while [ $# -gt 0 ]; do
         -l|--log)        LOGFILE="${2:-}"; shift 2;;
         --qemu)          QEMU="${2:-}"; QEMU_AUTO=0; shift 2;;
         --no-qemu)       QEMU=""; QEMU_AUTO=0; shift;;
-        -q|--quick|--no-valgrind) RUN_VALGRIND=0; shift;;
+        -q|--quick)      RUN_VALGRIND=0; RUN_ASAN=0; shift;;
+        --no-valgrind)   RUN_VALGRIND=0; shift;;
+        --no-asan)       RUN_ASAN=0; shift;;
         --no-connect)    RUN_CONNECT=0; shift;;
         --msh|--mesh)    MSH_SRC="${2:-}"; shift 2;;
         --connect-timeout) CONNECT_TIMEOUT="${2:-}"; shift 2;;
@@ -396,6 +404,20 @@ record() { PHASE_NAMES+=("$1"); PHASE_RESULTS+=("$2"); PHASE_NOTES+=("${3:-}");
 total_line() { grep -o 'TOTAL: .*' "$1" | tail -1; }                              # $1 is the phase's output file.
 failed_in()  { printf '%s' "$1" | sed -n 's/.*passed, \([0-9]*\) failed.*/\1/p'; }   # $1 is a TOTAL line.
 of_in()      { printf '%s' "$1" | sed -n 's/.*(of \([0-9]*\)).*/\1/p'; }             # $1 is a TOTAL line.
+known_in()   { printf '%s' "$1" | sed -n 's/.*, \([0-9]*\) known.*/\1/p'; }               # $1 is a TOTAL line.
+
+# The verdict every stress phase shares. $1 names the phase, $2 is its exit code, $3 its TOTAL line.
+# A KNOWN check is a defect the testmodule itself marked with check.known(), so --strict is the only
+# thing that turns one into a failure.
+stress_verdict() {
+    local name="$1" rc="$2" total="$3" failed known
+    failed="$(failed_in "$total")"; known="$(known_in "$total")"
+    if [ -z "$total" ]; then record "$name" FAIL "$(rcdesc "$rc") - no TOTAL line, the run did not finish"
+    elif [ "$rc" -ne 0 ] || [ "${failed:-1}" != "0" ]; then record "$name" FAIL "$(rcdesc "$rc") $total"
+    elif [ "${known:-0}" != "0" ] && [ "$STRICT" = "1" ]; then record "$name" FAIL "$known known-defect check(s), counted by --strict - $total"
+    elif [ "${known:-0}" != "0" ]; then record "$name" KNOWN "$known known-defect check(s) - $total"
+    else record "$name" PASS "$total"; fi
+}
 
 # run_cmd <timeout-sec> <outfile> <cmd...> returns the command's exit code.
 # macOS ships no coreutils timeout, so perl's alarm is the portable stand-in with the same -k
@@ -454,10 +476,11 @@ say "libc        : $BIN_LIBC${BIN_INTERP:+ (PT_INTERP $BIN_INTERP)}${QEMU_SYSROO
 say "runner      : ${QEMU:-native}"
 [ -n "$QEMU_NOTE" ] && say "              ($QEMU_NOTE)"
 say "valgrind    : $( [ "$RUN_VALGRIND" = "1" ] && valgrind --version || echo "disabled (${VG_SKIP_REASON:-requested})" )"
+say "asan        : $( [ "$RUN_ASAN" = "1" ] && echo enabled || echo "disabled (requested)" )"
 say "logfile     : $LOGFILE"
 
 # --- phase 1: -info -------------------------------------------------------------------------
-head2 "[1/7] agent -info"
+head2 "[1/6] agent -info"
 OUT="$TMPDIR_RUN/info.log"
 run_cmd $((20*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" -info; RC=$?
 emit "$OUT" 20
@@ -483,59 +506,37 @@ else
     record "agent -info" FAIL "$(rcdesc $RC)"
 fi
 
-# --- phase 2: stress test, core sections ----------------------------------------------------
-# The 06-* testmodules are the known native-crash sections (TLS reconnect and WebSocket session
-# teardown, and the net.c:938 use-after-free). They run in phase 3, apart
-# from the core, so one crash cannot take every other check down with it.
-KNOWN_EXCL="06-"
-CORE_EXCL="$(ls test/testmodules | grep -v '^06-' | sed 's/\.js$//' | tr '\n' ',' | sed 's/,$//')"
-head2 "[2/7] stress test - every testmodule except the known-crash 06-* sections"
-OUT="$TMPDIR_RUN/stress-core.log"
-run_cmd $((120*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" test/stress-test.js \
-        --exclude=$KNOWN_EXCL --watchdog=$((60000*SCALE)) ${QEMU:+--qemu}; RC=$?
+# --- phase 2: stress test, every testmodule --------------------------------------------------
+# One run over the whole suite. The 06-* TLS and WebSocket sections used to run apart, because a
+# native crash there took every other check down with it - that crash is fixed, and a section that
+# still fails is now either a real regression or a check the module marked with check.known().
+head2 "[2/6] stress test - every testmodule"
+OUT="$TMPDIR_RUN/stress.log"
+run_cmd $((150*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" test/stress-test.js \
+        --watchdog=$((80000*SCALE)) ${QEMU:+--qemu}; RC=$?
 emit "$OUT"
 TOTAL_LINE="$(total_line "$OUT")"
-FAILED_CHECKS="$(failed_in "$TOTAL_LINE")"
-if [ $RC -eq 0 ] && [ "${FAILED_CHECKS:-1}" = "0" ]; then record "stress (core)" PASS "$TOTAL_LINE"
-elif [ -z "$TOTAL_LINE" ]; then record "stress (core)" FAIL "$(rcdesc $RC) - no TOTAL line, the run did not finish"
-else record "stress (core)" FAIL "$(rcdesc $RC) $TOTAL_LINE"; fi
+stress_verdict "stress" "$RC" "$TOTAL_LINE"
 
-# --- phase 3: stress test, TLS section only -------------------------------------------------
-head2 "[3/7] stress test - known-crash 06-* sections only (TLS, WebSocket)"
-OUT="$TMPDIR_RUN/stress-known.log"
-run_cmd $((60*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" test/stress-test.js \
-        --exclude=$CORE_EXCL --watchdog=$((20000*SCALE)) ${QEMU:+--qemu}; RC=$?
-emit "$OUT"
-KNOWN_TOTAL="$(total_line "$OUT")"
-KNOWN_FAILED="$(failed_in "$KNOWN_TOTAL")"
-case $RC in
-    0)   if [ "${KNOWN_FAILED:-1}" = "0" ]; then record "stress (known 06-*)" PASS "no crash reproduced - $KNOWN_TOTAL"
-         else record "stress (known 06-*)" FAIL "$KNOWN_TOTAL"; fi;;
-    254|139|134)
-         if [ "$STRICT" = "1" ]; then record "stress (known 06-*)" FAIL "$(rcdesc $RC) - known crash (TLS #1 / WebSocket teardown), ${KNOWN_TOTAL:-no TOTAL}"
-         else record "stress (known 06-*)" KNOWN "$(rcdesc $RC) - known crash (TLS #1 / WebSocket teardown), ${KNOWN_TOTAL:-no TOTAL}"; fi;;
-    *)   record "stress (known 06-*)" FAIL "$(rcdesc $RC) (unexpected - not the known crash signature)";;
-esac
-
-# --- phase 4: the core run again, delivered the way meshcore is (-b64exec) -------------------
-head2 "[4/7] stress test via -b64exec (meshcore delivery path)"
+# --- phase 3: the same run again, delivered the way meshcore is (-b64exec) -------------------
+head2 "[3/6] stress test via -b64exec (meshcore delivery path)"
 OUT="$TMPDIR_RUN/stress-b64.log"
-# argv is empty under -b64exec, so the exclude and watchdog defaults are patched into the script.
-B64="$(sed 's/^var OPT_EXCLUDE = \[\];/var OPT_EXCLUDE = ["06-"];/; s/^var OPT_WATCHDOG = 10000;/var OPT_WATCHDOG = '$((60000*SCALE))';/' test/stress-test.js | base64 -w0)"
-run_cmd $((90*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" -b64exec "$B64"; RC=$?
+# argv is empty under -b64exec, so the watchdog default is patched into the script.
+B64="$(sed 's/^var OPT_WATCHDOG = 10000;/var OPT_WATCHDOG = '$((80000*SCALE))';/' test/stress-test.js | base64 -w0)"
+run_cmd $((150*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" -b64exec "$B64"; RC=$?
 emit "$OUT" 30
 B64_TOTAL="$(total_line "$OUT")"
-B64_FAILED="$(failed_in "$B64_TOTAL")"
 # Only the check count "(of N)" must match phase 2. The KNOWN split varies between runs.
 B64_OF="$(of_in "$B64_TOTAL")"
 CORE_OF="$(of_in "$TOTAL_LINE")"
-if [ $RC -eq 0 ] && [ "${B64_FAILED:-1}" = "0" ] && [ -n "$B64_OF" ] && [ "$B64_OF" = "$CORE_OF" ]; then record "stress (-b64exec)" PASS "$B64_TOTAL"
-elif [ $RC -eq 0 ] && [ "${B64_FAILED:-1}" = "0" ]; then record "stress (-b64exec)" FAIL "passed, but ran a different check count than phase 2: '$B64_TOTAL' vs '$TOTAL_LINE'"
-elif [ -z "$B64_TOTAL" ]; then record "stress (-b64exec)" FAIL "$(rcdesc $RC) - no TOTAL line, the run did not finish"
-else record "stress (-b64exec)" FAIL "$(rcdesc $RC) $B64_TOTAL"; fi
+if [ -n "$B64_OF" ] && [ -n "$CORE_OF" ] && [ "$B64_OF" != "$CORE_OF" ] && [ "$RC" -eq 0 ] && [ "$(failed_in "$B64_TOTAL")" = "0" ]; then
+    record "stress (-b64exec)" FAIL "passed, but ran a different check count than phase 2: '$B64_TOTAL' vs '$TOTAL_LINE'"
+else
+    stress_verdict "stress (-b64exec)" "$RC" "$B64_TOTAL"
+fi
 
-# --- phase 5: connection test against the server named in <binary>.msh ------------------------
-head2 "[5/7] connection test ($(basename "$BIN").msh)"
+# --- phase 4: connection test against the server named in <binary>.msh ------------------------
+head2 "[4/6] connection test ($(basename "$BIN").msh)"
 MSH="$BIN.msh"
 if [ -n "$MSH_SRC" ] && [ "$RUN_CONNECT" = "1" ]; then
     if [ ! -f "$MSH_SRC" ]; then
@@ -676,55 +677,61 @@ VG_ARGS=(--tool=memcheck --leak-check=full --show-leak-kinds=definite,indirect -
 [ -n "${VALGRIND_EXTRA:-}" ] && read -r -a VG_EXTRA <<< "$VALGRIND_EXTRA" && VG_ARGS+=("${VG_EXTRA[@]}")
 
 if [ "$RUN_VALGRIND" = "1" ]; then
-    # --- phase 6: valgrind over the core stress run ------------------------------------------
-    head2 "[6/7] valgrind memcheck - core stress run ($DBGBIN)"
+    # --- phase 5: valgrind over the stress run -----------------------------------------------
+    head2 "[5/6] valgrind memcheck - stress run ($DBGBIN)"
     OUT="$TMPDIR_RUN/vg-stress.log"; VG="$TMPDIR_RUN/vg-stress.valgrind"
     say "  (valgrind is ~20x slower - the stress watchdog is raised to match)"
     run_cmd $((120*VG_SCALE)) "$OUT" valgrind "${VG_ARGS[@]}" --log-file="$VG" \
-            "$DBGBIN" test/stress-test.js --exclude=$KNOWN_EXCL --watchdog=$((60000*VG_SCALE)); RC=$?
+            "$DBGBIN" test/stress-test.js --watchdog=$((80000*VG_SCALE)); RC=$?
     emit "$OUT" 15
     vg_report "$VG" "valgrind (stress)"
 else
-    head2 "[6/7] valgrind phase SKIPPED"
+    head2 "[5/6] valgrind phase SKIPPED"
     say "  reason: ${VG_SKIP_REASON:-skipped by request (--quick)}"
     record "valgrind (stress)"   SKIP "${VG_SKIP_REASON:-}"
 fi
 
-# --- phase 7: AddressSanitizer over the core stress run ----------------------------------------
-head2 "[7/7] AddressSanitizer - core stress run"
-[ -z "$ASAN_BIN" ] && [ -x "${BIN}_asan" ] && ASAN_BIN="${BIN}_asan"
-[ -z "$ASAN_BIN" ] && [ -x "$(dirname "$BIN")_asan/$(basename "$BIN")_asan" ] && ASAN_BIN="$(dirname "$BIN")_asan/$(basename "$BIN")_asan"
-if [ -z "$ASAN_BIN" ]; then
-    say "  no ASan build found - make one with: make linux ARCHID=<id> ASAN=1"
-    record "asan (stress)" SKIP "no ${BIN##*/}_asan build"
-elif [ ! -x "$ASAN_BIN" ]; then
-    say "  $ASAN_BIN is not executable"
-    record "asan (stress)" FAIL "$ASAN_BIN not executable"
-elif ! grep -qa '__asan_' "$ASAN_BIN" 2>/dev/null; then
-    say "  $ASAN_BIN has no ASan runtime in it - was it built with ASAN=1?"
-    record "asan (stress)" FAIL "$ASAN_BIN is not an ASan build"
-else
-    OUT="$TMPDIR_RUN/asan.log"
-    say "  using $ASAN_BIN"
-    # halt_on_error=0 needs -fsanitize-recover=address, which the ASAN=1 build has. It keeps the
-    # run going so one report does not hide the rest.
-    ASAN_OPTIONS=halt_on_error=0:detect_leaks=1:print_legend=0 \
-        run_cmd $((180*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$ASAN_BIN" test/stress-test.js \
-            --exclude=$KNOWN_EXCL --watchdog=$((120000*SCALE)) ${QEMU:+--qemu}
-    RC=$?
-    emit "$OUT" 12
-    ACOUNT="$(grep -c 'ERROR: AddressSanitizer' "$OUT" 2>/dev/null || true)"
-    ATOTAL="$(total_line "$OUT")"
-    if [ "${ACOUNT:-0}" -gt 0 ]; then
-        say "  $ACOUNT AddressSanitizer report(s):"
-        grep -A2 'ERROR: AddressSanitizer' "$OUT" | grep -E '^ *#[01] ' | sed 's/0x[0-9a-f]* in //;s/^ */    /' |
-            sort -u | head -10 | tee -a "$LOGFILE"
-        record "asan (stress)" FAIL "$ACOUNT report(s) - $ATOTAL"
-    elif [ -z "$ATOTAL" ]; then
-        record "asan (stress)" FAIL "$(rcdesc $RC) - the run did not finish"
+# --- phase 6: AddressSanitizer over the stress run ---------------------------------------------
+if [ "$RUN_ASAN" = "1" ]; then
+    head2 "[6/6] AddressSanitizer - stress run"
+    [ -z "$ASAN_BIN" ] && [ -x "${BIN}_asan" ] && ASAN_BIN="${BIN}_asan"
+    [ -z "$ASAN_BIN" ] && [ -x "$(dirname "$BIN")_asan/$(basename "$BIN")_asan" ] && ASAN_BIN="$(dirname "$BIN")_asan/$(basename "$BIN")_asan"
+    if [ -z "$ASAN_BIN" ]; then
+        say "  no ASan build found - make one with: make linux ARCHID=<id> ASAN=1"
+        record "asan (stress)" SKIP "no ${BIN##*/}_asan build"
+    elif [ ! -x "$ASAN_BIN" ]; then
+        say "  $ASAN_BIN is not executable"
+        record "asan (stress)" FAIL "$ASAN_BIN not executable"
+    elif ! grep -qa '__asan_' "$ASAN_BIN" 2>/dev/null; then
+        say "  $ASAN_BIN has no ASan runtime in it - was it built with ASAN=1?"
+        record "asan (stress)" FAIL "$ASAN_BIN is not an ASan build"
     else
-        record "asan (stress)" PASS "no ASan reports - $ATOTAL"
+        OUT="$TMPDIR_RUN/asan.log"
+        say "  using $ASAN_BIN"
+        # halt_on_error=0 needs -fsanitize-recover=address, which the ASAN=1 build has. It keeps the
+        # run going so one report does not hide the rest.
+        ASAN_OPTIONS=halt_on_error=0:detect_leaks=1:print_legend=0 \
+            run_cmd $((180*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$ASAN_BIN" test/stress-test.js \
+                --watchdog=$((160000*SCALE)) ${QEMU:+--qemu}
+        RC=$?
+        emit "$OUT" 12
+        ACOUNT="$(grep -c 'ERROR: AddressSanitizer' "$OUT" 2>/dev/null || true)"
+        ATOTAL="$(total_line "$OUT")"
+        if [ "${ACOUNT:-0}" -gt 0 ]; then
+            say "  $ACOUNT AddressSanitizer report(s):"
+            grep -A2 'ERROR: AddressSanitizer' "$OUT" | grep -E '^ *#[01] ' | sed 's/0x[0-9a-f]* in //;s/^ */    /' |
+                sort -u | head -10 | tee -a "$LOGFILE"
+            record "asan (stress)" FAIL "$ACOUNT report(s) - $ATOTAL"
+        elif [ -z "$ATOTAL" ]; then
+            record "asan (stress)" FAIL "$(rcdesc $RC) - the run did not finish"
+        else
+            record "asan (stress)" PASS "no ASan reports - $ATOTAL"
+        fi
     fi
+else
+    head2 "[6/6] AddressSanitizer phase SKIPPED"
+    say "  reason: skipped by request (--quick or --no-asan)"
+    record "asan (stress)" SKIP "skipped by request"
 fi
 
 # --------------------------------------------------------------------------------------------
