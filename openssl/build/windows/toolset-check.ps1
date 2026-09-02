@@ -16,17 +16,29 @@
   The current compiler is found through MSBuild with -getProperty VCToolsInstallDir. Pass -ClExe to skip that.
 
 .EXAMPLE
-  pwsh openssl\build\windows\toolset-check.ps1 -Platform x64 -Toolset v143
+  pwsh openssl\build\windows\toolset-check.ps1 -Platform x64 -Toolset v145
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('x86', 'Win32', 'x64', 'ARM64')] [string] $Platform = 'x64',
-    [string] $Toolset = 'v143',
+    # Empty means the default toolset, whichever MeshAgent.Configuration.props pins. The pin
+    # check below applies only to that one, since any other toolset is deliberately not pinned.
+    [string] $Toolset = '',
     [string] $ClExe = '',
     [string] $Version = '',
-    [string] $Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+    [string] $Repo = ''
 )
 $ErrorActionPreference = 'Stop'
+
+# Resolved here, not as the parameter's default: [CmdletBinding()] makes this an advanced script,
+# and PowerShell leaves $PSScriptRoot empty while binding an advanced script's parameters under
+# powershell -File. It is populated normally by the time the body runs.
+if (-not $Repo) { $Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path }
+
+# Which toolset counts as the default is the props file's call, not a constant repeated here.
+$__cfg = Join-Path $Repo 'MeshAgent.Configuration.props'
+$DefaultToolset = if ((Test-Path $__cfg) -and ((Get-Content $__cfg -Raw) -match '<MeshDefaultToolset>\s*(v[0-9]+)\s*</MeshDefaultToolset>')) { $Matches[1] } else { '' }
+if (-not $Toolset) { $Toolset = $DefaultToolset }
 
 # Inspect-Archive, the COFF walker, lives in env.ps1 and is shared with build.ps1. Dot-sourcing
 # env.ps1 overwrites $script:Repo with its own derivation, so the -Repo parameter is restored.
@@ -83,9 +95,11 @@ if (-not $clBuild) { $warn.Add("could not determine the current cl.exe build (ms
 # The default toolset is pinned to one MSVC Major.Minor in MeshAgent.Configuration.props. Linking
 # with any other version is a hard failure, the same as a wrong CRT: the fix is to install it.
 $pinFile = Join-Path $Repo 'MeshAgent.Configuration.props'
-$pin = if ((Test-Path $pinFile) -and ((Get-Content $pinFile -Raw) -match '<MeshVcToolsVersion>\s*([0-9]+\.[0-9]+)\s*</MeshVcToolsVersion>')) { $Matches[1] } else { '' }
-if ($pin -and $Toolset -eq 'v143' -and $ClExe -and $ClExe -notmatch ('\\MSVC\\' + [regex]::Escape($pin) + '\.')) {
-    $fatal.Add("the linking toolset is $ClExe but MeshAgent.Configuration.props pins MSVC $pin - install 'MSVC v143 - VS 2022 C++ build tools ($pin)' (env.ps1: Install-BuildRootWindows -VsComponents)")
+$pin = if ((Test-Path $pinFile) -and ((Get-Content $pinFile -Raw) -match '<MeshVcToolsVersion>\s*([0-9]+(\.[0-9]+){1,2})\s*</MeshVcToolsVersion>')) { $Matches[1] } else { '' }
+# A full pin is the whole folder name, so the path has a separator after it; a Major.Minor pin
+# has the patch level after it. Either way the next character ends the version.
+if ($pin -and $Toolset -eq $DefaultToolset -and $ClExe -and $ClExe -notmatch ('\\MSVC\\' + [regex]::Escape($pin) + '(\.|\\)')) {
+    $fatal.Add("the linking toolset is $ClExe but MeshAgent.Configuration.props pins MSVC $pin - install the '$Toolset C++ build tools ($pin)' component (env.ps1: Install-BuildRootWindows -VsComponents)")
 }
 
 # Report.

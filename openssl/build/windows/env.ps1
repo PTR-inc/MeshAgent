@@ -101,6 +101,11 @@ $script:PerlSha256 = 'ca6402a466939d5d658cc0d09a20dc59635ae68f6903a92a747a802539
 $script:NasmVersion = '2.16.03'
 $script:NasmUrl = 'https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip'
 $script:NasmSha256 = '3ee4782247bcb874378d02f7eab4e294a84d3d15f3f6ee2de2f47a46aa7226e6'
+# jom is Qt's drop-in nmake clone, and the only way to compile an OpenSSL target on more than one
+# core: Microsoft's nmake has no parallel option at all. Optional, the build falls back to nmake.
+$script:JomVersion = '1.1.7'
+$script:JomUrl = 'https://download.qt.io/official_releases/jom/jom_1_1_7.zip'
+$script:JomSha256 = '4c8af345586a9a08fbfd2f613fcac748226d91a75627aa3581b297dd513046fe'
 
 $script:VsWhereDir = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
 
@@ -186,11 +191,12 @@ function Get-VcEnvScript {
 }
 
 function Get-MeshVcToolsVersion {
-    # The MSVC Major.Minor the agent's default toolset is pinned to, read from the props file that
-    # owns it so this script never restates it. Empty when the file or the pin is missing.
+    # The MSVC version the agent's default toolset is pinned to, read from the props file that owns
+    # it so this script never restates it. Two parts or three, 14.44 or 14.44.35207. Empty when the
+    # file or the pin is missing.
     $props = Join-Path $script:Repo 'MeshAgent.Configuration.props'
     if (-not (Test-Path $props)) { return $null }
-    if ((Get-Content $props -Raw) -match '<MeshVcToolsVersion>\s*([0-9]+\.[0-9]+)\s*</MeshVcToolsVersion>') { return $Matches[1] }
+    if ((Get-Content $props -Raw) -match '<MeshVcToolsVersion>\s*([0-9]+(\.[0-9]+){1,2})\s*</MeshVcToolsVersion>') { return $Matches[1] }
     return $null
 }
 
@@ -198,7 +204,9 @@ function Get-VcToolsetVersion {
     # An installed toolset folder is not proof of a usable toolset. Real installs have shown a
     # props-only version folder with no compiler that the default resolution still pointed at, and
     # a newest toolset missing setargv.obj and the CRT for arm64. Pick the newest that is complete for $Arch.
-    param([ValidateSet('x86', 'x64', 'x64_arm64')][string]$Arch)
+    # -Full returns the whole folder name, 14.44.35207, which is what identifies a compiler build.
+    # Without it the answer is the Major.Minor that -vcvars_ver wants.
+    param([ValidateSet('x86', 'x64', 'x64_arm64')][string]$Arch, [switch]$Full)
 
     $vs = Get-VsInstallPath
     if (-not $vs) { return $null }
@@ -213,7 +221,7 @@ function Get-VcToolsetVersion {
     # the agent links with the pinned one and a newer archive is the one direction that can break.
     $pin = Get-MeshVcToolsVersion
     $best = Get-ChildItem (Join-Path $vs 'VC\Tools\MSVC') -Directory -ErrorAction SilentlyContinue |
-        Where-Object { -not $pin -or $_.Name.StartsWith("$pin.") } |
+        Where-Object { -not $pin -or $_.Name -eq $pin -or $_.Name.StartsWith("$pin.") } |
         Where-Object {
             $dir = $_.FullName
             -not ($required | Where-Object { -not (Test-Path (Join-Path $dir $_)) })
@@ -223,7 +231,27 @@ function Get-VcToolsetVersion {
     if (-not $best) { return $null }
 
     # -vcvars_ver wants Major.Minor such as "14.44", not the full folder name such as "14.44.35207".
+    if ($Full) { return $best.Name }
     if ($best.Name -match '^(\d+\.\d+)') { return $Matches[1] }
+    return $null
+}
+
+function Get-MeshWindowsSdkVersion {
+    # The exact Windows SDK the agent projects pin, read from the file that owns it. Empty when
+    # the file or the pin is missing, or when it is the '10.0' wildcard rather than a version.
+    $props = Join-Path $script:Repo 'MeshAgent.Sdk.props'
+    if (-not (Test-Path $props)) { return $null }
+    if ((Get-Content $props -Raw) -match '<MeshWindowsSdkVersion[^>]*>\s*([0-9]+(\.[0-9]+){3})\s*</MeshWindowsSdkVersion>') { return $Matches[1] }
+    return $null
+}
+
+function Get-MeshMinWindowsSdk {
+    # The oldest Windows SDK the agent build accepts, read from the props file that owns it so this
+    # script never restates it. It is a floor, not a pin: the projects ask for 10.0, the newest
+    # installed, and MeshCheckWindowsSDK fails the build when that resolves below this.
+    $props = Join-Path $script:Repo 'MeshAgent.Common.props'
+    if (-not (Test-Path $props)) { return $null }
+    if ((Get-Content $props -Raw) -match '<MeshMinWindowsSDK>\s*([0-9.]+)\s*</MeshMinWindowsSDK>') { return $Matches[1] }
     return $null
 }
 
@@ -231,10 +259,15 @@ function Get-WindowsSdkVersion {
     # A usable toolset is only half the environment. stdlib.h, windows.h and the import libs live in
     # the Windows SDK, which the VC.Tools components do NOT pull in, so without this check cl.exe runs
     # and then dies on "Cannot open include file: 'stdlib.h'". Returns the newest SDK complete for $Arch, or $null.
+    # OpenSSL is compiled against the same SDK the agent pins, so the archives and the agent share
+    # one set of ucrt and um headers. Without a pin, the newest at or above the props' floor wins.
     param(
         [ValidateSet('x86', 'x64', 'x64_arm64')][string]$Arch,
         [string]$KitsRoot
     )
+
+    $pinned = Get-MeshWindowsSdkVersion
+    $floor = try { [version](Get-MeshMinWindowsSdk) } catch { $null }
 
     $libArch = switch ($Arch) { 'x64' { 'x64' } 'x64_arm64' { 'arm64' } default { 'x86' } }
 
@@ -266,7 +299,9 @@ function Get-WindowsSdkVersion {
                 (Join-Path $root "Lib\$v\um\$libArch\kernel32.lib")
             )
             if ($required | Where-Object { -not (Test-Path $_) }) { continue }
+            if ($pinned) { if ($v -ne $pinned) { continue } }
             $cur = try { [version]$v } catch { [version]'0.0' }
+            if (-not $pinned -and $floor -and $cur -lt $floor) { continue }
             if (-not $best -or $cur -gt $best[0]) { $best = @($cur, $v) }
         }
     }
@@ -308,6 +343,14 @@ function Get-NasmPath {
     if ($cmd) { return $cmd.Source }
     $fallback = Join-Path $env:LOCALAPPDATA 'bin\NASM\nasm.exe'
     if (Test-Path $fallback) { return $fallback }
+    return $null
+}
+
+function Get-JomPath {
+    $portable = Join-Path $env:BR_TOOLS 'jom\jom.exe'
+    if (Test-Path $portable) { return $portable }
+    $cmd = Get-Command jom.exe -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
     return $null
 }
 
@@ -395,11 +438,47 @@ function Expand-BrZip {
     if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
 }
 
+function Get-VcAsanRuntime {
+    # The AddressSanitizer runtime import library for $Arch, or $null. A toolset folder is no more
+    # proof of ASan than it is of a compiler: the VC.ASAN component ships its own payload, and its
+    # ARM64 half arrived later than its x86 and x64 halves, so a toolset can have one and not the other.
+    # Returns the path so a caller can say which toolset answered.
+    param(
+        [ValidateSet('x86', 'x64', 'arm64')][string]$Arch,
+        # The exact toolset to look in, MSBuild's VCToolsVersion. Without it the newest that has
+        # the runtime wins, which answers "does this machine have it at all".
+        [string]$ToolsVersion
+    )
+
+    $vs = Get-VsInstallPath
+    if (-not $vs) { return $null }
+    $root = Join-Path $vs 'VC\Tools\MSVC'
+    if (-not (Test-Path $root)) { return $null }
+
+    # clang_rt names the architecture the LLVM way, so the lib folder and the file disagree.
+    $triple = switch ($Arch) { 'x64' { 'x86_64' } 'arm64' { 'aarch64' } default { 'i386' } }
+    $dirs = if ($ToolsVersion) { @(Join-Path $root $ToolsVersion) }
+            else {
+                Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
+                    Sort-Object { try { [version]$_.Name } catch { [version]'0.0' } } -Descending |
+                    ForEach-Object { $_.FullName }
+            }
+    foreach ($d in $dirs) {
+        $lib = Join-Path $d "lib\$Arch\clang_rt.asan_dynamic-$triple.lib"
+        if (Test-Path $lib) { return $lib }
+    }
+    return $null
+}
+
 function Get-VcComponentId {
     # Component id for the VS installer's --add, read from the installer's own catalog. The catalog
     # lists every component whether or not it is installed, so this still resolves after the C++
     # workload was removed, which is exactly when deriving it from installed packages would go blind.
-    param([ValidateSet('x64', 'arm64', 'sdk')][string]$Arch)
+    param([ValidateSet('x64', 'arm64', 'sdk', 'asan')][string]$Arch)
+
+    # AddressSanitizer is one component covering every architecture, and unlike VC.Tools its id
+    # carries no toolset version, so there is nothing to resolve out of the catalog.
+    if ($Arch -eq 'asan') { return 'Microsoft.VisualStudio.Component.VC.ASAN' }
 
     # x86 and x64 come from one component and arm64 is its own. The Windows SDK is a separate
     # component again, and installing only VC.Tools yields a cl.exe with no stdlib.h, so it must be asked for by name.
@@ -429,11 +508,15 @@ function Get-VcComponentId {
         return $best.Value.Trim('"')
     }
 
-    # The pinned toolset has a versioned id such as VC.14.44.17.14.x86.x64. The fixed "latest
-    # toolset" id is only the fallback when nothing is pinned.
+    # The pinned toolset has a versioned id such as VC.14.44.17.14.x86.x64, and from 14.51 on the
+    # VS version was dropped from it: VC.14.51.x86.x64. Both spellings are matched. The fixed
+    # "latest toolset" id is only the fallback when nothing is pinned.
+    # The component id carries the toolset's Major.Minor and the VS version, never the patch
+    # level, so a three-part pin has to be cut down before it can match one.
     $pin = Get-MeshVcToolsVersion
+    if ($pin -match '^(\d+\.\d+)') { $pin = $Matches[1] }
     if ($pin) {
-        $rxp = [regex]('"Microsoft\.VisualStudio\.Component\.VC\.' + [regex]::Escape($pin) + '\.(\d+\.\d+)\.' + [regex]::Escape($suffix) + '"')
+        $rxp = [regex]('"Microsoft\.VisualStudio\.Component\.VC\.' + [regex]::Escape($pin) + '(\.\d+\.\d+)?\.' + [regex]::Escape($suffix) + '"')
         $hit = $rxp.Matches($text) | Select-Object -First 1
         if ($hit) { return $hit.Value.Trim('"') }
     }
@@ -457,8 +540,10 @@ function Install-BuildRootWindows {
         [switch]$Tarball,
         [switch]$Perl,
         [switch]$Nasm,
+        [switch]$Jom,
         [switch]$VsComponents,
-        [switch]$Force
+        [switch]$Force,
+        [switch]$Quiet
     )
 
     # Settle where this is all going before writing anything. -BuildRoot wins outright, otherwise
@@ -478,8 +563,8 @@ function Install-BuildRootWindows {
 
     # A bare call provisions everything that needs no admin rights. -VsComponents is never implied,
     # because it drives the Visual Studio installer, needs elevation, and changes an install this script does not own.
-    if (-not ($Tarball -or $Perl -or $Nasm -or $VsComponents)) {
-        $Tarball = $true; $Perl = $true; $Nasm = $true
+    if (-not ($Tarball -or $Perl -or $Nasm -or $Jom -or $VsComponents)) {
+        $Tarball = $true; $Perl = $true; $Nasm = $true; $Jom = $true
     }
     $ok = $true
 
@@ -523,6 +608,22 @@ function Install-BuildRootWindows {
         }
     }
 
+    if ($Jom) {
+        Write-Host "  jom $script:JomVersion"
+        $dest = Join-Path $env:BR_TOOLS 'jom'
+        $exe = Join-Path $dest 'jom.exe'
+        if ((Test-Path $exe) -and -not $Force) {
+            Write-Host "    ready   : $exe"
+        } else {
+            $zip = Join-Path $env:BR_DOWNLOADS "jom_$($script:JomVersion -replace '\.', '_').zip"
+            if (Save-BrDownload -Url $script:JomUrl -Path $zip -Sha256 $script:JomSha256) {
+                Expand-BrZip -Path $zip -Destination $dest
+                if (Test-Path $exe) { Write-Host "    ready   : $exe" }
+                else { Write-Host "    FAILED  : jom.exe not found under $dest"; $ok = $false }
+            } else { $ok = $false }
+        }
+    }
+
     if ($VsComponents) {
         Write-Host "  MSVC build tools"
         # Only ask for what is actually absent, so re-running this is a no-op rather
@@ -533,6 +634,10 @@ function Install-BuildRootWindows {
         # The SDK ships separately from the toolset, so ask for it whenever no target
         # has one, or the install ends up with a cl.exe and no headers.
         if (-not (Get-WindowsSdkVersion -Arch x64))      { $need += Get-VcComponentId -Arch sdk }
+        # The Release_ASAN configurations need the ASan runtime, which is its own component and is
+        # not part of any VC.Tools one. x64 is the test because every version of the component has
+        # shipped an x64 runtime, so its absence means the component itself is missing.
+        if (-not (Get-VcAsanRuntime -Arch x64))          { $need += Get-VcComponentId -Arch asan }
         $need = @($need | Where-Object { $_ })
 
         $vs = Get-VsInstallPath
@@ -545,10 +650,11 @@ function Install-BuildRootWindows {
         } else {
             $setupArgs = @('modify', '--installPath', "`"$vs`"")
             foreach ($id in $need) { $setupArgs += @('--add', $id) }
-            # --passive is required because the installer rejects --norestart on its own
+            # One of --quiet or --passive is required: the installer rejects --norestart on its own
             # ("requires either --quiet or --passive") and shows its usage dialog instead of doing
-            # anything. It also keeps the progress UI visible, which a multi-GB component install wants.
-            $setupArgs += @('--passive', '--norestart')
+            # anything. --passive keeps the progress UI, which a multi-GB install wants; -Quiet
+            # drops even that, for a build agent with nobody watching.
+            $setupArgs += @($(if ($Quiet) { '--quiet' } else { '--passive' }), '--norestart')
             Write-Host "    `"$setup`" $($setupArgs -join ' ')"
             # Elevating into someone's Visual Studio install is not a call this script makes unattended.
             $approved = [bool]$Force
@@ -642,6 +748,13 @@ function Test-BuildRootWindows {
         Write-Host "  nasm            : $nasm  (asm-enabled x86/x64 targets)"
     } else {
         Write-Host "  nasm not found  : x86/x64 targets will fall back to -no-asm (run Install-BuildRootWindows)"
+    }
+
+    $jom = Get-JomPath
+    if ($jom) {
+        Write-Host "  jom             : $jom  (parallel make)"
+    } else {
+        Write-Host "  jom not found   : builds run on nmake, which is serial (run Install-BuildRootWindows)"
     }
 
     if ($ok) { Write-Host "  all required inputs present" }

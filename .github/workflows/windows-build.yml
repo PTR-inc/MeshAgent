@@ -17,7 +17,9 @@ on:
         description: 'MSBuild configuration'
         type: choice
         default: Release
-        options: [Release, Debug]
+        # Release_ASAN is a debugging build, never something to ship, so it is only ever chosen
+        # here by hand. Nothing automatic selects it.
+        options: [Release, Debug, Release_ASAN]
 
 env:
   # Pushes and pull requests always build Release, so only manual runs choose.
@@ -31,12 +33,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # v143 is the repo default (MeshAgent.Configuration.props) because it is the newest
+          # toolset both images carry: windows-2025 has VS 2022 17.14 (MSVC 14.44), and the VS 2026
+          # ARM64 image carries 14.44 as well. Nothing hosted ships 14.51, so the v145 rows below
+          # stay commented out until one does.
           - { platform: x64,   toolset: v143, runner: windows-2022 }
           - { platform: x86,   toolset: v143, runner: windows-2022 }
           - { platform: ARM64, toolset: v143, runner: windows-11-arm }
-          # - { platform: x64,   toolset: v145, runner: windows-2025-vs2026 }
-          # - { platform: x86,   toolset: v145, runner: windows-2025-vs2026 }
-          # - { platform: ARM64, toolset: v145, runner: windows-11-vs2026-arm }
+          # No hosted image carries MSVC 14.51, so there is no runner label to put here yet.
+          # windows-2025 is VS 2022 17.14, and the VS 2026 ARM64 image that windows-11-arm moves
+          # to in September 2026 installs 14.29 and 14.44 only. Add v145 rows when one ships it.
     steps:
     - uses: actions/checkout@v7.0.1
     - name: Setup Visual Studio
@@ -44,7 +50,7 @@ jobs:
     - name: Install the pinned MSVC toolset if this image lacks it
       # The pin lives in MeshAgent.Configuration.props. env.ps1 resolves the component id from the
       # installer catalog and runs the VS installer only when no matching toolset is present.
-      if: matrix.toolset == 'v143'
+      if: matrix.toolset != 'v143'
       shell: pwsh
       env:
         BUILDROOT: ${{ github.workspace }}\br
@@ -58,13 +64,22 @@ jobs:
       # Fails the build only for a wrong machine type, a wrong CRT or an LTCG mismatch.
       shell: pwsh
       run: openssl/build/windows/toolset-check.ps1 -Platform ${{ matrix.platform }} -Toolset ${{ matrix.toolset }}
+    # MSVC gained ARM64 AddressSanitizer only in 14.51 (v145). Under an older toolset cl answers
+    # /fsanitize=address with 'warning D9002: ignoring unknown option', the link still succeeds and
+    # the output is still named *_asan.exe, so the run would look sanitized and test nothing.
+    - name: Skip ARM64 Release_ASAN on ${{ matrix.toolset }}
+      if: ${{ matrix.platform == 'ARM64' && env.CONFIGURATION == 'Release_ASAN' && matrix.toolset != 'v145' }}
+      run: echo "::notice::ARM64 Release_ASAN needs the v145 toolset for its ASan runtime - skipped on ${{ matrix.toolset }}"
     - name: Build ${{ matrix.platform }} ${{ env.CONFIGURATION }} (${{ matrix.toolset }})
+      if: ${{ !(matrix.platform == 'ARM64' && env.CONFIGURATION == 'Release_ASAN' && matrix.toolset != 'v145') }}
       run: msbuild MeshAgent-2022.sln /nologo /v:q /clp:Summary /p:Configuration=${{ env.CONFIGURATION }} /p:Platform=${{ matrix.platform }} /p:MeshToolset=${{ matrix.toolset }}
     - name: Run the built agent
       # A miscompile can pass the build with zero warnings (see the x86 ltcg ILibMemory_Init_Size case), so every run must actually run its binary.
+      if: ${{ !(matrix.platform == 'ARM64' && env.CONFIGURATION == 'Release_ASAN' && matrix.toolset != 'v145') }}
       shell: pwsh
       run: test/test-agent.ps1 -Ci -NoConnect -Platform ${{ matrix.platform }} -Configuration ${{ env.CONFIGURATION }}
     - name: Upload ${{ matrix.platform }} artifacts
+      if: ${{ !(matrix.platform == 'ARM64' && env.CONFIGURATION == 'Release_ASAN' && matrix.toolset != 'v145') }}
       uses: actions/upload-artifact@v7
       with:
         name: meshagent-windows-${{ matrix.platform }}${{ env.CONFIGURATION != 'Release' && format('-{0}', env.CONFIGURATION) || '' }}${{ matrix.toolset != 'v143' && format('-{0}', matrix.toolset) || '' }}

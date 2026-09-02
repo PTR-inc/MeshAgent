@@ -1,6 +1,6 @@
 #!/bin/bash
 # Read-only drift check for the Visual Studio build. Two solutions build the same agent and differ
-# only in toolset: MeshAgent-2022.sln (v143) and MeshAgent-2019.sln (v142). The shared source list
+# only in toolset: MeshAgent-2022.sln (v145 by default, v143 with /p:MeshToolset=v143) and MeshAgent-2019.sln (v142). The shared source list
 # lives in MeshAgent.Common.props while the .filters files that group it for Solution Explorer sit
 # next to each project, so the two drift apart silently. Nothing here builds or edits anything.
 

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Imported as the first element of every agent project, before its Globals group.
+     WindowsTargetPlatformVersion has to be set in Globals and MSBuild evaluates a project in
+     document order, so MeshAgent.Configuration.props, which is imported after
+     Microsoft.Cpp.Default.props, is read too late to supply it. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <!-- The exact Windows SDK every agent build compiles against, so two machines cannot produce
+         binaries from different ucrt and um headers. A machine without this SDK fails with MSB8036:
+         install it rather than editing this line. /p:MeshWindowsSdkVersion=10.0 restores the old
+         "newest installed" behaviour for a one-off build.
+         10.0.26100.0 because it is the one SDK on both hosted runner images, windows-2025 and the
+         VS 2026 ARM64 one, so CI compiles against the same ucrt and um headers as a local build. -->
+    <MeshWindowsSdkVersion Condition="'$(MeshWindowsSdkVersion)'==''">10.0.26100.0</MeshWindowsSdkVersion>
+  </PropertyGroup>
+</Project>

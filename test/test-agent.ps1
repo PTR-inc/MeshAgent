@@ -3,19 +3,21 @@
     MeshAgent combined test driver for Windows, the PowerShell counterpart of test/test-agent.sh.
 
 .DESCRIPTION
-    This script and test/test-agent.sh are one driver in two languages. Every change here, be it a
-    timeout, a milestone string, a discovery rule or the verdict wording, goes into the .sh as well.
+    This script and test/test-agent.sh are the same driver in two languages, and they were kept in
+    step line for line until 2026-09-01. They are deliberately allowed to diverge for now: the .sh
+    here is still on the seven-phase layout, without the merged stress phase, -q or --no-asan.
+    Do not port changes across in either direction until that decision is revisited.
 
     The single entry point for automated agent testing on Windows. Runs, in order, against one
     agent binary (MeshConsole*.exe by default):
       1. -info sanity banner (version, ARCHID, OpenSSL)
-      2. test/stress-test.js, every testmodule except 06-*   must pass
-      3. test/stress-test.js, the 06-* sections only          known native crashes (TLS reconnect,
-                                                              WebSocket teardown)
-      4. the same core run delivered via -b64exec             the meshcore delivery path, must pass
-      5. connection test against <binary>.msh                 connect, authenticate, launch meshcore,
+      2. test/stress-test.js, every testmodule                must pass
+      3. the same run delivered via -b64exec                   the meshcore delivery path, must pass
+      4. connection test against <binary>.msh                 connect, authenticate, launch meshcore,
                                                               and persist the identity into <binary>.db
-      6. AddressSanitizer over the core stress run            needs an ASan build, see -Asan
+      5. AddressSanitizer over the stress run                 needs an ASan build, see -Asan
+    A testmodule can mark a check as a known defect with check.known(section, cond, msg, ref). Those
+    are reported as KNOWN rather than FAIL, which -Lenient accepts and -Strict does not.
     Every check lives in test/testmodules/*.js. This script only launches, judges and tabulates.
     The stress phases run the agent through a hard link in the repo root, because on Windows the
     agent chdirs to its own directory and stress-test.js resolves its modules against the cwd.
@@ -48,7 +50,7 @@
     copied there, overwriting whatever was beside the binary.
 
 .PARAMETER Asan
-    ASan-instrumented agent for phase 6. Default: the Release_ASAN build of the same platform,
+    ASan-instrumented agent for phase 5. Default: the Release_ASAN build of the same platform,
     or <binary>_asan.exe beside the agent. Build one with:
     msbuild MeshAgent-2022.sln /p:Configuration=Release_ASAN /p:Platform=x64
 
@@ -56,9 +58,18 @@
     Directory holding clang_rt.asan_dynamic-<arch>.dll. Default: probed from the MSVC toolsets.
 
 .PARAMETER Strict
-    Treat the known TLS crash as a failure (default under -Ci).
+    Treat every KNOWN result as a failure: the checks a testmodule marked with check.known, and a
+    native crash whose exit code matches a recorded one. Default under -Ci.
+
 .PARAMETER Lenient
-    Under -Ci, keep reporting the known TLS crash as KNOWN instead of FAIL.
+    Keep reporting those as KNOWN instead of FAIL, which is the default outside -Ci.
+
+.PARAMETER Quick
+    Skip the slow phases. On Windows that is the AddressSanitizer one, the .sh also has valgrind.
+    Short form: -q.
+
+.PARAMETER NoAsan
+    Skip only the AddressSanitizer phase.
 
 .PARAMETER Ci
     GitHub Actions mode: ::group:: folding, annotations, job summary table. Implies -Yes.
@@ -82,6 +93,8 @@ param(
     [string]$AsanRuntimeDir,
     [switch]$Strict,
     [switch]$Lenient,
+    [Alias('q')][switch]$Quick,
+    [switch]$NoAsan,
     [switch]$Ci
 )
 
@@ -225,10 +238,26 @@ function Emit($Result, [int]$MaxLines = 0) {
 function Get-StressTotals([string]$Text) {
     $line = ([regex]::Matches($Text, 'TOTAL: .*') | Select-Object -Last 1).Value
     $of = if ($line -match '\(of (\d+)\)') { [int]$Matches[1] } else { -1 }
+    # stress-test.js appends ', N known' only when a testmodule marked a check with check.known.
+    $known = if ($line -match ', (\d+) known') { [int]$Matches[1] } else { 0 }
     if ($line -match 'TOTAL: (\d+) passed, (\d+) failed') {
-        return [pscustomobject]@{ Line = $line; Passed = [int]$Matches[1]; Failed = [int]$Matches[2]; Of = $of }
+        return [pscustomobject]@{ Line = $line; Passed = [int]$Matches[1]; Failed = [int]$Matches[2]; Of = $of; Known = $known }
     }
-    return [pscustomobject]@{ Line = $line; Passed = -1; Failed = -1; Of = $of }
+    return [pscustomobject]@{ Line = $line; Passed = -1; Failed = -1; Of = $of; Known = $known }
+}
+
+# The verdict every stress phase shares, the counterpart of stress_verdict() in the .sh. A KNOWN
+# check is a defect the testmodule itself marked with check.known(), so -Strict is the only thing
+# that turns one into a failure. The driver holds no list of its own, so nothing here goes stale
+# when a fix lands: a crash is a plain failure again the moment the testmodule stops marking it.
+function Judge-Stress($r, $totals) {
+    if (-not $totals.Line) { return @('FAIL', ((RcDesc $r.ExitCode) + ' - no TOTAL line, the run did not finish')) }
+    if ($r.ExitCode -ne 0 -or $totals.Failed -ne 0) { return @('FAIL', ((RcDesc $r.ExitCode) + ' ' + $totals.Line)) }
+    if ($totals.Known -gt 0 -and $script:TreatKnownAsFail) {
+        return @('FAIL', ("$($totals.Known) known-defect check(s), counted by -Strict - " + $totals.Line))
+    }
+    if ($totals.Known -gt 0) { return @('KNOWN', ("$($totals.Known) known-defect check(s) - " + $totals.Line)) }
+    return @('PASS', $totals.Line)
 }
 
 # NTSTATUS values such as 0xC0000005 read as huge negative numbers. Name them, or nobody can
@@ -253,6 +282,11 @@ function RcDesc($Code) {
 # ---------------------------------------------------------------------------------------------
 # results
 # ---------------------------------------------------------------------------------------------
+# One rule for every KNOWN result, whether it came from a testmodule's check.known or from a
+# native crash with a recorded exit code: -Strict makes them failures, -Lenient does not, and CI
+# is strict unless it was asked not to be.
+$script:TreatKnownAsFail = $Strict -or ($Ci -and -not $Lenient)
+
 $script:Phases = @()
 $script:Failed = 0
 function Record([string]$Name, [string]$Result, [string]$Note = '') {
@@ -312,9 +346,17 @@ if (-not $Binary) {
         $cf = if ($Configuration) { $Configuration } else { '*' }
         $roots = @("build\win-$pf-$cf")
     }
-    $cands = @(Get-ChildItem -Path $roots -Filter 'Mesh*.exe' -ErrorAction SilentlyContinue |
-               Where-Object { $_.Name -like 'MeshConsole*' -or $_.Name -like 'MeshService*' } |
-               Sort-Object @{Expression = { $_.Name -like 'MeshConsole*' }; Descending = $true}, LastWriteTime -Descending)
+    $find = {
+        param($paths)
+        @(Get-ChildItem -Path $paths -Filter 'Mesh*.exe' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'MeshConsole*' -or $_.Name -like 'MeshService*' } |
+            Sort-Object @{Expression = { $_.Name -like 'MeshConsole*' }; Descending = $true}, LastWriteTime -Descending)
+    }
+    $cands = & $find $roots
+    # A build with a non-default toolset lands in build\win-<platform>-<configuration>-<toolset>\.
+    # Only looked at when the plain directory holds nothing, so a v143 build stays findable under a
+    # v145 default without every run having to choose between the two.
+    if ($cands.Count -eq 0 -and ($Platform -or $Configuration)) { $cands = & $find @("build\win-$pf-$cf-*") }
     if ($cands.Count -gt 1) {
         Say ('{0} agent binaries match - taking the first. Narrow it with -Platform, -Configuration or -Binary:' -f $cands.Count)
         $cands | ForEach-Object { Say ('    {0}  ({1:yyyy-MM-dd HH:mm})' -f $_.FullName, $_.LastWriteTime) }
@@ -430,6 +472,7 @@ Say ("date        : {0}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 Say "repo        : $RepoRoot"
 Say "binary      : $Binary"
 Say ("build       : {0}" -f $(if ($BuildTag.Platform) { "$($BuildTag.Platform) $($BuildTag.Configuration)" } else { "unrecognised layout ($($BuildTag.Configuration))" }))
+Say ("asan        : {0}" -f $(if ($NoAsan -or $Quick) { 'disabled (requested)' } else { 'enabled' }))
 Say "             PE machine: $BinMachine, host: $HostArch"
 Say ("powershell  : {0}" -f $PSVersionTable.PSVersion)
 Say ("elevated    : {0}" -f $(if ($IsElevated) { 'yes' } else { 'NO - some connect paths need it' }))
@@ -453,7 +496,7 @@ if ($RunBinary -ne $Binary) { Say ("run-as       : {0}  (hard link, so the agent
 # --- phase 1: -info ---------------------------------------------------------------------------
 # -info already reports the commit the agent was built from, whether TLS is compiled in, and the
 # ARCHID it claims. Reading it turns the banner into a check on what is about to be tested.
-Head2 '[1/6] agent -info'
+Head2 '[1/5] agent -info'
 $r = Invoke-Agent -FilePath $Binary -ArgumentList @('-info') -TimeoutSec 30
 Emit $r 20
 
@@ -494,44 +537,25 @@ else {
     else { Record 'openssl version' 'PASS' "agent links OpenSSL $gotOssl, openssl\VERSION pins $wantOssl (report only, not gating)" }
 }
 
-# --- phase 2: stress test, core sections ------------------------------------------------------
-# The 06-* testmodules are the known native-crash sections (TLS reconnect and WebSocket session
-# teardown). They run in phase 3, apart from the core, so one crash cannot take every other
-# check down with it.
-$coreExcl = ((Get-ChildItem 'test\testmodules' -Filter '*.js' | Where-Object { $_.Name -notlike '06-*' } | ForEach-Object { $_.BaseName }) -join ',')
-Head2 '[2/6] stress test - every testmodule except the known-crash 06-* sections'
+# --- phase 2: stress test, every testmodule ---------------------------------------------------
+# One run over the whole set. The 06-* sections used to run apart, because the TLS
+# reconnect-after-end() crash took the process down and every later check with it. That fix has
+# landed, so the split bought nothing but a second startup and a second set of totals to reconcile.
+Head2 '[2/5] stress test - every testmodule'
 Clear-TestResidue
-$r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('test\stress-test.js', '--exclude=06-', '--watchdog=120000') -TimeoutSec 240
+$r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('test\stress-test.js', '--watchdog=120000') -TimeoutSec 360
 Emit $r
 $core = Get-StressTotals $r.Output
-if ($r.ExitCode -eq 0 -and $core.Failed -eq 0) { Record 'stress (core)' 'PASS' $core.Line }
-elseif ($core.Failed -lt 0) { Record 'stress (core)' 'FAIL' ((RcDesc $r.ExitCode) + ' - no TOTAL line, the run did not finish') }
-else { Record 'stress (core)' 'FAIL' ((RcDesc $r.ExitCode) + ' ' + $core.Line) }
+$verdict = Judge-Stress $r $core
+Record 'stress' $verdict[0] $verdict[1]
 
-# --- phase 3: stress test, TLS section only ---------------------------------------------------
-Head2 '[3/6] stress test - known-crash 06-* sections only (TLS, WebSocket)'
-if (-not $HasTls) {
-    Say '  this agent has no TLS compiled in, so the 06-* sections have nothing to exercise'
-    Record 'stress (known 06-*)' 'SKIP' 'no TLS in this build'
-}
-else {
-    Clear-TestResidue
-    $r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('test\stress-test.js', "--exclude=$coreExcl", '--watchdog=40000') -TimeoutSec 120
-    Emit $r
-    $knownTls = @(254, -1073741819, -2147483645)
-    if ($r.ExitCode -eq 0) { Record 'stress (known 06-*)' 'PASS' 'the #1 reconnect-after-end() crash did NOT reproduce' }
-    elseif ($knownTls -contains $r.ExitCode) {
-        if ($Strict) { Record 'stress (known 06-*)' 'FAIL' ((RcDesc $r.ExitCode) + ' - known crash') }
-        else { Record 'stress (known 06-*)' 'KNOWN' ((RcDesc $r.ExitCode) + ' - reconnect-after-end() crash') }
-    }
-    else { Record 'stress (known 06-*)' 'FAIL' ((RcDesc $r.ExitCode) + ' (unexpected - not the known crash signature)') }
-}
 
-# --- phase 4: the core run again, delivered the way meshcore is (-b64exec) -------------------
-Head2 '[4/6] stress test via -b64exec (meshcore delivery path)'
-# argv is empty under -b64exec, so the exclude and watchdog defaults are patched into the script.
+# --- phase 3: the same run again, delivered the way meshcore is (-b64exec) -------------------
+Head2 '[3/5] stress test via -b64exec (meshcore delivery path)'
+# argv is empty under -b64exec, so the watchdog default is patched into the script. Nothing is
+# excluded: this phase has to run the same set as phase 2 or the check counts cannot be compared.
 $src = Get-Content -Raw 'test\stress-test.js'
-$src = $src -replace '(?m)^var OPT_EXCLUDE = \[\];', 'var OPT_EXCLUDE = ["06-"];' -replace '(?m)^var OPT_WATCHDOG = 10000;', 'var OPT_WATCHDOG = 60000;'
+$src = $src -replace '(?m)^var OPT_WATCHDOG = 10000;', 'var OPT_WATCHDOG = 120000;'
 $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($src))
 # The whole script travels on the command line, and Windows caps that at 32767 characters. Say so
 # rather than letting the phase fail with an unexplained startup error once the script outgrows it.
@@ -544,16 +568,17 @@ else {
     $r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('-b64exec', $b64) -TimeoutSec 180
     Emit $r 30
     $b64r = Get-StressTotals $r.Output
+    $verdict = Judge-Stress $r $b64r
     # Only the check count "(of N)" must match phase 2. The KNOWN split varies between runs.
-    if ($r.ExitCode -eq 0 -and $b64r.Failed -eq 0 -and $b64r.Of -gt 0 -and $b64r.Of -eq $core.Of) { Record 'stress (-b64exec)' 'PASS' $b64r.Line }
-    elseif ($r.ExitCode -eq 0 -and $b64r.Failed -eq 0) { Record 'stress (-b64exec)' 'FAIL' ("passed, but ran a different check count than phase 2: '{0}' vs '{1}'" -f $b64r.Line, $core.Line) }
-    elseif ($b64r.Failed -lt 0) { Record 'stress (-b64exec)' 'FAIL' ((RcDesc $r.ExitCode) + ' - no TOTAL line, the run did not finish') }
-    else { Record 'stress (-b64exec)' 'FAIL' ((RcDesc $r.ExitCode) + ' ' + $b64r.Line) }
+    if ($verdict[0] -ne 'FAIL' -and $b64r.Of -gt 0 -and $b64r.Of -ne $core.Of) {
+        Record 'stress (-b64exec)' 'FAIL' ("ran a different check count than phase 2: '{0}' vs '{1}'" -f $b64r.Line, $core.Line)
+    }
+    else { Record 'stress (-b64exec)' $verdict[0] $verdict[1] }
 }
 
-# --- phase 5: connection test against <binary>.msh ---------------------------------------------
+# --- phase 4: connection test against <binary>.msh ---------------------------------------------
 $mshFile = [IO.Path]::ChangeExtension($Binary, '.msh')
-Head2 ('[5/6] connection test ({0})' -f (Split-Path -Leaf $mshFile))
+Head2 ('[4/5] connection test ({0})' -f (Split-Path -Leaf $mshFile))
 $mshSrcFailed = $false
 if ($Msh -and -not $NoConnect) {
     if (-not (Test-Path $Msh)) {
@@ -656,9 +681,12 @@ else {
     }
 }
 
-# --- phase 6: AddressSanitizer over the core stress run ----------------------------------------
-Head2 '[6/6] AddressSanitizer - core stress run'
-if (-not $Asan) {
+# --- phase 5: AddressSanitizer over the stress run ---------------------------------------------
+Head2 '[5/5] AddressSanitizer - stress run'
+if ($NoAsan -or $Quick) {
+    Record 'asan (stress)' 'SKIP' $(if ($NoAsan) { '-NoAsan' } else { '-Quick skips the slow phases' })
+}
+elseif (-not $Asan) {
     # A Release_ASAN build lands in its own directory beside this one, named <target>_asan.exe.
     $noExt = ([IO.Path]::ChangeExtension($Binary, $null)).TrimEnd('.')
     $cand = @($noExt + '_asan.exe')
@@ -669,7 +697,7 @@ if (-not $Asan) {
     if ($hit) { $Asan = $hit }
     elseif (Test-IsAsan $Binary) { $Asan = $Binary }
 }
-if (-not $Asan) {
+elseif (-not $Asan) {
     Say '  no ASan build found - make one with:'
     Say '    msbuild MeshAgent-2022.sln /p:Configuration=Release_ASAN /p:Platform=x64'
     Record 'asan (stress)' 'SKIP' 'no ASan build'
