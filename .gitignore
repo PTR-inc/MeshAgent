@@ -333,6 +333,7 @@ ToolChains/
 # Build files
 # Regenerated every build
 microscript/ILibDuktape_Commit.h
+microscript/ILibDuktape_Commit.*.tmp
 
 # build output
 /build/

@@ -67,7 +67,9 @@
     <!-- Only regenerate the commit header when the commit actually changed. Rewriting it on every
          build changes its mtime and forces a rebuild of every source that includes it. The hash
          covers every value in the file, and is written last so that finding it also proves the
-         file was written completely. -->
+         file was written completely. The projects build in parallel and run this same event, so
+         the lines go to a per-project temp file that is moved into place at the end. Written
+         straight to the header, one writer's truncating &gt; lands in the middle of the other's &gt;&gt; appends. -->
     <PreBuildEvent>
       <Command>
         git log -1 &gt; nul 2&gt;&amp;1
@@ -75,11 +77,12 @@
         FOR /F "tokens=1" %%F in ('git rev-parse HEAD') do @set MESHCOMMIT=%%F
         findstr /c:"%MESHCOMMIT%" "$(ProjectDir)..\microscript\ILibDuktape_Commit.h" &gt; nul 2&gt;&amp;1
         IF %ERRORLEVEL% EQU 0 exit 0
-        @echo // This file is auto-generated, any edits may be overwritten &gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.h
-        git log -1 --format=%%cI | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_DATE "%%F" &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.h
-        git rev-parse --short=12 HEAD | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_HASH_SHORT "%%F" &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.h
-        git log -1 --date=format:"%%y,%%m,%%d,%%H%%M" --format=%25%25cd | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_FILEVERSION %%F &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.h
-        git log -1 --format=%%H | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_HASH "%%F" &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.h
+        @echo // This file is auto-generated, any edits may be overwritten &gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.$(ProjectName).tmp
+        git log -1 --format=%%cI | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_DATE "%%F" &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.$(ProjectName).tmp
+        git rev-parse --short=12 HEAD | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_HASH_SHORT "%%F" &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.$(ProjectName).tmp
+        git log -1 --date=format:"%%y,%%m,%%d,%%H%%M" --format=%25%25cd | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_FILEVERSION %%F &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.$(ProjectName).tmp
+        git log -1 --format=%%H | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_HASH "%%F" &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.$(ProjectName).tmp
+        move /y $(ProjectDir)..\microscript\ILibDuktape_Commit.$(ProjectName).tmp $(ProjectDir)..\microscript\ILibDuktape_Commit.h &gt; nul
       </Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
