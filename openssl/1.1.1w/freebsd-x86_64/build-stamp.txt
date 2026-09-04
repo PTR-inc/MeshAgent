@@ -4,7 +4,7 @@ target: freebsd-x86_64
 openssl_version: 1.1.1w
 source_sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
 configure_target: BSD-x86_64
-configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared  no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  enable-ec_nistp_64_gcc_128
+configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared  no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  -g0 enable-ec_nistp_64_gcc_128
 make_target: build_libs
 cc: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target x86_64-freebsd-none --sysroot=/opt/buildroot/sysroots/freebsd-14.3 -isystem /opt/buildroot/sysroots/freebsd-14.3/usr/include -nostdlibinc
 cc_version: clang version 20.1.2 (https://github.com/ziglang/zig-bootstrap 7ef74e656cf8ddbd6bf891a8475892aa1afa6891)
@@ -15,13 +15,13 @@ libc: bsd
 libc_version: bsd, unpinned
 asm: on
 patches: none
-stamp_key: c442db076d242d1b8f25df18fb976092c0a49c2cdc73f75a1fda7c2cbf84b206
+stamp_key: f08a3a096a44a8bee2e010f9fe0581018541db15447eddd66c7b45674accdd21
 ---
-built_at: 2026-08-31T20:07:50Z
+built_at: 2026-09-04T17:52:28Z
 archive_platform: BSD-x86_64
-archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target x86_64-freebsd-none --sysroot=/opt/buildroot/sysroots/freebsd-14.3 -isystem /opt/buildroot/sysroots/freebsd-14.3/usr/include -nostdlibinc -fPIC -pthread -Wa,--noexecstack -Qunused-arguments -Wall -O3 -fPIC -std=gnu11 -DL_ENDIAN -DOPENSSL_PIC -DOPENSSL_CPUID_OBJ -DOPENSSL_IA32_SSE2 -DOPENSSL_BN_ASM_MONT -DOPENSSL_BN_ASM_MONT5 -DOPENSSL_BN_ASM_GF2m -DSHA1_ASM -DSHA256_ASM -DSHA512_ASM -DKECCAK1600_ASM -DRC4_ASM -DMD5_ASM -DAESNI_ASM -DVPAES_ASM -DGHASH_ASM -DECP_NISTZ256_ASM -DX25519_ASM -DPOLY1305_ASM -D_THREAD_SAFE -D_REENTRANT -DNDEBUG
+archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target x86_64-freebsd-none --sysroot=/opt/buildroot/sysroots/freebsd-14.3 -isystem /opt/buildroot/sysroots/freebsd-14.3/usr/include -nostdlibinc -fPIC -pthread -Wa,--noexecstack -Qunused-arguments -Wall -O3 -fPIC -std=gnu11 -g0 -DL_ENDIAN -DOPENSSL_PIC -DOPENSSL_CPUID_OBJ -DOPENSSL_IA32_SSE2 -DOPENSSL_BN_ASM_MONT -DOPENSSL_BN_ASM_MONT5 -DOPENSSL_BN_ASM_GF2m -DSHA1_ASM -DSHA256_ASM -DSHA512_ASM -DKECCAK1600_ASM -DRC4_ASM -DMD5_ASM -DAESNI_ASM -DVPAES_ASM -DGHASH_ASM -DECP_NISTZ256_ASM -DX25519_ASM -DPOLY1305_ASM -D_THREAD_SAFE -D_REENTRANT -DNDEBUG
 objects: 576 (ELF/64 x86_64)
 glibc_only_refs: 0
 ucontext_refs: 0
-libcrypto_sha256: 41b6ff0c1b835e4a515cbad7d90e32f5de0498ba000e9a677238b370c1e202c8
-libssl_sha256: 7f62d753ec3cfd5b8e00ae209308cd98b5f55c600bd54e76e5bdfbe8714ba015
+libcrypto_sha256: bacece6d3eb4074a6c66df2e85da79699660173b0617414ddc2e28c25c50c481
+libssl_sha256: e63d32ec1c82a24799fb965d816df9c8e79cd20e376ec6f4384b83dfe98fc577

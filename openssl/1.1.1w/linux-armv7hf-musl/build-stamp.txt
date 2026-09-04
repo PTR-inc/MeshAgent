@@ -4,7 +4,7 @@ target: linux-armv7hf-musl
 openssl_version: 1.1.1w
 source_sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
 configure_target: linux-armv4
-configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared -no-asm no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  -Os
+configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared -no-asm no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  -g0 -Os
 make_target: build_libs
 cc: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target arm-linux-musleabihf
 cc_version: clang version 20.1.2 (https://github.com/ziglang/zig-bootstrap 7ef74e656cf8ddbd6bf891a8475892aa1afa6891)
@@ -15,13 +15,13 @@ libc: musl
 libc_version: musl as shipped by zig-0.15.2
 asm: off
 patches: none
-stamp_key: 0788a3de83392c427899f094e0b4986b27407b9f500c49a9c09a83d98fc83491
+stamp_key: eb6c6123fb7e063a9bac76caa9075094da387fd76d558fb9d9e842c96b507abe
 ---
-built_at: 2026-08-31T20:06:55Z
+built_at: 2026-09-04T17:51:34Z
 archive_platform: linux-armv4
-archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target arm-linux-musleabihf -fPIC -pthread -Wall -O3 -fPIC -std=gnu11 -Os -DOPENSSL_USE_NODELETE -DOPENSSL_PIC -DNDEBUG
+archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target arm-linux-musleabihf -fPIC -pthread -Wall -O3 -fPIC -std=gnu11 -g0 -Os -DOPENSSL_USE_NODELETE -DOPENSSL_PIC -DNDEBUG
 objects: 553 (ELF/32 arm)
 glibc_only_refs: 0
 ucontext_refs: 0
-libcrypto_sha256: ab48cd8c25588e60cb6b17efa4401b47a3da1d9ce8c140c576ae33491912e71c
+libcrypto_sha256: b3003b378109bd639a1ab5a6ed84dd482b0d78509433209e510c38b823474994
 libssl_sha256: 3469bfd594a14505b3c9f3d303d6c4fa603f85492be91d6c9daa2e902a76729f

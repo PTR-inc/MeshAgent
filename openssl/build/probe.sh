@@ -118,7 +118,7 @@ gate_target() {
     # linux64-sparcv9 is a deliberate upstream exception: Configurations/10-main.conf overrides its
     # bn_ops to BN_LLONG, keeping BN_ULONG 32-bit even though the objects themselves are 64-bit ELF.
     if [ -f "$conf" ]; then
-        if [ "$t" != linux-sparc64-glibc ]; then
+        if [ "${t%-debug}" != linux-sparc64-glibc ]; then
             case "$P_CLASS" in
                 32) conf_has '^# *define THIRTY_TWO_BIT$' || reject "opensslconf.h is not the 32-bit variant" ;;
                 64) conf_has '^# *define SIXTY_FOUR_BIT(_LONG)?$' || reject "opensslconf.h is not the 64-bit variant" ;;

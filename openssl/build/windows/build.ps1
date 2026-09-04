@@ -11,6 +11,11 @@ param(
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$TargetNames,
     [switch]$Force,
+    # Build the -debug twin of each named target instead, e.g. -DebugBuild windows-x64 (or -Dbg,
+    # the same short form build.sh takes) builds windows-x64-debug. Not called -Debug because the
+    # [Parameter()] attribute above makes this an advanced script and PowerShell supplies -Debug
+    # itself. A "...-debug" name is left alone.
+    [Alias('Dbg')][switch]$DebugBuild,
     [switch]$InstallMissing,
     # Where the tarball, the tools and the per-target source trees live. Same meaning as the
     # BUILDROOT environment variable, which stays the way to set it for a whole session.
@@ -140,7 +145,7 @@ function Get-StampState($t) {
 }
 
 if (-not $TargetNames -or $TargetNames.Count -eq 0) {
-    Write-Host "usage: build.ps1 [-Force] [-InstallMissing] [-BuildRoot <dir>] [-WorkDir <dir>] [-Jobs <n>] [-verbose] <target|all|list> [target...]"
+    Write-Host "usage: build.ps1 [-Force] [-DebugBuild|-Dbg] [-InstallMissing] [-BuildRoot <dir>] [-WorkDir <dir>] [-Jobs <n>] [-verbose] <target|all|list> [target...]"
     Write-Host "targets: $($Targets.Name -join ' ')"
     exit 2
 }
@@ -229,6 +234,11 @@ if ($TargetNames[0] -eq 'list') {
 }
 # A misspelled name must refuse the whole run, not be silently dropped from the list.
 if ($TargetNames[0] -ne 'all') {
+    # -DebugBuild builds the -debug twin of each named target instead. 'all' already covers every
+    # -debug row on its own, so this only matters for an explicit target list.
+    if ($DebugBuild) {
+        $TargetNames = $TargetNames | ForEach-Object { if ($_.EndsWith('-debug')) { $_ } else { "$_-debug" } }
+    }
     $unknown = @($TargetNames | Where-Object { $Targets.Name -notcontains $_ })
     if ($unknown.Count -gt 0) {
         Write-Host "unknown target(s): $($unknown -join ' ')"

@@ -4,7 +4,7 @@ target: linux-aarch64-musl
 openssl_version: 1.1.1w
 source_sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
 configure_target: linux-aarch64
-configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared  no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  enable-ec_nistp_64_gcc_128 -O2
+configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared  no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  -g0 enable-ec_nistp_64_gcc_128 -O2
 make_target: build_libs
 cc: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target aarch64-linux-musl
 cc_version: clang version 20.1.2 (https://github.com/ziglang/zig-bootstrap 7ef74e656cf8ddbd6bf891a8475892aa1afa6891)
@@ -15,13 +15,13 @@ libc: musl
 libc_version: musl as shipped by zig-0.15.2
 asm: on
 patches: none
-stamp_key: 310215971de81e2ad7634b8caa7c480efb745456f8bf506e28327432842b098e
+stamp_key: 9775f29d8980a009617ad2dcf324e943a14c38500da69fbb5b2c163bd9424af2
 ---
-built_at: 2026-08-31T20:06:36Z
+built_at: 2026-09-04T17:51:14Z
 archive_platform: linux-aarch64
-archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target aarch64-linux-musl -fPIC -pthread -Wa,--noexecstack -Qunused-arguments -Wall -O3 -fPIC -std=gnu11 -O2 -DOPENSSL_USE_NODELETE -DOPENSSL_PIC -DOPENSSL_CPUID_OBJ -DOPENSSL_BN_ASM_MONT -DSHA1_ASM -DSHA256_ASM -DSHA512_ASM -DKECCAK1600_ASM -DVPAES_ASM -DECP_NISTZ256_ASM -DPOLY1305_ASM -DNDEBUG
+archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target aarch64-linux-musl -fPIC -pthread -Wa,--noexecstack -Qunused-arguments -Wall -O3 -fPIC -std=gnu11 -g0 -O2 -DOPENSSL_USE_NODELETE -DOPENSSL_PIC -DOPENSSL_CPUID_OBJ -DOPENSSL_BN_ASM_MONT -DSHA1_ASM -DSHA256_ASM -DSHA512_ASM -DKECCAK1600_ASM -DVPAES_ASM -DECP_NISTZ256_ASM -DPOLY1305_ASM -DNDEBUG
 objects: 564 (ELF/64 aarch64)
 glibc_only_refs: 0
 ucontext_refs: 0
-libcrypto_sha256: c2560a598507fcbc76579f441c68fc86c485320529b7d523f155fad04b3f87c5
-libssl_sha256: 17fd66383a327554d637ed73675035a63df359863976c88652e84ccdb301f4d1
+libcrypto_sha256: 41ad427f5684b49dbb46b16bd5b36a49b36b90b4173471193d1560ed69f53379
+libssl_sha256: 3343912fce868635de0fcf1359ff37fab9b3f22ec5f4b89243c3a211ef4b41f1

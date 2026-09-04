@@ -8,7 +8,7 @@
 
 print_manual() {
     cat <<EOF
-usage: $(basename "$0") [-f|--force] <target|all|list|list-targets> [target...]
+usage: $(basename "$0") [-f|--force] [-dbg|--debug-build] <target|all|list|list-targets> [target...]
 
   <target> [target...]  Build one or more named targets, each installed into
                          openssl/\$OPENSSL_VERSION/<target>/. Nothing is installed
@@ -17,8 +17,15 @@ usage: $(basename "$0") [-f|--force] <target|all|list|list-targets> [target...]
                          still matching this configuration is left alone and
                          reported as UP TO DATE, so a re-run costs nothing. A
                          prefix with no stamp predates the mechanism and is
-                         always rebuilt.
+                         always rebuilt. A target already named "<name>-debug"
+                         is built as one, same as -dbg/--debug-build would (see below).
   -f, --force            Build even when the stamp says the prefix is current.
+  -dbg, --debug-build    Build the "<target>-debug" variant of each named target
+                         instead: same toolchain, OpenSSL's own --debug Configure
+                         flag (drops optimization, keeps -g), and no stripping -
+                         installed into its own openssl/\$OPENSSL_VERSION/<target>-debug/
+                         prefix, same idea as windows-*-debug. Off by default:
+                         a plain target name never builds its debug twin.
   all                    Build every linux and macos target (BR_ALL_TARGETS,
                          filtered to those two T_CI groups). Windows targets are
                          never built here - see openssl/build/windows/build.ps1.
@@ -32,10 +39,10 @@ usage: $(basename "$0") [-f|--force] <target|all|list|list-targets> [target...]
                          status). No build runs.
   -h, --help             Show this manual and exit.
 
-Zig-built archives (ZIG column above) run 3-4x larger than a gcc-built target - zig cc embeds
-DWARF debug info by default even with no -g flag, see targets.sh's top-of-file comment. Left in
-on purpose: the agent's own STRIP_AND_SYMBOLCP (makefile) already strips it from the shipped
-binary, and the pre-strip DEBUG_ copy gets real file/line frames inside OpenSSL for free.
+A release archive carries no DWARF: a zig-built target is compiled with -g0 (zig cc would
+otherwise emit debug info at -O2/-O3 with no -g given, see targets.sh's top-of-file comment),
+a gcc-built one is stripped after the build. "<target>-debug" (or -dbg/--debug-build) builds an
+unoptimized copy that keeps it, same idea as windows-*-debug.
 
 targets: $BR_ALL_TARGETS
 
@@ -50,13 +57,15 @@ environment:
 EOF
 }
 
-# BR_FORCE=1 is the environment form, for CI and any caller that cannot add a flag.
+# BR_FORCE=1/BR_DEBUG_BUILD=1 are the environment form, for CI and any caller that cannot add a flag.
 BR_FORCE="${BR_FORCE:-0}"
+BR_DEBUG_BUILD="${BR_DEBUG_BUILD:-0}"
 args=""
 for a in "$@"; do
     case "$a" in
         -h|--help)  print_manual; exit 0 ;;
         -f|--force) BR_FORCE=1 ;;
+        -dbg|--debug-build) BR_DEBUG_BUILD=1 ;;
         -*)         echo "unknown option: $a" >&2; print_manual; exit 2 ;;
         *)          args="$args $a" ;;
     esac
@@ -153,6 +162,11 @@ if [ "$1" = list-targets ] || [ "$1" = targets ]; then print_target_list; exit 0
 if [ "$1" = list ] || [ "$1" = list-archids ] || [ "$1" = archids ]; then print_archid_list; exit $?; fi
 
 list="$*"; [ "$1" = all ] && list=$(print_target_names linux; print_target_names macos)
+if [ "$BR_DEBUG_BUILD" = 1 ]; then
+    # windows-*-debug is already a real name in BR_ALL_TARGETS, so 'all' never needs the suffix
+    # added here; a bare '-debug' target given explicitly is left alone rather than doubled.
+    list=$(for t in $list; do case "$t" in *-debug) echo "$t" ;; *) echo "$t-debug" ;; esac; done)
+fi
 
 mkdir -p "$BR_WORK"
 : > "$BR_WORK/build.status"
@@ -182,6 +196,19 @@ br_provision() {
         echo "  fetch-toolchains.sh$comps"
         ( cd "$REPO" && ./fetch-toolchains.sh -y $comps ) || return 1
     fi
+}
+
+# Strips debug info from a gcc-built release archive in place; GNU strip takes a .a directly and
+# does every member. Best effort: a missing or failing tool leaves the archive untouched and
+# warns rather than failing the build. A zig target comes back empty from br_strip_cmd, since
+# br_target compiles it with -g0 instead - see that function's comment for why.
+br_strip_archive() {   # $1 the .a to strip. Uses T_CC; br_target must have run first.
+    local a="$1" strip_cmd
+    strip_cmd=$(br_strip_cmd)
+    [ -n "$strip_cmd" ] || return 0
+    command -v "${strip_cmd%% *}" >/dev/null 2>&1 || {
+        echo "  warning: strip tool '${strip_cmd%% *}' not found, leaving debug info in place"; return 0; }
+    $strip_cmd "$a" || echo "  warning: $strip_cmd failed on $a, leaving debug info in place"
 }
 
 # clang's integrated assembler expands `la` of a symbol defined later in the same file as if it
@@ -306,6 +333,17 @@ build_one() {
     # The same gate verify runs on the committed tree, against the staged prefix under its version name.
     mkdir -p "$stage/$OPENSSL_VERSION" && mv "$stage/prefix" "$stage/$OPENSSL_VERSION/$t"
     probe_archive "$stage/$OPENSSL_VERSION/$t/lib/libcrypto.a"
+
+    # Debug builds (T_DEBUG=1, from a "-debug" target name) keep every symbol. A release build
+    # gets DWARF stripped back out here by default - build.sh's own top comment and
+    # targets.sh's br_strip_cmd explain why it was there to begin with (zig cc's default). Best
+    # effort: an unresolvable strip tool is reported and skipped rather than failing the build,
+    # since the archive itself is still correct either way.
+    if [ "$T_DEBUG" != 1 ]; then
+        br_strip_archive "$stage/$OPENSSL_VERSION/$t/lib/libcrypto.a"
+        br_strip_archive "$stage/$OPENSSL_VERSION/$t/lib/libssl.a"
+    fi
+
     write_build_stamp "$t" "$stage/$OPENSSL_VERSION/$t"
     echo "  version : $P_VERSION"
     echo "  platform: $P_PLATFORM   objects: $P_MEMBERS ($P_FORMAT/$P_CLASS $P_MACHINE)"

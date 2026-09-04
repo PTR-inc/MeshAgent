@@ -4,13 +4,14 @@
 # board or distribution, and its archives live in openssl/<version>/<target>/. br_target <name>
 # sets the T_ variables. The fields are documented in openssl/build/README.md.
 #
-# Every T_CC="$TC_ZIG/zig cc ..." target below embeds DWARF debug info by default, confirmed via
-# the real compile lines in $BR_WORK/<target>.log having no -g anywhere, yet every .o still
-# carries .debug_info/.debug_line/etc (plain clang/gcc never do this without an explicit -g).
-# That's why these archives run noticeably larger than the old openssl/libstatic/ ones on the
-# same target - left in deliberately: the agent's own STRIP_AND_SYMBOLCP (see makefile) already
-# strips it back out of the shipped binary, and the pre-strip DEBUG_ copy gets real file/line
-# frames inside OpenSSL for free. Pass -g0 in a target's T_FLAGS to opt a target out of this.
+# zig cc emits DWARF debug info with no -g on the line at -O0 through -O3 (plain clang/gcc never
+# do), while -Os/-Oz map to zig's ReleaseSmall and emit none - measured 2026-09-04, and confirmed
+# on the installed archives: the -Os rows had 0 debug sections per member, linux-aarch64-glibc
+# had 8 and ran 3-4x the size. A release build therefore passes -g0 (see the end of br_target),
+# and a "<target>-debug" build (OpenSSL's own --debug, so -O0 -g) keeps it, the same idea as
+# windows-*-debug's /MTd + /Z7 further down. The DEBUG_ agent binary (makefile,
+# STRIP_AND_SYMBOLCP) only resolves file/line frames inside OpenSSL when linked against a
+# -debug prefix now, not against a release one.
 
 # A real macOS runner already has clang and the SDK - no toolchain-floor problem to solve there,
 # so that branch is untouched. The Linux-cross-host branch (previously osxcross's own clang
@@ -58,12 +59,17 @@ _osx_tools() {
 br_target() {
     _osx_tools
     T_CONF=; T_CC=; T_EXTRA=; T_AR=; T_RANLIB=; T_NM=; T_FETCH=
-    T_LIBC=glibc; T_CI=linux
+    T_LIBC=glibc; T_CI=linux; T_DEBUG=0
     # build_libs everywhere, because the repo ships only the two archives and the 3.x
     # apps and fuzz link needs 64-bit atomics that the 32-bit targets lack.
     T_MAKE=build_libs
     T_FLAGS="$OSSL_FLAGS"
-    case "$1" in
+    # Any non-windows target also answers to "<name>-debug": same toolchain, plus OpenSSL's own
+    # --debug Configure flag. Not in BR_ALL_TARGETS, so 'all'/'list' skip it - only build.sh
+    # <target>-debug or build.sh -dbg <target> reaches it (windows-*-debug is its own case).
+    local base="$1"
+    case "$1" in windows-*) ;; *-debug) base="${1%-debug}"; T_DEBUG=1 ;; esac
+    case "$base" in
     # 2026-08-30: switched to Zig's bundled Clang (zig cc -target <triple>.<glibcver>), which
     # reaches the same glibc floor as the old toolchain with a current compiler instead of
     # whatever gcc version that toolchain's era happened to ship - see meshagent-optimizations.md.
@@ -196,9 +202,32 @@ br_target() {
 
     *) return 1 ;;
     esac
+    [ "$T_DEBUG" = 1 ] && T_EXTRA="$T_EXTRA --debug"
+    # zig cc emits DWARF at -O0..-O3 with no -g given, and nothing on hand can strip it back out of
+    # a .a afterwards (see br_strip_cmd), so a release build tells zig not to emit it. Measured
+    # 2026-09-04: -g0 wins over a -g anywhere on the line, so it stays off the -debug variant.
+    case "$T_CC" in "$TC_ZIG"/zig\ cc*) [ "$T_DEBUG" = 1 ] || T_FLAGS="$T_FLAGS -g0" ;; esac
     # The install prefix this target's archives and generated header live in.
     T_PREFIX="$OPENSSL_PREFIX_ROOT/$1"
     return 0
+}
+
+# The strip command for this target's toolchain, or empty when there is nothing to run. Derived
+# from T_CC's own path rather than a T_STRIP field per case above: every non-zig cross toolchain
+# here is <triple>-gcc alongside a <triple>-strip, and a windows .lib keeps its debug info in a
+# separate .pdb. A zig target gets no strip because br_target already compiles it with -g0:
+# "zig objcopy" is Zig's own implementation, not llvm-objcopy, and lib/compiler/objcopy.zig
+# refuses any ELF without a program header ("ELF to ELF copying only supports programs"), so it
+# can never strip a relocatable .o - checked in 0.15.2, 0.16.0 and master 0.17.0-dev.1936. The
+# host's llvm-strip (package llvm-19) does strip a whole zig-built .a, ELF or Mach-O, at 68-70%
+# smaller, but that is a host dependency CI does not install, so -g0 at compile time won.
+br_strip_cmd() {
+    case "$T_CC" in
+        "$TC_ZIG"/zig\ cc*) echo "" ;;
+        *-gcc)              echo "${T_CC%-gcc}-strip" ;;
+        cc\ *)              [ "$T_LIBC" = macos ] && echo "strip -S" || echo "" ;;
+        *)                  echo "" ;;
+    esac
 }
 
 # ---------------------------------------------------------------- build stamp ----

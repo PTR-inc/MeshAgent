@@ -4,7 +4,7 @@ target: linux-mips32r2el-musl
 openssl_version: 1.1.1w
 source_sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
 configure_target: linux-mips32
-configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared  no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  -Os
+configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl -fPIC -std=gnu11 no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared  no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms  -g0 -Os
 make_target: build_libs
 cc: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target mipsel-linux-musleabi
 cc_version: clang version 20.1.2 (https://github.com/ziglang/zig-bootstrap 7ef74e656cf8ddbd6bf891a8475892aa1afa6891)
@@ -15,13 +15,13 @@ libc: musl
 libc_version: musl as shipped by zig-0.15.2
 asm: on
 patches: mips-la:aes-mips.S:AES_Td mips-la:aes-mips.S:AES_Te mips-la:aes-mips.S:AES_Te4 mips-la:sha256-mips.S:K256
-stamp_key: dfa67576eff36d259239384fa6336c96002a448ccba4b88955f71dfe0e85fb96
+stamp_key: 6d11527cd2453578c8d5d7edbad9100f65d9fc47f73ddc1eddc908fcd2af85fe
 ---
-built_at: 2026-08-31T20:07:13Z
+built_at: 2026-09-04T17:51:47Z
 archive_platform: linux-mips32
-archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target mipsel-linux-musleabi -fPIC -pthread -mabi=32 -mips2 -Wa,--noexecstack -Qunused-arguments -Wall -O3 -fPIC -std=gnu11 -Os -DOPENSSL_USE_NODELETE -DOPENSSL_PIC -DOPENSSL_BN_ASM_MONT -DSHA1_ASM -DSHA256_ASM -DAES_ASM -DNDEBUG
+archive_compiler: /opt/buildroot/toolchains/zig-0.15.2/zig cc -target mipsel-linux-musleabi -fPIC -pthread -mabi=32 -mips2 -Wa,--noexecstack -Qunused-arguments -Wall -O3 -fPIC -std=gnu11 -g0 -Os -DOPENSSL_USE_NODELETE -DOPENSSL_PIC -DOPENSSL_BN_ASM_MONT -DSHA1_ASM -DSHA256_ASM -DAES_ASM -DNDEBUG
 objects: 556 (ELF/32 mips)
 glibc_only_refs: 0
 ucontext_refs: 0
-libcrypto_sha256: e7110d37deb973f7332ceb4fdf632003140411f37f301ad06d78ca9b6788d23f
+libcrypto_sha256: dbbe25bbb6770e4c402146f5dd98d8499b8859e5d85c6ec543d979a426ec67a5
 libssl_sha256: 09a8c616e850d7cd09ac5e1c6652315f503094cfea6442af83d5e8107e00e279

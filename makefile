@@ -235,10 +235,11 @@ PATH_ZIG = ../ToolChains/zig/
 #             use by default; neither the vendor toolchains nor upstream clang/gcc do) - see
 #             ARCH_45's CCOVERRIDE for a worked example, including the CFLAGS reasons above.
 #             `zig cc` also embeds DWARF debug info by default even with no -g flag on the
-#             command line (unlike plain clang/gcc), which is why a zig-built ARCHID's DEBUG_
-#             binary (see STRIP_AND_SYMBOLCP below) now resolves real file/line frames inside
-#             OpenSSL too - deliberately left on, since $(STRIP) below already removes it from
-#             the shipped OUTBIN and only the pre-strip debug copy carries the extra size.
+#             command line (unlike plain clang/gcc). The agent's own objects keep that, so a
+#             zig-built ARCHID's DEBUG_ binary (see STRIP_AND_SYMBOLCP below) resolves real
+#             file/line frames while $(STRIP) removes it from the shipped OUTBIN. The OpenSSL
+#             archives are built with -g0 since 2026-09-04 (openssl/build/targets.sh), so
+#             frames inside OpenSSL only resolve when linking a <target>-debug prefix.
 #   BSDREL    bsd class only, the OS release used for the default cross-build triple and sysroot
 #   TUNE      the -march, -mcpu and -mabi flags for this silicon
 #   HARDEN    one of full (the default), basic or none
@@ -1035,9 +1036,9 @@ CFLAGS += $(OPT)
 # linux:/macos:/etc. always re-run, so a simple copy+strip step would overwrite DEBUGBIN's real
 # symbols with an already-stripped OUTBIN even when nothing changed. Comparing file times does not
 # work directly, since strip changes OUTBIN's time too - so that time is saved first.
-# For a zig-built ARCHID (see CCOVERRIDE/PATH_ZIG above), DEBUGBIN also inherits real file/line
-# debug info from OpenSSL itself - zig cc embeds DWARF by default with no -g needed, see
-# openssl/build/targets.sh's top-of-file comment. This strip step removes all of it from OUTBIN.
+# For a zig-built ARCHID (see CCOVERRIDE/PATH_ZIG above), DEBUGBIN carries the agent's own DWARF
+# without any -g (zig cc emits it by default); the release OpenSSL archives are built with -g0,
+# so OpenSSL frames only resolve against a <target>-debug prefix. Strip removes all of it from OUTBIN.
 SNAP_OUTBIN_MTIME = if [ -e "$(OUTBIN)" ]; then touch -r "$(OUTBIN)" "$(PREMTIME)"; else rm -f "$(PREMTIME)"; fi
 STRIP_AND_SYMBOLCP = if [ ! -e "$(PREMTIME)" ] || [ -n "$$(find "$(OUTBIN)" -newer "$(PREMTIME)" 2>/dev/null)" ] || [ ! -e "$(DEBUGBIN)" ]; then cp "$(OUTBIN)" "$(DEBUGBIN)" && $(STRIP) "$(OUTBIN)" && echo "strip   $(OUTBIN)  (symbols kept in $(DEBUGBIN))"; else echo "  $(OUTBIN) unchanged - keeping existing $(DEBUGBIN) symbols"; fi; rm -f "$(PREMTIME)"; $(REFRESH_STAMP_SIZE)
 endif
