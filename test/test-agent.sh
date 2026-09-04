@@ -33,17 +33,22 @@
 #                         Auto-detected from the binary's architecture when not given.
 #       --no-qemu         never use qemu (fails fast on a foreign-arch binary instead)
 #   -q, --quick           skip the slow phases: valgrind and AddressSanitizer
+#       --quicker         everything -q skips, and phase 2 as well, leaving -b64exec as the only
+#                         stress delivery. That is the one that resembles how the server starts
+#                         meshcore. Short form: -qq
 #       --no-valgrind     skip only the valgrind phases
 #       --no-asan         skip only the AddressSanitizer phase
 #       --no-connect      skip the .msh connection test
 #       --msh PATH        .msh to connect with. The agent only ever reads <binary>.msh next to
 #                         itself, so PATH is copied there, overwriting whatever was beside the binary.
-#       --connect-timeout N  ceiling in seconds for the connection phase (default 15, 60 for an ASan
+#       --connect-timeout N  ceiling in seconds for the connection phase (default 20, 60 for an ASan
 #                         agent, or 120 under qemu). The phase ends as soon as meshcore is seen running.
 #       --asan PATH       ASan-instrumented agent for the ASan phase (default: <binary>_asan next to
 #                         it, or the build/<arch>_asan/ sibling directory from `make ... ASAN=1`).
 #                         Build one with:  make linux ARCHID=<id> ASAN=1
-#   -y, --yes             non-interactive: install missing tools without asking
+#   -y, --yes             non-interactive: install missing tools without asking. That covers valgrind
+#                         itself and, for a 32-bit x86 binary, the libc6-dbg:i386 debug symbols it
+#                         needs to start (which on a dpkg host also adds the i386 architecture)
 #       --ci              GitHub Actions mode: ::group:: folding, ::error:: and ::warning::
 #                         annotations, a job-summary table in $GITHUB_STEP_SUMMARY, never
 #                         prompts, never truncates output. Implies --yes.
@@ -73,6 +78,7 @@ QEMU=""
 QEMU_AUTO=1
 RUN_VALGRIND=1
 RUN_ASAN=1
+RUN_STRESS=1
 ASSUME_YES=0
 STRICT=0
 LENIENT=0
@@ -98,6 +104,7 @@ while [ $# -gt 0 ]; do
         --qemu)          QEMU="${2:-}"; QEMU_AUTO=0; shift 2;;
         --no-qemu)       QEMU=""; QEMU_AUTO=0; shift;;
         -q|--quick)      RUN_VALGRIND=0; RUN_ASAN=0; shift;;
+        -qq|--quicker)   RUN_VALGRIND=0; RUN_ASAN=0; RUN_STRESS=0; shift;;
         --no-valgrind)   RUN_VALGRIND=0; shift;;
         --no-asan)       RUN_ASAN=0; shift;;
         --no-connect)    RUN_CONNECT=0; shift;;
@@ -165,11 +172,12 @@ pkg_install_cmd() {   # $1 is the package name. Prints the install command for t
 }
 
 # ensure_tool <command> <package> returns 0 if available (possibly after installing), 1 if not.
-ensure_tool() {
-    local tool="$1" pkg="$2" cmd ans sudo=""
-    command -v "$tool" >/dev/null 2>&1 && return 0
+ensure_tool() {   # $1 label, $2 package, $3 presence test (default: is $1 on PATH), $4 install command
+    local tool="$1" pkg="$2" test_cmd="${3:-}" cmd ans sudo=""
+    [ -n "$test_cmd" ] || test_cmd="command -v \"$tool\" >/dev/null 2>&1"
+    eval "$test_cmd" && return 0
 
-    cmd="$(pkg_install_cmd "$pkg")"
+    cmd="${4:-$(pkg_install_cmd "$pkg")}"
     say "MISSING TOOL: '$tool' is not installed."
     if [ -z "$cmd" ]; then
         say "  No known package manager found - install '$pkg' manually and re-run."
@@ -192,7 +200,7 @@ ensure_tool() {
             say "  Installing: ${sudo}${cmd}"
             # shellcheck disable=SC2086
             ${sudo}${cmd} >>"$LOGFILE" 2>&1
-            if command -v "$tool" >/dev/null 2>&1; then say "  '$tool' installed."; return 0; fi
+            if eval "$test_cmd"; then say "  '$tool' installed."; return 0; fi
             say "  Install failed - see the log for the package manager output."; return 1;;
         *)  say "  Skipped. To enable this phase later, run: ${sudo}${cmd}"; return 1;;
     esac
@@ -378,6 +386,22 @@ if [ "$RUN_VALGRIND" = "1" ]; then
         VG_SKIP_REASON="valgrind not installed"
     fi
 fi
+# On a 32-bit x86 binary valgrind needs the i386 libc debug symbols, or it dies at startup with
+# "a function redirection ... cannot be set up" and never runs the program at all. dpkg is the only
+# package manager here that can be asked whether they are present, so elsewhere the run just tries.
+if [ "$RUN_VALGRIND" = "1" ]; then
+    case "$BIN_DESC" in
+        *Intel\ 80386*|*Intel\ i386*)
+            if command -v apt-get >/dev/null 2>&1; then
+                ensure_tool "libc6-dbg:i386" "libc6-dbg:i386" \
+                    "dpkg -l libc6-dbg:i386 2>/dev/null | grep -q '^ii'" \
+                    "sh -c 'dpkg --add-architecture i386 && apt-get update && apt-get install -y libc6-dbg:i386'" || {
+                        RUN_VALGRIND=0
+                        VG_SKIP_REASON="a 32-bit binary needs libc6-dbg:i386, which valgrind cannot start without"
+                    }
+            fi;;
+    esac
+fi
 
 # --------------------------------------------------------------------------------------------
 # phase plumbing
@@ -510,13 +534,20 @@ fi
 # One run over the whole suite. The 06-* TLS and WebSocket sections used to run apart, because a
 # native crash there took every other check down with it - that crash is fixed, and a section that
 # still fails is now either a real regression or a check the module marked with check.known().
-head2 "[2/6] stress test - every testmodule"
-OUT="$TMPDIR_RUN/stress.log"
-run_cmd $((150*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" test/stress-test.js \
-        --watchdog=$((80000*SCALE)) ${QEMU:+--qemu}; RC=$?
-emit "$OUT"
-TOTAL_LINE="$(total_line "$OUT")"
-stress_verdict "stress" "$RC" "$TOTAL_LINE"
+TOTAL_LINE=""
+if [ "$RUN_STRESS" = "1" ]; then
+    head2 "[2/6] stress test - every testmodule"
+    OUT="$TMPDIR_RUN/stress.log"
+    run_cmd $((150*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" test/stress-test.js \
+            --watchdog=$((80000*SCALE)) ${QEMU:+--qemu}; RC=$?
+    emit "$OUT"
+    TOTAL_LINE="$(total_line "$OUT")"
+    stress_verdict "stress" "$RC" "$TOTAL_LINE"
+else
+    head2 "[2/6] stress test SKIPPED"
+    say "  reason: skipped by request (-qq)"
+    record "stress" SKIP "-qq runs only the -b64exec delivery"
+fi
 
 # --- phase 3: the same run again, delivered the way meshcore is (-b64exec) -------------------
 head2 "[3/6] stress test via -b64exec (meshcore delivery path)"
@@ -583,9 +614,9 @@ else
     {
         OUT="$TMPDIR_RUN/connect.log"
         # This is a ceiling, not a wait: the poll below stops the moment the core is seen running.
-        # Under qemu a first connect (core download, SHA384 verify, module loads) took about 90 s,
-        # and a 60 s limit was killing it mid-transfer.
-        csec=15; [ "$IS_ASAN" = "1" ] && csec=60; [ -n "$QEMU" ] && csec=120
+        # An ASan agent measured about 18 s to reach CoreOk where a release one took 3 s, so it gets more room.
+        # Under qemu a first connect (core download, SHA384 verify, module loads) took about 90 s, and a 60 s limit was killing it mid-transfer.
+        csec=20; [ "$IS_ASAN" = "1" ] && csec=60; [ -n "$QEMU" ] && csec=120
         [ -n "$CONNECT_TIMEOUT" ] && csec="$CONNECT_TIMEOUT"
         # controlChannelDebug and showModuleNames gate the markers this phase greps for, and logUpdate
         # gates the 'Connection Established' line in the agent's own .log. Forced into the .msh
@@ -680,7 +711,6 @@ if [ "$RUN_VALGRIND" = "1" ]; then
     # --- phase 5: valgrind over the stress run -----------------------------------------------
     head2 "[5/6] valgrind memcheck - stress run ($DBGBIN)"
     OUT="$TMPDIR_RUN/vg-stress.log"; VG="$TMPDIR_RUN/vg-stress.valgrind"
-    say "  (valgrind is ~20x slower - the stress watchdog is raised to match)"
     run_cmd $((120*VG_SCALE)) "$OUT" valgrind "${VG_ARGS[@]}" --log-file="$VG" \
             "$DBGBIN" test/stress-test.js --watchdog=$((80000*VG_SCALE)); RC=$?
     emit "$OUT" 15

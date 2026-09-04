@@ -6,6 +6,8 @@
 # alone. -Force builds it anyway, from scratch: MSBuild's own up-to-date check would otherwise
 # leave the objects and the binary untouched.
 # By default it prints phase progress, warnings and errors. Add -verbose for the full MSBuild log.
+# -UpdateModules refreshes the embedded JS modules (update-modules.ps1) before building; -Module
+# limits that refresh to one module name.
 
 param(
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
@@ -20,7 +22,17 @@ param(
     [switch]$IgnoreOpenSSL,
     # /p:MeshToolset. Anything other than the default gets its own output directory, so a v142
     # build never overwrites a v143 one. MeshAgent.Configuration.props owns the default.
-    [string]$Toolset = ''
+    [string]$Toolset = '',
+    # Runs update-modules.ps1 before building, so an edited modules\*.js lands in these binaries.
+    # It needs an already-built MeshConsole under build\win-*, so a first build runs without it.
+    [switch]$UpdateModules,
+    # Limits -UpdateModules to one module name, or adds it when it is not embedded yet.
+    [string]$Module = '',
+    # A full -UpdateModules run removes entries whose modules\*.js is gone; -NoSync keeps them.
+    [switch]$NoSync,
+    # Only reports what -UpdateModules would change, then stops without building: building right
+    # after a report would embed the unrefreshed modules the report just flagged.
+    [switch]$DryRun
 )
 
 # -verbose is not declared as a parameter: the [Parameter()] attribute above makes this an advanced
@@ -152,7 +164,7 @@ function Get-StampState($t) {
 }
 
 if (-not $TargetNames -or $TargetNames.Count -eq 0) {
-    Write-Host "usage: make-win.ps1 [-Force] [-Asan] [-IgnoreOpenSSL] [-Toolset v142] [-verbose] <target|all|list> [target...]"
+    Write-Host "usage: make-win.ps1 [-Force] [-Asan] [-IgnoreOpenSSL] [-Toolset v142] [-UpdateModules [-Module <name>] [-NoSync] [-DryRun]] [-verbose] <target|all|list> [target...]"
     Write-Host "targets: $($Targets.Name -join ' ')"
     exit 2
 }
@@ -231,6 +243,18 @@ if ($TargetNames[0] -ne 'all') {
 $list = if ($TargetNames[0] -eq 'all') {
             $Targets | Where-Object { $Asan -or -not $_.Configuration.EndsWith('_ASAN') }
         } else { $Targets | Where-Object { $TargetNames -contains $_.Name } }
+
+if ($UpdateModules) {
+    Write-Host "=================== modules refresh ==================="
+    $umArgs = @(if ($Module) { $Module } else { 'all' })
+    & (Join-Path $PSScriptRoot 'update-modules.ps1') @umArgs -NoSync:$NoSync -DryRun:$DryRun
+    if ($LASTEXITCODE -ne 0) { Write-Host 'FAILED: update-modules.ps1'; exit 1 }
+    if ($DryRun) { exit 0 }
+}
+elseif ($Module -or $DryRun) {
+    Write-Host '-Module and -DryRun only shape -UpdateModules, give that too'
+    exit 2
+}
 
 if (-not (Test-Path $Solution)) { Write-Host "MISSING: $Solution"; exit 1 }
 $msbuild = Get-MsBuildPath

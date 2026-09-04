@@ -256,7 +256,7 @@ function Get-StressTotals([string]$Text) {
 # check is a defect the testmodule itself marked with check.known(), so -Strict is the only thing
 # that turns one into a failure. The driver holds no list of its own, so nothing here goes stale
 # when a fix lands: a crash is a plain failure again the moment the testmodule stops marking it.
-function Judge-Stress($r, $totals) {
+function Get-StressVerdict($r, $totals) {
     if (-not $totals.Line) { return @('FAIL', ((RcDesc $r.ExitCode) + ' - no TOTAL line, the run did not finish')) }
     if ($r.ExitCode -ne 0 -or $totals.Failed -ne 0) { return @('FAIL', ((RcDesc $r.ExitCode) + ' ' + $totals.Line)) }
     if ($totals.Known -gt 0 -and $script:TreatKnownAsFail) {
@@ -558,7 +558,7 @@ else {
     $r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('test\stress-test.js', '--watchdog=120000') -TimeoutSec 360
     Emit $r
     $core = Get-StressTotals $r.Output
-    $verdict = Judge-Stress $r $core
+    $verdict = Get-StressVerdict $r $core
     Record 'stress' $verdict[0] $verdict[1]
 }
 
@@ -581,7 +581,7 @@ else {
     $r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('-b64exec', $b64) -TimeoutSec 180
     Emit $r 30
     $b64r = Get-StressTotals $r.Output
-    $verdict = Judge-Stress $r $b64r
+    $verdict = Get-StressVerdict $r $b64r
     # Only the check count "(of N)" must match phase 2. The KNOWN split varies between runs.
     if ($verdict[0] -ne 'FAIL' -and $null -ne $core -and $b64r.Of -gt 0 -and $b64r.Of -ne $core.Of) {
         Record 'stress (-b64exec)' 'FAIL' ("ran a different check count than phase 2: '{0}' vs '{1}'" -f $b64r.Line, $core.Line)

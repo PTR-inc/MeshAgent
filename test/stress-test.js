@@ -44,6 +44,10 @@ var FAILURES = [];
 // Options. argv is empty under -b64exec, so both have defaults:
 //   --watchdog=<ms>        overall watchdog, default 10000. Raise it under valgrind, which is about 20x slower.
 //   --exclude=a,b          skip testmodules whose filename contains any of these substrings.
+//   --fs-test               opt in to 15-fs-large-file.js, which writes a >2GB sparse scratch file.
+//                          Off by default because some CI runners and network mounts do not support
+//                          sparse files. Read directly out of process.argv by that testmodule, not
+//                          parsed here.
 //   --qemu                 running under qemu-user emulation. Same idea as test-agent.ps1's ASan
 //                          connectSec ternary: bumps the default watchdog for a slow environment,
 //                          only when the caller did not already pick one with --watchdog=.

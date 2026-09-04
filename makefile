@@ -102,6 +102,9 @@
 #	WEBLOG                   1 = Enable WebLogging Interface                : Default is disabled
 #	WEBRTCDEBUG              1 = Enable WebRTC Instrumentation              : Default is disabled
 #	V                        1 = Verbose, echo every command                : Default prints only phase lines and tool warnings/errors. VERBOSE=1 and the older quiet spelling V=@ are also accepted
+#	UPDATEMODULES            1 = Refresh embedded JS modules first          : Runs ./update-modules.sh before the OS recipe (MODULE=<name> limits it to one module). Needs an already-built agent under build/, so a first build runs without it
+#	SYNC                     0 = Keep entries whose modules/*.js is gone    : Default is 1, a full update-modules run removes embedded entries that no longer have a source file
+#	DRYRUN                   1 = update-modules only reports the changes    : Default is 0, the refresh writes ILibDuktape_Polyfills.c
 #
 
 # Default output is the phase lines plus whatever the tools print themselves (warnings and
@@ -778,7 +781,7 @@ $(eval $(ARCH_$(ARCHID)))
 # ARCH_47, ARCH_60, ARCH_70) - ?= leaves that override in place.
 SERVER_ARCHID ?= $(ARCHID)
 # These goals do not need a target selected.
-ifeq ($(filter $(MAKECMDGOALS),list list-archs listflags list-flags flags print-archids clean cleanbin),)
+ifeq ($(filter $(MAKECMDGOALS),list list-archs listflags list-flags flags print-archids clean cleanbin update-modules),)
 $(if $(ARCHNAME),,$(error unknown or missing ARCHID '$(ARCHID)' - run 'make list'))
 endif
 
@@ -1043,11 +1046,17 @@ ifeq ($(ASAN),1)
 # Keeps the binary unstripped like DEBUG=1 and enables the halt_on_error=0 recovery mode that
 # the ASan phase of test/test-agent.sh relies on, with the <binary>_asan suffix that script detects.
 # Uses the host gcc because old Bootlin cross-gccs lack -fsanitize-recover=address.
+# The host gcc builds for the host's own word size, so a 32-bit target got x86-64 objects and the link
+# skipped its own archives with "skipping incompatible openssl/.../libssl.a when searching for -lssl".
+ASANBITS = $(if $(findstring -i686,$(OSSLTARGET)),-m32,)
+ifeq ($(if $(findstring -i686,$(OSSLTARGET)),x,$(findstring -x86_64,$(OSSLTARGET))),)
+$(warning ASAN=1 uses the host gcc, which cannot build for $(OSSLTARGET). Expect a link failure on ARCHID $(ARCHID).)
+endif
 EXENAME2 := $(EXENAME2)_asan
 CC = gcc
 export PATH := $(HOSTPATH)
-CFLAGS += -fsanitize=address -fsanitize-recover=address -fno-omit-frame-pointer
-LDFLAGS += -fsanitize=address
+CFLAGS += -fsanitize=address -fsanitize-recover=address -fno-omit-frame-pointer $(ASANBITS)
+LDFLAGS += -fsanitize=address $(ASANBITS)
 SNAP_OUTBIN_MTIME = $(NOECHO) $(NOOP)
 STRIP_AND_SYMBOLCP = $(NOECHO) $(NOOP)
 endif
@@ -1150,7 +1159,7 @@ $(shell git log -1 --format=%H | awk '{ printf "#define SOURCE_COMMIT_HASH \"%s\
 endif
 endif
 
-.PHONY: all clean cleanbin force-rebuild list list-archs listflags list-flags flags print-toolchain print-ossldir print-ossltarget print-osslver print-bsdrel print-macosarch print-archids print-archname print-cclabel print-linkmode print-cflags-extra print-outdir print-stampfields
+.PHONY: all clean cleanbin force-rebuild update-modules list list-archs listflags list-flags flags print-toolchain print-ossldir print-ossltarget print-osslver print-bsdrel print-macosarch print-archids print-archname print-cclabel print-linkmode print-cflags-extra print-outdir print-stampfields
 
 # The OS recipes re-invoke make with EXENAME= and the full per-target CFLAGS, and that inner make
 # is the only one meant to reach the compile rules. A bare `make ARCHID=n` used to fall into them
@@ -1194,20 +1203,22 @@ list list-archs listflags list-flags:
 	@echo "usage:    make ARCHID=<id> [switch=value ...]      the ARCHID picks the OS recipe (linux, macos, freebsd or openbsd)"
 	@echo "          make list | list-archs FILTER=<class> | listflags    this table; narrowed to one class; with per-ARCHID EXTRA cflags"
 	@echo "          make clean | cleanbin                    drop the object trees | drop the built binaries"
+	@echo "          make update-modules [MODULE=<name>]      refresh the embedded JS modules in ILibDuktape_Polyfills.c (or add UPDATEMODULES=1 to a build)"
 	@echo "switches: DEBUG=1  ASAN=1  KVM=0|1  CCACHE=1  FORCE=1 (rebuild anyway)  V=1 (verbose)  YES=1 (auto-install toolchains)  CROSS=0  OSSLVER=<ver>  OPT=-Os"
 	@echo "          the full switch list with defaults is in this makefile's header."
 	@echo ""
 	@echo "default cflags: $(BASE_CFLAGS)"
 	@if [ -n "$(SHOWFLAGS)" ]; then \
-	  printf "%6s  %-20s %-26s %-8s %-9s %-30s %s\n" ARCHID TARGET STAMP CLASS TOOLCHAIN COMPILER "EXTRA flags"; \
+	  printf "%6s  %-28s %-26s %-8s %-9s %-30s %s\n" ARCHID TARGET STAMP CLASS TOOLCHAIN COMPILER "EXTRA flags"; \
 	else \
-	  printf "%6s  %-20s %-26s %-8s %-9s %s\n" ARCHID TARGET STAMP CLASS TOOLCHAIN COMPILER; \
+	  printf "%6s  %-28s %-26s %-8s %-9s %s\n" ARCHID TARGET STAMP CLASS TOOLCHAIN COMPILER; \
 	fi
-	@awk '/^define ARCH_/{id=$$2; sub(/ARCH_/,"",id); n=""; c="-"} \
-	      /^  ARCHNAME/{n=$$3} /^  CLASS/{c=$$3} \
-	      /^endef/{if(id!="" && n!="" && (f=="" || c==f)) print id, n, c; id=""}' \
-	      f="$(FILTER)" $(firstword $(MAKEFILE_LIST)) | sort -n | \
-	while read -r id n c; do \
+	@awk '/^define ARCH_/{id=$$2; sub(/ARCH_/,"",id); n=""; c="-"; k="1"} \
+	      /^  ARCHNAME/{n=$$3} /^  CLASS/{c=$$3} /^  KVM /{k=$$3} \
+	      /^endef/{if(kv!="") k=kv; if(id!="" && n!="" && (f=="" || c==f)) print id, n, c, k; id=""}' \
+	      f="$(FILTER)" kv="$(if $(filter command line,$(origin KVM)),$(KVM),)" $(firstword $(MAKEFILE_LIST)) | sort -n | \
+	while read -r id n c k; do \
+	  [ "$$k" = "0" ] && n="$$n (NOKVM)"; \
 	  i=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-toolchain); \
 	  cc=$${i%%|*}; r=$${i#*|}; fetch=$${r%%|*}; r=$${r#*|}; \
 	  apt=$${r%%|*}; r=$${r#*|}; host=$${r%%|*}; hostok=$${r#*|}; \
@@ -1219,9 +1230,9 @@ list list-archs listflags list-flags:
 	  else st=MISSING; how="bring your own ($$cc)"; fi; \
 	  $(AGENT_STAMP_STATE); \
 	  if [ -n "$(SHOWFLAGS)" ]; then \
-	    printf "%6s  %-20s %-26s %-8s %-9s %-30s %s\n" "$$id" "$$n" "$$sp" "$$c" "$$st" "$$how" "$${extra:--}"; \
+	    printf "%6s  %-28s %-26s %-8s %-9s %-30s %s\n" "$$id" "$$n" "$$sp" "$$c" "$$st" "$$how" "$${extra:--}"; \
 	  else \
-	    printf "%6s  %-20s %-26s %-8s %-9s %s\n" "$$id" "$$n" "$$sp" "$$c" "$$st" "$$how"; \
+	    printf "%6s  %-28s %-26s %-8s %-9s %s\n" "$$id" "$$n" "$$sp" "$$c" "$$st" "$$how"; \
 	  fi; \
 	done
 	@echo
@@ -1425,6 +1436,17 @@ LINUX_ICFLAGS   = -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) $(C
 LINUX_ILDFLAGS  = $(LINUXSSL) $(LINUXFLAGS) $(LDFLAGS) $(LDINT) $(LDEXTRA) -ldl
 LINUX_IADDFLAGS = -lrt -z noexecstack -z relro -z now
 
+# Regenerates the addCompressedModule() entries in ILibDuktape_Polyfills.c from modules/*.js, so an
+# edited module lands in the next build. The script runs inside an already-built agent from build/,
+# which is why a first build has to run without UPDATEMODULES.
+update-modules:
+	@echo "modules refresh (update-modules.sh $(if $(MODULE),$(MODULE),all) $(if $(filter 0,$(SYNC)),nosync) $(if $(filter 1,$(DRYRUN)),dryrun))"
+	$(V)./update-modules.sh $(if $(MODULE),$(MODULE),all) $(if $(filter 0,$(SYNC)),nosync) $(if $(filter 1,$(DRYRUN)),dryrun)
+
+ifeq ($(UPDATEMODULES),1)
+linux macos freebsd openbsd: update-modules
+endif
+
 linux:
 	@echo "build   $(OUTBIN)  (ARCHID $(ARCHID), $(ARCHNAME), $(CLASS))"
 	$(ensure_toolchain)
@@ -1441,7 +1463,7 @@ MACOSOPT = -O3 -flto
 # ld64's linker signature, so re-sign after strip with macos_sign from build-env.sh (a self-signed
 # identity in $BUILDROOT/private). SIGN=0 skips it and SIGN_ADHOC=1 signs ad-hoc without an identity.
 MACOS_ICFLAGS  = $(MACOSARCH) -std=$(CSTD) -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) -D_POSIX -D_NOHECI -DMICROSTACK_PROXY -D__APPLE__ $(CWEBLOG) -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CHARDEN) -fstack-protector-strong $(MACOSOPT) $(CEXTRA)
-MACOS_ILDFLAGS = $(MACOSARCH) $(MACSSL) $(MACOSFLAGS) -L. -lpthread -lz -framework IOKit -framework ApplicationServices -framework SystemConfiguration -framework CoreServices -framework CoreGraphics -framework CoreFoundation -Wl,-dead_strip $(MACOSOPT) $(LDFLAGS) $(LDINT) $(LDEXTRA)
+MACOS_ILDFLAGS = $(MACOSARCH) $(MACSSL) $(MACOSFLAGS) -L. -lpthread -lz -framework IOKit -framework ApplicationServices -framework SystemConfiguration -framework CoreServices -framework CoreGraphics -framework CoreFoundation -framework Security -Wl,-dead_strip $(MACOSOPT) $(LDFLAGS) $(LDINT) $(LDEXTRA)
 MACOS_SIGN = $(if $(filter 0,$(SIGN)),@echo "  not signed (SIGN=0)",@bash -c '. ./build-env.sh >/dev/null && macos_sign "$$1"' _ "$(OUTBIN)")
 macos:
 	@echo "build   $(OUTBIN)  (ARCHID $(ARCHID), $(ARCHNAME), $(CLASS))"

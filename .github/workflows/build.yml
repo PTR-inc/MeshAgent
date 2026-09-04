@@ -5,6 +5,23 @@ run-name: "Build MeshAgent (${{ inputs.platforms }})"
 # side effect. The platforms input picks one platform or all of them; the list of what each
 # platform is built from stays in .github/build-inputs.txt for consistency.sh check 8.
 on:
+  # Uncomment the block below to run the modules gate on every push / pull request that touches
+  # the module sources or the updater. On those events the changes job selects no platforms, so
+  # only the modules job runs, and its `if` treats any non-dispatch event as opted in.
+  # push:
+  #   branches: [overmakefile, master]
+  #   paths:
+  #     - 'modules/**'
+  #     - 'microscript/ILibDuktape_Polyfills.c'
+  #     - 'update-modules.js'
+  #     - 'update-modules.sh'
+  # pull_request:
+  #   branches: [overmakefile, master]
+  #   paths:
+  #     - 'modules/**'
+  #     - 'microscript/ILibDuktape_Polyfills.c'
+  #     - 'update-modules.js'
+  #     - 'update-modules.sh'
   workflow_dispatch:
     inputs:
       platforms:
@@ -20,6 +37,11 @@ on:
           - macos
           - openbsd
           - windows
+      check-modules:
+        description: "Fail the run when the embedded JS modules are out of sync with modules/"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -48,30 +70,61 @@ jobs:
           echo "platforms= $platforms " >> "$GITHUB_OUTPUT"
 
 
+  # The embedded copies in ILibDuktape_Polyfills.c are what every platform actually ships, so a
+  # stale copy stops the whole fleet build here instead of costing every matrix job. The check
+  # runs update-modules.js in a freshly built native agent (ARCHID 20, the x86-64 nokvm target,
+  # so no X11 or libjpeg prerequisites) in dry-run mode and fails on any pending change.
+  # The check-modules input turns it off; the platform jobs accept a skipped gate, only a failed
+  # one stops them.
+  modules:
+    name: Embedded JS modules match modules/
+    # A push or pull request event has no inputs, and enabling those triggers means wanting this
+    # check, so anything but a dispatch runs it unconditionally.
+    if: github.event_name != 'workflow_dispatch' || inputs.check-modules
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Build a native agent to run the updater in
+        run: make -s -j4 linux ARCHID=20 YES=1
+      - name: Dry-run update-modules and fail on drift
+        run: |
+          set -euo pipefail
+          out=$(./update-modules.sh all dryrun build/x86-64_nokvm/meshagent_x86-64_nokvm)
+          printf '%s\n' "$out"
+          if printf '%s\n' "$out" | grep -q '^would '; then
+            echo "::error file=microscript/ILibDuktape_Polyfills.c::embedded modules out of sync with modules/ - run ./update-modules.sh all and commit the result"
+            exit 1
+          fi
+
   linux:
-    needs: changes
-    if: needs.changes.outputs.linux == 'true'
+    needs: [changes, modules]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.linux == 'true' &&
+         (needs.modules.result == 'success' || needs.modules.result == 'skipped') }}
     uses: ./.github/workflows/linux-build.yml
 
   macos:
-    needs: changes
-    if: needs.changes.outputs.macos == 'true'
+    needs: [changes, modules]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.macos == 'true' &&
+         (needs.modules.result == 'success' || needs.modules.result == 'skipped') }}
     uses: ./.github/workflows/mac-build.yml
 
   windows:
-    needs: changes
-    if: needs.changes.outputs.windows == 'true'
+    needs: [changes, modules]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.windows == 'true' &&
+         (needs.modules.result == 'success' || needs.modules.result == 'skipped') }}
     uses: ./.github/workflows/windows-build.yml
     with:
       configuration: Release
 
   freebsd:
-    needs: changes
-    if: needs.changes.outputs.freebsd == 'true'
+    needs: [changes, modules]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.freebsd == 'true' &&
+         (needs.modules.result == 'success' || needs.modules.result == 'skipped') }}
     uses: ./.github/workflows/freebsd-build.yml
 
   openbsd:
-    needs: changes
-    if: needs.changes.outputs.openbsd == 'true'
+    needs: [changes, modules]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.openbsd == 'true' &&
+         (needs.modules.result == 'success' || needs.modules.result == 'skipped') }}
     uses: ./.github/workflows/openbsd-build.yml
 
