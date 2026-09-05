@@ -1160,7 +1160,7 @@ $(shell git log -1 --format=%H | awk '{ printf "#define SOURCE_COMMIT_HASH \"%s\
 endif
 endif
 
-.PHONY: all clean cleanbin force-rebuild update-modules list list-archs listflags list-flags flags print-toolchain print-ossldir print-ossltarget print-osslver print-bsdrel print-macosarch print-archids print-archname print-cclabel print-linkmode print-cflags-extra print-outdir print-stampfields
+.PHONY: all clean cleanbin force-rebuild update-modules list list-archs listflags list-flags flags print-toolchain print-ossldir print-ossltarget print-osslver print-bsdrel print-macosarch print-archids print-archname print-cclabel print-linkmode print-libc print-cflags-extra print-outdir print-stampfields
 
 # The OS recipes re-invoke make with EXENAME= and the full per-target CFLAGS, and that inner make
 # is the only one meant to reach the compile rules. A bare `make ARCHID=n` used to fall into them
@@ -1210,9 +1210,9 @@ list list-archs listflags list-flags:
 	@echo ""
 	@echo "default cflags: $(BASE_CFLAGS)"
 	@if [ -n "$(SHOWFLAGS)" ]; then \
-	  printf "%6s  %-28s %-26s %-8s %-9s %-30s %s\n" ARCHID TARGET STAMP CLASS TOOLCHAIN COMPILER "EXTRA flags"; \
+	  printf "%6s  %-28s %-26s %-8s %-11s %-9s %-30s %s\n" ARCHID TARGET STAMP CLASS LIBC TOOLCHAIN COMPILER "EXTRA flags"; \
 	else \
-	  printf "%6s  %-28s %-26s %-8s %-9s %s\n" ARCHID TARGET STAMP CLASS TOOLCHAIN COMPILER; \
+	  printf "%6s  %-28s %-26s %-8s %-11s %-9s %s\n" ARCHID TARGET STAMP CLASS LIBC TOOLCHAIN COMPILER; \
 	fi
 	@awk '/^define ARCH_/{id=$$2; sub(/ARCH_/,"",id); n=""; c="-"; k="1"} \
 	      /^  ARCHNAME/{n=$$3} /^  CLASS/{c=$$3} /^  KVM /{k=$$3} \
@@ -1222,7 +1222,7 @@ list list-archs listflags list-flags:
 	  [ "$$k" = "0" ] && n="$$n (NOKVM)"; \
 	  i=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-toolchain); \
 	  cc=$${i%%|*}; r=$${i#*|}; fetch=$${r%%|*}; r=$${r#*|}; \
-	  apt=$${r%%|*}; r=$${r#*|}; host=$${r%%|*}; hostok=$${r#*|}; \
+	  apt=$${r%%|*}; r=$${r#*|}; host=$${r%%|*}; r=$${r#*|}; hostok=$${r%%|*}; libc=$${r#*|}; \
 	  if [ -n "$(SHOWFLAGS)" ]; then extra=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-cflags-extra); fi; \
 	  if [ -n "$$host" ] && [ -z "$$hostok" ]; then st=n/a; how="native build - run it on $$host"; \
 	  elif command -v "$$cc" >/dev/null 2>&1 || [ -x "$$cc" ]; then st=ready; how="$$cc"; \
@@ -1231,9 +1231,9 @@ list list-archs listflags list-flags:
 	  else st=MISSING; how="bring your own ($$cc)"; fi; \
 	  $(AGENT_STAMP_STATE); \
 	  if [ -n "$(SHOWFLAGS)" ]; then \
-	    printf "%6s  %-28s %-26s %-8s %-9s %-30s %s\n" "$$id" "$$n" "$$sp" "$$c" "$$st" "$$how" "$${extra:--}"; \
+	    printf "%6s  %-28s %-26s %-8s %-11s %-9s %-30s %s\n" "$$id" "$$n" "$$sp" "$$c" "$$libc" "$$st" "$$how" "$${extra:--}"; \
 	  else \
-	    printf "%6s  %-28s %-26s %-8s %-9s %s\n" "$$id" "$$n" "$$sp" "$$c" "$$st" "$$how"; \
+	    printf "%6s  %-28s %-26s %-8s %-11s %-9s %s\n" "$$id" "$$n" "$$sp" "$$c" "$$libc" "$$st" "$$how"; \
 	  fi; \
 	done
 	@echo
@@ -1241,6 +1241,10 @@ list list-archs listflags list-flags:
 	@echo "  there: current = the recorded flags, compiler and OpenSSL prefix still match, stale(fields)"
 	@echo "  = those fields have moved since, unstamped = a build dir with no stamp (built before the"
 	@echo "  stamp existed), absent = never built here, ? = toolchain missing, nothing to compare against."
+	@echo
+	@echo "  LIBC = the libc this ARCHID's binary links, and for glibc the floor its -target triple"
+	@echo "  pins, which is the oldest release the binary will start on. musl and uClibc carry no"
+	@echo "  version because they stamp none into the binary, so any release of them will do."
 
 # Machine-readable ARCHID list, so CI can loop over it instead of hardcoding an ARCHID list of
 # its own. `make print-archids` lists every ARCHID and `make print-archids CLASS=generic`
@@ -1252,11 +1256,29 @@ print-archids:
 	      f="$(CLASS)" $(firstword $(MAKEFILE_LIST)) | sort -n | tr '\n' ' '
 	@echo
 
+# The libc the built binary links, and for glibc the floor its -target triple pins. The triple wins
+# where there is one, since that is what decides the floor, and OSSLTARGET's suffix covers the rows
+# built by a plain cross-gcc plus macOS, BSD and Windows, which carry no triple.
+# awk rather than make's own text functions, because a filter pattern may hold only one % and
+# matching x86_64-linux-gnu.2.24 needs two. musl and uClibc print no version on purpose: they stamp
+# none into a binary, so every release of them satisfies it equally.
+_OSSLLIBC     = $(lastword $(subst -, ,$(OSSLTARGET)))
+LIBCFALLBACK  = $(if $(filter glibc musl uclibc,$(_OSSLLIBC)),$(_OSSLLIBC),$(if $(filter macos-%,$(OSSLTARGET)),macos,$(if $(filter windows-%,$(OSSLTARGET)),msvc,bsd)))
+LIBC_LABEL_CMD = echo '$(CC)' | awk -v o='$(LIBCFALLBACK)' '{ \
+                   for (i = 1; i <= NF; i++) if ($$i == "-target") t = $$(i + 1); \
+                   if (t ~ /musl/) { print "musl"; exit } \
+                   if (t ~ /-gnu[a-z]*\.[0-9]/) { v = t; sub(/.*-gnu[a-z]*\./, "", v); printf "glibc-%s\n", v; exit } \
+                   if (t ~ /-gnu/) { print "glibc"; exit } \
+                   print o }'
+
 # Machine-readable single-target probes. print-toolchain gives the loop above what it needs, and
 # print-ossltarget names the targets.sh target this ARCHID links, print-osslver the OpenSSL
 # series it resolved to, and print-ossldir the prefix made of both.
 print-toolchain:
-	@echo '$(CCBIN)|$(FETCH)|$(APTPKG)|$(HOST)|$(HOSTOK)'
+	@echo "$(CCBIN)|$(FETCH)|$(APTPKG)|$(HOST)|$(HOSTOK)|$$($(LIBC_LABEL_CMD))"
+
+print-libc:
+	@$(LIBC_LABEL_CMD)
 
 print-archname:
 	@echo '$(ARCHNAME)'
@@ -1434,7 +1456,11 @@ STAGE_X11 = $(if $(filter 1,$(KVM)), mkdir -p $(X11INC) && ln -sfn /usr/include/
 # the same strings without recursing into a build. They are exact: a variable set on make's command
 # line cannot be appended to from the makefile, so the inner make sees precisely what is passed here.
 LINUX_ICFLAGS   = -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) $(CFLAGS) $(CHARDEN) $(CEXTRA) $(KVMINC)
-LINUX_ILDFLAGS  = $(LINUXSSL) $(LINUXFLAGS) $(LDFLAGS) $(LDINT) $(LDEXTRA) -ldl
+# 8 MB pinned rather than inherited, because musl reads its default thread stack size out of PT_GNU_STACK and each toolchain fills that field in differently.
+# Measured 2026-09-05: zig writes 16 MB there and musl clamps it to its own 8 MB DEFAULT_STACK_MAX, but a plain musl gcc writes 0 and every thread falls back to musl's 128 KB built-in default.
+# glibc ignores the field and sizes threads from RLIMIT_STACK, so this changes nothing there, and the 64x swing it prevents would only ever show up as a stack overflow deep in duktape recursion.
+LINUX_STACKSIZE = -Wl,-z,stack-size=8388608
+LINUX_ILDFLAGS  = $(LINUXSSL) $(LINUXFLAGS) $(LDFLAGS) $(LDINT) $(LDEXTRA) $(LINUX_STACKSIZE) -ldl
 LINUX_IADDFLAGS = -lrt -z noexecstack -z relro -z now
 
 # Regenerates the addCompressedModule() entries in ILibDuktape_Polyfills.c from modules/*.js, so an
