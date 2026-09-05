@@ -8,9 +8,13 @@
 #   make list                     # every ARCHID with its class, toolchain readiness and how to fetch it
 #   make list-archs [FILTER=...]  # the same list, narrowed to one CLASS (generic, openwrt, vendor, bsd or macos)
 #   make listflags                # the same list, plus each ARCHID's EXTRA cflags (make list flags also works)
+#   make all [FILTER=...]         # build every ARCHID whose stamp is out of date, the way build.sh all does
 #
 # Standard builds. The ARCHID alone picks the OS recipe (linux, macos, freebsd or openbsd), so
 # `make ARCHID=6` and `make linux ARCHID=6` do the same thing. BSD hosts need gmake.
+# `make all` with no ARCHID is the fleet build instead: one sub-make per ARCHID, skipping the ones
+# whose stamp is still current and the ones with no toolchain, carrying on past a failure and
+# ending in a summary. FORCE=1 rebuilds the current ones too.
 #
 #   make ARCHID=16      # macOS x86 64 bit (Xcode clang on a Mac, osxcross elsewhere)
 #   make ARCHID=29      # macOS ARM 64 bit (the host is detected, nothing extra to pass)
@@ -781,8 +785,13 @@ $(eval $(ARCH_$(ARCHID)))
 # ARCH_ block sets it directly when the target should report a different, classic id instead (see
 # ARCH_47, ARCH_60, ARCH_70) - ?= leaves that override in place.
 SERVER_ARCHID ?= $(ARCHID)
+# `make all` with no ARCHID is the build-every-out-of-date-target loop, the same meaning `all` has
+# in openssl/build/build.sh. It selects no target of its own, it only drives one sub-make per
+# ARCHID, so it has to reach its recipe without tripping the guard below.
+ALLLOOP := $(if $(ARCHID),,$(filter all,$(MAKECMDGOALS)))
+
 # These goals do not need a target selected.
-ifeq ($(filter $(MAKECMDGOALS),list list-archs listflags list-flags flags print-archids clean cleanbin update-modules),)
+ifeq ($(ALLLOOP)$(filter $(MAKECMDGOALS),list list-archs listflags list-flags flags print-archids clean cleanbin update-modules),)
 $(if $(ARCHNAME),,$(error unknown or missing ARCHID '$(ARCHID)' - run 'make list'))
 endif
 
@@ -1167,6 +1176,29 @@ endif
 # with the generic CFLAGS and fail with "execinfo.h: No such file", so route it to the right recipe.
 ifeq ($(origin EXENAME),command line)
 all: $(EXENAME)
+else ifneq ($(ALLLOOP),)
+# `make all` with no ARCHID, the openssl/build/build.sh meaning: build every ARCHID whose stamp says
+# it is out of date, skip the ones already current, and never let a single failure stop the rest.
+# Narrow it with FILTER=<class> and rebuild regardless with FORCE=1, the same switches `make list`
+# and a single-target build already take.
+all:
+	@echo "building every out-of-date ARCHID$(if $(FILTER), in class $(FILTER))$(if $(filter 1,$(FORCE)), (FORCE=1, so rebuilding even the current ones))"
+	@rc=0; built=; current=; notc=; failed=; \
+	for id in $$($(MAKE) -s --no-print-directory print-archids $(if $(FILTER),CLASS=$(FILTER))); do \
+	  n=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-archname); \
+	  $(TOOLCHAIN_STATE); \
+	  if [ "$$st" != ready ]; then notc="$$notc $$id"; echo "  skip   ARCHID $$id ($$n) - toolchain $$st: $$how"; continue; fi; \
+	  $(AGENT_STAMP_STATE); \
+	  if [ "$$sp" = current ] && [ "$(FORCE)" != 1 ]; then current="$$current $$id"; echo "  ok     ARCHID $$id ($$n) - up to date"; continue; fi; \
+	  echo "=================== ARCHID $$id ($$n) - $$sp ==================="; \
+	  if $(MAKE) --no-print-directory ARCHID=$$id; then built="$$built $$id"; else failed="$$failed $$id"; rc=1; fi; \
+	done; \
+	echo; echo "Summary:"; \
+	printf "  built:        %s\n" "$${built:- none}"; \
+	printf "  up to date:   %s\n" "$${current:- none}"; \
+	printf "  no toolchain: %s\n" "$${notc:- none}"; \
+	printf "  FAILED:       %s\n" "$${failed:- none}"; \
+	exit $$rc
 else
 OSGOAL = $(if $(filter macos,$(CLASS)),macos,$(if $(filter bsd,$(CLASS)),$(BSDHOST),linux))
 all:
@@ -1180,6 +1212,20 @@ flags: ;
 # EXTRA cflags cost one extra sub-make per ARCHID to compute, so they're only shown for
 # listflags/list-flags/`make list flags` - plain list/list-archs skip that work and the column.
 SHOWFLAGS := $(filter flags listflags list-flags,$(MAKECMDGOALS))
+
+# Resolves $$id into $$st (ready, MISSING or n/a), $$how (the command that would fix a MISSING one)
+# and $$libc, out of print-toolchain's tuple. Shared by `list` and the `all` loop so that both judge
+# buildability by the same rule rather than drifting apart.
+define TOOLCHAIN_STATE
+	  i=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-toolchain); \
+	  cc=$${i%%|*}; r=$${i#*|}; fetch=$${r%%|*}; r=$${r#*|}; \
+	  apt=$${r%%|*}; r=$${r#*|}; host=$${r%%|*}; r=$${r#*|}; hostok=$${r%%|*}; libc=$${r#*|}; \
+	  if [ -n "$$host" ] && [ -z "$$hostok" ]; then st=n/a; how="native build - run it on $$host"; \
+	  elif command -v "$$cc" >/dev/null 2>&1 || [ -x "$$cc" ]; then st=ready; how="$$cc"; \
+	  elif [ -n "$$fetch" ]; then st=MISSING; how="./fetch-toolchains.sh $$fetch"; \
+	  elif [ -n "$$apt" ]; then st=MISSING; how="apt-get install $$apt"; \
+	  else st=MISSING; how="bring your own ($$cc)"; fi
+endef
 
 # The STAMP column of `make list`, expecting $$id, $$n and $$st from the loop and setting $$sp.
 # print-stampfields is only run when there is a stored stamp to compare it against, so an ARCHID
@@ -1202,6 +1248,7 @@ endef
 # One line per ARCHID with its toolchain status. Narrow it with make list FILTER=openwrt
 list list-archs listflags list-flags:
 	@echo "usage:    make ARCHID=<id> [switch=value ...]      the ARCHID picks the OS recipe (linux, macos, freebsd or openbsd)"
+	@echo "          make all [FILTER=<class>] [FORCE=1]       build every ARCHID whose stamp is out of date, skipping the current ones"
 	@echo "          make list | list-archs FILTER=<class> | listflags    this table; narrowed to one class; with per-ARCHID EXTRA cflags"
 	@echo "          make clean | cleanbin                    drop the object trees | drop the built binaries"
 	@echo "          make update-modules [MODULE=<name>]      refresh the embedded JS modules in ILibDuktape_Polyfills.c (or add UPDATEMODULES=1 to a build)"
@@ -1220,15 +1267,8 @@ list list-archs listflags list-flags:
 	      f="$(FILTER)" kv="$(if $(filter command line,$(origin KVM)),$(KVM),)" $(firstword $(MAKEFILE_LIST)) | sort -n | \
 	while read -r id n c k; do \
 	  [ "$$k" = "0" ] && n="$$n (NOKVM)"; \
-	  i=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-toolchain); \
-	  cc=$${i%%|*}; r=$${i#*|}; fetch=$${r%%|*}; r=$${r#*|}; \
-	  apt=$${r%%|*}; r=$${r#*|}; host=$${r%%|*}; r=$${r#*|}; hostok=$${r%%|*}; libc=$${r#*|}; \
+	  $(TOOLCHAIN_STATE); \
 	  if [ -n "$(SHOWFLAGS)" ]; then extra=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-cflags-extra); fi; \
-	  if [ -n "$$host" ] && [ -z "$$hostok" ]; then st=n/a; how="native build - run it on $$host"; \
-	  elif command -v "$$cc" >/dev/null 2>&1 || [ -x "$$cc" ]; then st=ready; how="$$cc"; \
-	  elif [ -n "$$fetch" ]; then st=MISSING; how="./fetch-toolchains.sh $$fetch"; \
-	  elif [ -n "$$apt" ]; then st=MISSING; how="apt-get install $$apt"; \
-	  else st=MISSING; how="bring your own ($$cc)"; fi; \
 	  $(AGENT_STAMP_STATE); \
 	  if [ -n "$(SHOWFLAGS)" ]; then \
 	    printf "%6s  %-28s %-26s %-8s %-11s %-9s %-30s %s\n" "$$id" "$$n" "$$sp" "$$c" "$$libc" "$$st" "$$how" "$${extra:--}"; \
