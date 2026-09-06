@@ -1,0 +1,82 @@
+name: Build system checks
+run-name: Anti-drift gate + committed archive audit
+
+# The anti-drift gate (openssl/build/consistency.sh) and the audit of every committed OpenSSL
+# prefix (openssl/build/verify.sh). Runs on any build-system file change in a pull request against a
+# mainline branch, and on demand. It is not a platform, so it stays outside build.yml's selection
+# and lists its inputs here.
+on:
+  # Push triggers are commented out while the branch is being reworked. Uncomment the block
+  # below to restore them. pull_request and the other triggers still run.
+  # push:
+  #   branches: [overmakefile, master]
+  #   paths:
+  #     - 'openssl/**'
+  #     - 'build-env.sh'
+  #     - 'fetch-toolchains.sh'
+  #     - 'build-toolchain-archives.sh'
+  #     - 'build-bsd-sysroot-archives.sh'
+  #     - 'makefile'
+  #     - '**/*.vcxproj'
+  #     - '**/*.vcxproj.filters'
+  #     - '**/*.props'
+  #     - '*.sln'
+  #     - 'check-vsprojects.sh'
+  #     - '.github/**'
+  pull_request:
+    branches: [overmakefile, master]
+    paths:
+      - 'openssl/**'
+      - 'build-env.sh'
+      - 'fetch-toolchains.sh'
+      - 'build-toolchain-archives.sh'
+      - 'build-bsd-sysroot-archives.sh'
+      - 'makefile'
+      - '**/*.vcxproj'
+      - '**/*.vcxproj.filters'
+      - '**/*.props'
+      - '*.sln'
+      - 'check-vsprojects.sh'
+      - '.github/**'
+  workflow_dispatch:
+
+jobs:
+  consistency:
+    name: Sources of truth still agree
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: openssl/build/consistency.sh
+
+  vsprojects:
+    name: Visual Studio projects and filters agree
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: ./check-vsprojects.sh
+
+  verify-archives:
+    name: Audit every committed OpenSSL prefix
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: |
+          echo "::group::verify output (one line per prefix)"
+          openssl/build/verify.sh; rc=$?
+          echo "::endgroup::"
+          exit $rc
+
+  shellcheck:
+    name: Build scripts parse
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: bash -n every build script
+        run: |
+          rc=0
+          for f in build-env.sh fetch-toolchains.sh build-toolchain-archives.sh \
+                   build-bsd-sysroot-archives.sh check-vsprojects.sh update-modules.sh \
+                   openssl/build/verify.sh openssl/build/*.sh .github/scripts/*.sh; do
+            bash -n "$f" || { echo "::error file=$f::syntax error"; rc=1; }
+          done
+          exit $rc

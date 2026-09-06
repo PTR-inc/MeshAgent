@@ -1,33 +1,46 @@
-name: FreeBSD Build
+name: FreeBSD Builder
 run-name: Build FreeBSD versions of MeshAgent
+# Called by build.yml (manual, one platform or all) or run alone from the Actions tab with
+# workflow_dispatch. What this platform is built from is listed in .github/build-inputs.txt.
 on:
-  push:
-  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
 jobs:
   freebsd-build-x86-64:
     name: FreeBSD x86_64 (ARCHID=30)
-    # GitHub has no FreeBSD runners, so the build runs inside a FreeBSD VM on a Linux runner.
-    # Binaries built on an older FreeBSD release run on all newer ones, but not vice versa,
-    # so build on the oldest release CI can still support: 13.5 covers 13.x (TrueNAS CORE,
-    # older OPNsense/pfSense) through 15.x. FreeBSD 13 is EOL — if its pkg repo or VM image
-    # disappears and the "prepare" step starts failing, bump the release to 14.4.
-    runs-on: ubuntu-latest
+    # Cross-compiled with clang and a base.txz sysroot, so no FreeBSD VM is needed.
+    # The release, sysroot location and mirror fallback come from ARCH_30's BSDREL,
+    # build-env.sh and fetch-toolchains.sh, so nothing is restated here.
+    runs-on: ubuntu-24.04
+    env:
+      BUILDROOT: ${{ github.workspace }}/br
+      # ccache 4 defaults differ per OS, so the directory is named here. The runner context is
+      # not allowed in a job env, so it lives under the workspace, which checkout cleans first.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 300M
     steps:
-      - name: Check out repository code
-        uses: actions/checkout@v7.0.0
-      - name: Build meshagent (x86_64) in FreeBSD VM
-        uses: vmactions/freebsd-vm@v1
+      - uses: actions/checkout@v7.0.1
+      - name: Install clang, lld and ccache
+        run: sudo apt-get -qq update >/dev/null && sudo apt-get -qq -y install clang lld ccache >/dev/null
+      - name: Fetch the FreeBSD sysroot
+        run: ./fetch-toolchains.sh -y freebsd >/dev/null
+      - name: Restore the ccache for ARCHID 30
+        uses: actions/cache@v6
         with:
-          release: "13.5"
-          # The makefile generates ILibDuktape_Commit.h only when git works — without git the
-          # build fails on a missing header. safe.directory is needed because the rsynced
-          # repo is owned by the runner uid, not the VM user, so git refuses it otherwise.
-          prepare: |
-            pkg install -y gmake git
-            git config --global --add safe.directory '*'
-          run: gmake -j4 freebsd ARCHID=30
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-freebsd-30-${{ github.sha }}
+          restore-keys: ccache-freebsd-30-
+      - name: Build meshagent (x86_64)
+        run: make -s -j4 freebsd ARCHID=30 CROSS=1 CCACHE=1 V=@
+      - name: ccache statistics
+        run: ccache -s | grep -E 'Hits|Misses'
+      - name: Verify the binary targets FreeBSD
+        run: |
+          file build/freebsd_x86-64/meshagent_freebsd_x86-64
+          file build/freebsd_x86-64/meshagent_freebsd_x86-64 | grep -q FreeBSD
       - name: Upload artifacts
         uses: actions/upload-artifact@v7.0.1
         with:
           name: meshagent-freebsd-x86_64
-          path: ${{ github.workspace }}/meshagent_*
+          path: ${{ github.workspace }}/build/*/meshagent_*

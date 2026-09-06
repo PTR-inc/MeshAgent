@@ -1,0 +1,71 @@
+name: Build one OpenSSL target
+description: >
+  Skip-check, provision, build and collect a single targets.sh target using the
+  same openssl/build/build.sh a developer runs locally. Shared by the linux and
+  macos jobs so there is exactly one CI recipe, not one per family.
+
+inputs:
+  target:
+    description: targets.sh target name
+    required: true
+  version:
+    description: OpenSSL version being built
+    required: true
+  force:
+    description: rebuild even if the committed archive already matches
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # No skip check lives here any more. build.sh compares the installed prefix's build-stamp.txt
+    # against targets.sh and reports UP TO DATE on its own, which the old check could not do: it
+    # only compared the version string, so a flag, compiler or libc change was skipped as current.
+    - name: Fetch the OpenSSL source
+      shell: bash
+      run: ./fetch-toolchains.sh -y openssl >/dev/null
+
+    # BR_FETCH=1 lets build.sh provision its own toolchain from the target's T_FETCH
+    # tokens, the same table `make list` and fetch-toolchains.sh read. That is why no
+    # per-target toolchain installation step lives in YAML.
+    - name: Build ${{ inputs.target }}
+      id: build
+      shell: bash
+      run: |
+        echo "::group::build.sh ${{ inputs.target }} (Configure and make output)"
+        BR_FETCH=1 BR_FORCE=$([ '${{ inputs.force }}' = 'true' ] && echo 1 || echo 0) \
+          OPENSSL_VERSION='${{ inputs.version }}' openssl/build/build.sh '${{ inputs.target }}'; rc=$?
+        echo "::endgroup::"
+        # UP TO DATE means build.sh installed nothing, so there is no new prefix to collect.
+        built=true
+        grep -qx '${{ inputs.target }}: UP TO DATE' "$BUILDROOT/work/${{ inputs.target }}.status" 2>/dev/null && {
+            built=false
+            echo "::notice::${{ inputs.target }} still matches its build-stamp.txt and force=false - nothing rebuilt."
+        }
+        echo "built=$built" >> "$GITHUB_OUTPUT"
+        exit $rc
+
+    # The per-phase logs live under $BR_WORK on the runner, which nothing uploads on its own,
+    # so a CONFIGURE/MAKE FAILED verdict would otherwise point at files nobody can open.
+    - name: Keep the build logs when the build failed
+      if: failure()
+      uses: actions/upload-artifact@v7.0.1
+      with:
+        name: openssl-logs-${{ inputs.target }}
+        path: |
+          ${{ env.BUILDROOT }}/work/${{ inputs.target }}.log
+          ${{ env.BUILDROOT }}/work/${{ inputs.target }}/configure.log
+          ${{ env.BUILDROOT }}/work/${{ inputs.target }}/make.log
+          ${{ env.BUILDROOT }}/work/${{ inputs.target }}/install.log
+        if-no-files-found: ignore
+
+    - name: Collect the installed prefix and, for a new version, the shared headers
+      if: steps.build.outputs.built == 'true'
+      shell: bash
+      run: |
+        v='${{ inputs.version }}'; t='${{ inputs.target }}'
+        mkdir -p "out/openssl/$v"
+        cp -r "openssl/$v/$t" "out/openssl/$v/"
+        git status --porcelain -- "openssl/$v/include" | grep -q . && cp -r "openssl/$v/include" "out/openssl/$v/"
+        true

@@ -1,176 +1,143 @@
-# To built libturbojpeg.a
+# MeshAgent build system for Linux, macOS, FreeBSD and OpenBSD. Windows is built with
+# Visual Studio from MeshAgent-2022.sln, not from this file.
 #
-# Get the file "libjpeg-turbo-1.4.2.tar.gz", extract it. For Linux 64bit compile:
-#   ./configure
-# For Linux 32bit compile
-#   ./configure --build=i686-pc-linux-gnu "CFLAGS=-m32" "CXXFLAGS=-m32" "LDFLAGS=-m32"
-# Then do "make -j8" and get the resulting file /.libs/libturbojpeg.a
+# 'make list' shows every ARCHID with its toolchain status, and covers dependency setup with
+# fetch-toolchains.sh, platform notes and testing with test/test-agent.sh. This header
+# only documents the ARCHIDs and the build switches.
 #
+#   make list                     # every ARCHID with its class, toolchain readiness and how to fetch it
+#   make list-archs [FILTER=...]  # the same list, narrowed to one CLASS (generic, openwrt, vendor, bsd or macos)
+#   make listflags                # the same list, plus each ARCHID's EXTRA cflags (make list flags also works)
+#   make all [FILTER=...]         # build every ARCHID whose stamp is out of date, the way build.sh all does
 #
-# To build MeshAgent2 on Linux you first got to download the dev libraries to compile the agent, we need x11, xtst, ext, xrandr, egl, glesv2, drm, wayland-client and jpeg. To install, do this:
-#	Using APT:
-#		sudo apt-get install libx11-dev libxtst-dev libxext-dev libjpeg62-dev libxrandr-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libwayland-dev pkg-config
+# Standard builds. The ARCHID alone picks the OS recipe (linux, macos, freebsd or openbsd), so
+# `make ARCHID=6` and `make linux ARCHID=6` do the same thing. BSD hosts need gmake.
+# `make all` with no ARCHID is the fleet build instead: one sub-make per ARCHID, skipping the ones
+# whose stamp is still current and the ones with no toolchain, carrying on past a failure and
+# ending in a summary. FORCE=1 rebuilds the current ones too.
 #
-#	Using YUM:
-#		sudo yum install libX11-devel libXtst-devel libXext-devel libjpeg-devel libXrandr-devel mesa-libEGL-devel mesa-libGLES-devel libdrm-devel wayland-devel pkgconf
-#
-#	NOTE: If you install headers for jpeg8, you need to put the compiled .a in the v80 folder, and specify JPEGVER=v80 when building MeshAgent
-#		eg: make linux ARCHID=6 JPEGVER=v80
-#
-#
-# To build for 32 bit on 64 bit linux 
-#  sudo apt-get install linux-libc-dev:i386 libc6-dev-i386 libjpeg62-dev:i386 libxrandr-dev:i386
-#
-# To install ARM Cross Compiler for Raspberry PI
-#  sudo apt-get install libc6-armel-cross libc6-dev-armel-cross binutils-arm-linux-gnueabi libncurses5-dev gcc-arm-linux-gnueabihf
-#
-# To build universal binaries for macOS, you need to install the Xcode command line tools,
-# and then use the following commands to build x86_64 and arm64 binaries, then combine them into a universal binary with lipo:
-#   make macos ARCHID=16   																		# macOS x86 64 bit
-#   make macos ARCHID=29																		# macOS ARM 64 bit
-#   lipo -create -output meshagent_osx-universal-64 meshagent_osx-x86-64 meshagent_osx-arm-64	# Combine the two binaries into a universal binary
-#
-# Special builds:
-#
-#   make linux ARCHID=6 WEBLOG=1 KVM=0      # Linux x86 64 bit, with Web Logging, and KVM disabled
-#   make linux ARCHID=6 DEBUG=1             # Linux x86 64 bit, with debug symbols and automated crash handling
-#
-# Compiling lib-turbojpeg from source, using libjpeg-turbo 1.4.2 on linux
-#   64 bit JPEG8  -> ./configure --with-jpeg8 
-#   64 bit JPEG62 -> ./configure
-#   32 bit JPEG8  -> ./configure --with-jpeg8 --host i686-pc-linux-gnu CFLAGS='-O2 -m32' LDFLAGS=-m32
-#   32 bit JPEG62 -> ./configure --host i686-pc-linux-gnu CFLAGS='-O2 -m32' LDFLAGS=-m32
-#
-# Cross compiling lib-turbojpeg from source, using libjpeg-turbo 1.4.2 on macOS
-#   Intel Silicon macOS	->	./configure --host=x86_64-apple-darwin20.0.0 CFLAGS='-arch x86_64'
-#   Apple Silicon macOS	->	./configure --host=aarch64-apple-darwin20.0.0 CFLAGS='-arch arm64'
-#
-#
-#	NOTE: If you installed jpeg8 headers on your machine, you must specify --with-jpeg8 when building turbo jpeg, otherwise omit --with-jpeg8
-#
-#
-#
-#	Note: For ChromeOS, you need to disable rootfs verification, in order to install the meshagent service.
-#		  After running the following commands, and rebooting, you should be able to install the meshagent service.
-#
-#			sudo su -
-#			cd /usr/share/vboot/bin/
-#			./make_dev_ssd.sh --remove_rootfs_verification
-#		
-#		The above line will return a warning, but it will tell you the boot partition number, which you 
-#		will need when specifying the above command again, this time with the --partions options. Specify the number instead of (ID)
-#
-#			./make_dev_ssd.sh --remove_rootfs_verification --partitions ID
-#			reboot
-#
-#		When you are ready to install the agent, you'll need to copy the binary to a path that is not marked noexec, like /usr/local,
-#		so that you can execute the installer from there.
-#
-#
-# Special Note about KVM Support on Linux: 
-#    If you get an error stating that an Xauthority cannot be found, and asking if your DM is configured to use X, 
-#    or if you get a black screen when connecting to the login screen, you may need to: 
-#    1. Open /etc/gdm/custom.conf or /etc/gdm3/custom.conf
-#    2. Uncomment: WaylandEnable=false.
-#    3. Add the following line to the [daemon] section:
-#       DefaultSession=gnome-xorg.desktop
-#
-#
-# Special note about running on FreeBSD systems:
-#	1. You'll need to mount procfs, which isn't mounted by default on FreeBSD. Add the following line to /etc/fstab
-#		proc	/proc	procfs	rw	0	0
-#	2. If you don't reboot, then you can manually mount with the command:
-#		mount -t procfs proc /proc
-#	3. In addition, it is recommended to install bash, which you can do with the following command:
-#		pkg install bash
-#	4. For KVM, my FreeBSD system was setup using X11 and KDE. KVM should work out of the box with that configuration.
-#		4a. KVM is disabled by default. To build with KVM support, specify KVM=1 in when building (ie: gmake freebsd ARCHID=30 KVM=1)
-#	5. Also note, that to build on FreeBSD, you must use gmake, not make.
-#
-#
-# To build on Alpine Linux (MUSL), you'll need to install the following libraries
-#	apk add build-base gcc abuild binutils linux-headers libexecinfo-dev bash binutils-doc gcc-doc
-#
-#
-#
-# Standard builds:
-#
-#   ARCHID=1                                # Windows Console x86 32 bit
-#   ARCHID=2                                # Windows Console x86 64 bit
-#   ARCHID=3                                # Windows Service x86 32 bit
-#   ARCHID=4                                # Windows Service x86 64 bit
-#   make macos ARCHID=16					# macOS x86 64 bit
-#	make macos ARCHID=29					# macOS ARM 64 bit
-#   make linux ARCHID=5						# Linux x86 32 bit
-#   make linux ARCHID=6						# Linux x86 64 bit
-#   make linux ARCHID=7						# Linux MIPSEL
-#   make linux ARCHID=9						# Linux ARM 32 bit
-#   make linux ARCHID=13					# Linux ARM 32 bit PogoPlug
-#   make linux ARCHID=15					# Linux x86 32 bit POKY
-#   make linux ARCHID=18					# Linux x86 64 bit POKY
-#   make linux ARCHID=19					# Linux x86 32 bit NOKVM
-#   make linux ARCHID=20					# Linux x86 64 bit NOKVM
-#   make linux ARCHID=24 					# Linux ARM 32 bit HardFloat (Linaro)
-#   make linux ARCHID=26 					# Linux ARM 64 bit
-#   make linux ARCHID=32 					# Linux ARM 64 bit (glibc/2.24)
-#   make linux ARCHID=27 					# Linux ARM 32 bit HardFloat NOKVM (Old Raspberry Pi on Raspian 7, 2015-02-02 build)
-#   gmake freebsd ARCHID=30					# FreeBSD x86 64 bit
-#   gmake freebsd ARCHID=31					# Reserved for FreeBSD x86 32 bit
-#	gmake openbsd ARCHID=37					# OpenBSD x86 64 bit
-#
-#
-# Alpine Linux (MUSL)
-#	make linux ARCHID=33					# Alpine Linux x86 64 bit (MUSL)
+#   make ARCHID=16      # macOS x86 64 bit (Xcode clang on a Mac, osxcross elsewhere)
+#   make ARCHID=29      # macOS ARM 64 bit (the host is detected, nothing extra to pass)
+#   make ARCHID=5       # Linux x86 32 bit (glibc 2.24)
+#   make ARCHID=6       # Linux x86 64 bit (glibc 2.24)
+#   make ARCHID=7       # Linux MIPSEL
+#   make ARCHID=9       # Linux ARM 32 bit
+#   make ARCHID=19      # Linux x86 32 bit NOKVM (glibc 2.24)
+#   make ARCHID=20      # Linux x86 64 bit NOKVM (glibc 2.24)
+#   make ARCHID=24      # Linux ARM 32 bit HardFloat (Linaro)
+#   make ARCHID=26      # Linux ARM 64 bit (apt glibc, GLIBC_2.34 floor)
+#   make ARCHID=32      # Linux ARM 64 bit, legacy-ABI compat (Bootlin glibc 2.31, pinned)
+#   make ARCHID=33      # Alpine Linux x86 64 bit (MUSL)
+#   make ARCHID=35      # Synology - Linux ARMADA 370 Hardfloat
+#   gmake ARCHID=30     # FreeBSD x86 64 bit
+#   ARCHID=31           # FreeBSD x86 32 bit is not implemented and will not be, because FreeBSD 15 dropped 32-bit support
+#   gmake ARCHID=37     # OpenBSD x86 64 bit
 #
 # Raspberry Pi Builds:
 #
-#   make pi KVM=1 ARCHID=25					# Linux ARM 32 bit HardFloat, compiled on the Pi.
-#	make linux ARCHID=25 CROSS=1			# Linux ARM 32 bit HardFloat, using cross compiler
+#   make ARCHID=25           # Linux ARM 32 bit HardFloat, cross-compiled (default)
+#   make ARCHID=25 CROSS=0   # the same target built natively on the Pi instead
 #
 # OpenWRT Builds:
 #
-#	make linux ARCHID=28					# Linux MIPS24KC/MUSL (OpenWRT)
-#	make linux ARCHID=36					# Linux x86_64/MUSL (OpenWRT)
-#	make linux ARCHID=40					# Linux MIPSEL24KC/MUSL (OpenWRT)
-#	make linux ARCHID=41					# Linux ARMADA/CORTEX-A53/MUSL (OpenWRT)
-#   make linux ARCHID=44					# Linux ARMVIRT32/MUSL (OpenWRT)
+#   make ARCHID=28          # Linux MIPS24KC/MUSL (OpenWRT)
+#   make ARCHID=36          # Linux x86_64/MUSL (OpenWRT)
+#   make ARCHID=40          # Linux MIPSEL24KC/MUSL (OpenWRT)
+#   make ARCHID=41          # Linux AARCH64/CORTEX-A53/MUSL (OpenWRT)
 #
 # RISC-V Builds:
 #
-#	make linux ARCHID=45					# Linux RISC-V 64 bit
+#   make ARCHID=45          # Linux RISC-V 64 bit, T-Head Xuantie C906 vendor musl toolchain, dynamic
+#   make ARCHID=46          # Linux RISC-V 64 bit, generic rv64gc, musl, static, uses SERVER_ARCHID=45
+#   make ARCHID=47          # Linux RISC-V 32 bit, generic rv32gc, musl, static, uses SERVER_ARCHID=45
 #
-# Synology Builds
+# Other builds:
 #
-#	make linux ARCHID=35					# Linux ARMADA 370 Hardfloat
+#   make ARCHID=60          # Linux SPARC64 (SPARC V9), glibc, dynamic, no vendor hardware, uses SERVER_ARCHID=45
+#   make ARCHID=70          # Linux PowerPC64LE (POWER8), glibc, dynamic, no vendor hardware, uses SERVER_ARCHID=45
 #
-# Windows Builds for ARCHID:
-#   1 - 4 are Windows builds. please use Visual Studio to compile.
-#   21 - 22 are Windows builds, please use Visual Studio to compile.
-#   34 is Windows build, please use Visual Studio to compile.
-#   42 - 43 are Windows builds, please use Visual Studio to compile.
-# 
+# Some ARCHIDs (47, 60 and 70 above) report a different, classic SERVER_ARCHID to the server,
+# set directly in their ARCH_ block, because MeshCentral only knows the classic numbers.
+# TODO: generate a list useable by meshcentral repo to use as source ARCHID list
+#
+# Windows builds (ARCHID 1-4, 21-22, 34, 42-43) use Visual Studio from MeshAgent-2022.sln,
+# not this makefile.
+#
+# Special builds:
+#
+#   make ARCHID=6 WEBLOG=1 KVM=0      # Linux x86 64 bit with web logging on and KVM off
+#   make ARCHID=6 DEBUG=1             # Linux x86 64 bit with debug symbols and automated crash handling
+#   make ARCHID=9 GLIBCVER=2.28       # Linux ARM 32 bit pinned to a lower glibc floor than the
+#                                            # default Bootlin toolchain. See bootlin_release_for_glibc in env.sh.
+#
 # Required build switches:
 #	ARCHID									Architecture ID
-# 
-# 
-# Optional build switches:
-#	BIGCHAINLOCK							1 = No Compiler/Atomics support		=> Default is Compiler support present
-#	DEBUG									0 = Release, 1 = DEBUG				=> Default is Release
-#	FSWATCH_DISABLE							1 = Remove fswatchter support		=> Default is fswatcher supported
-#	IPADDR_MONITOR_DISABLE					1 = No IPAddress Monitoring			=> Default is IPAddress Monitoring Enabled
-#	IFADDR_DISABLE							1 = Don't use ifaddrs.h				=> Default is use IFADDR
-#	KVM										1 = KVM Enabled, 0 = KVM Disabled   => Default depends on ARCHID
-#	KVM_ALL_TILES							0 = Normal, 1 = All Tiles			=> Default is Normal Tiling Algorithm
-#	LEGACY_LD								0 = Standard, 1 = Legacy			=> Default is Standard (CentOS 5.11 requires Legacy)
-#	NET_SEND_FORCE_FRAGMENT					1 = net.send() fragments sends		=> Default is normal send operation
-#	NOTLS									1 = TLS Support Compiled Out		=> Default is TLS Support Compiled In
-#	NOTURBOJPEG								1 = Don't use Turbo JPEG			=> Default is USE TurboJPEG
-#	SSL_EXPORTABLE_KEYS						1 = Export SSL Keys for debugging	=> Default is DO NOT export SSL keys
-#	TLS_WRITE_TRACE							1 = Enable TLS Send Tracing			=> Default is tracing disabled
-#	WatchDog								WatchDog timer interval.			=> Default is 6000000
-#	WEBLOG									1 = Enable WebLogging Interface		=> Default is disabled
-#	WEBRTCDEBUG								1 = Enable WebRTC Instrumentation	=> Default is disabled
 #
+#
+# Optional build switches:
+#	ASAN                     1 = Build with AddressSanitizer                : Default is disabled. The binary gets the suffix _asan, see test/test-agent.sh
+#	BSDREL                   OS release for the bsd sysroot and triple, such as 7.8 : Default is the pin in the ARCH_30 or ARCH_37 block (14.3 and 7.9). ARCHID 30 and 37 only
+#	CROSS                    0 = Build natively                             : Default is 1 (cross-compile). ARCHID 25, 30, 31 and 37 only
+#	DEBUG                    0 = Release, 1 = DEBUG                         : Default is Release
+#	DYNAMICTLS               1 = Link OpenSSL dynamically                   : Default is static, from the LINUXSSL, MACSSL and BSDSSL archives
+#	FIPS                     1 = FIPS mode (implies DYNAMICTLS and NOWEBRTC) : Default is disabled
+#	FORCE                    1 = Recompile and relink even if nothing changed : Default is 0 (make's own up-to-date checks decide)
+#	FSWATCH_DISABLE          1 = Remove fswatcher support                   : Default is fswatcher supported
+#	GLIBCVER                 Pin the glibc floor, such as 2.28              : Default is 2.24 for ARCHID 5, 6, 19 and 20, or the shared Bootlin pin 2.31 for the others
+#	IPADDR_MONITOR_DISABLE   1 = No IPAddress Monitoring                    : Default is IPAddress Monitoring Enabled
+#	IFADDR_DISABLE           1 = Don't use ifaddrs.h                        : Default is use IFADDR
+#	ILIBCHAIN_GLOBAL_LOCK    1 = No compiler atomics support                : Default is compiler atomics support present
+#	JPEGVER                  e.g. v80 = Use jpeg8 libturbojpeg build        : Default is jpeg62
+#	KVM                      1 = KVM Enabled, 0 = KVM Disabled              : Default depends on ARCHID
+#	KVM_ALL_TILES            0 = Normal, 1 = All Tiles                      : Default is Normal Tiling Algorithm
+#	LEGACY_LD                0 = Standard, 1 = Legacy                       : Default is Standard (CentOS 5.11 requires Legacy)
+#	MEMTRACK                 1 = Enable memory tracking                     : Default is disabled
+#	NET_SEND_FORCE_FRAGMENT  1 = net.send() fragments sends                 : Default is normal send operation
+#	NOILIBSTACKDEBUG         0 = Crash handler in, 1 = out                  : Default is in for DEBUG=1 only, and always out on musl, uClibc, BSD and macOS
+#	NOTLS                    1 = TLS Support Compiled Out                   : Default is TLS Support Compiled In
+#	NOTURBOJPEG              1 = Don't use Turbo JPEG                       : Default is USE TurboJPEG
+#	NOWEBRTC                 1 = WebRTC Compiled Out                        : Default is WebRTC Compiled In
+#	OPT                      -O2, -Os or another gcc -O level                : Default is -O2, and -Os for the openwrt and vendor classes. Release only
+#	SSL_EXPORTABLE_KEYS      1 = Export SSL Keys for debugging              : Default is DO NOT export SSL keys
+#	SSL_TRACE                1 = Enable SSL Tracing                         : Default is tracing disabled
+#	TLS_WRITE_TRACE          1 = Enable TLS Send Tracing                    : Default is tracing disabled
+#	WARN                     0 = Hide compiler and linker warnings          : Default is 1 (warnings shown, the tree builds clean)
+#	WatchDog                 WatchDog timer interval.                       : Default is 180000 (3 minutes, above the 2 minute timeouts of the wmi and exec functions)
+#	WEBLOG                   1 = Enable WebLogging Interface                : Default is disabled
+#	WEBRTCDEBUG              1 = Enable WebRTC Instrumentation              : Default is disabled
+#	V                        1 = Verbose, echo every command                : Default prints only phase lines and tool warnings/errors. VERBOSE=1 and the older quiet spelling V=@ are also accepted
+#	UPDATEMODULES            1 = Refresh embedded JS modules first          : Runs ./update-modules.sh before the OS recipe (MODULE=<name> limits it to one module). Needs an already-built agent under build/, so a first build runs without it
+#	SYNC                     0 = Keep entries whose modules/*.js is gone    : Default is 1, a full update-modules run removes embedded entries that no longer have a source file
+#	DRYRUN                   1 = update-modules only reports the changes    : Default is 0, the refresh writes ILibDuktape_Polyfills.c
+#
+
+# Command-line variables are matched by exact name, so a stray "make archid=6 kvm=0" leaves ARCHID
+# and KVM themselves unset instead of erroring. Each pair below is NAME:alias; a switch is only
+# copied when its lower-case spelling was actually set on the command line, so this can never
+# clobber an upper-case value nobody typed. Runs before anything below reads any of these, including
+# the V/VERBOSE quiet-mode check right after it.
+MAKE_SWITCH_ALIASES = ARCHID:archid ASAN:asan BSDREL:bsdrel CROSS:cross DEBUG:debug \
+  DYNAMICTLS:dynamictls FIPS:fips FORCE:force FSWATCH_DISABLE:fswatch_disable GLIBCVER:glibcver \
+  IPADDR_MONITOR_DISABLE:ipaddr_monitor_disable IFADDR_DISABLE:ifaddr_disable \
+  ILIBCHAIN_GLOBAL_LOCK:ilibchain_global_lock JPEGVER:jpegver KVM:kvm KVM_ALL_TILES:kvm_all_tiles \
+  LEGACY_LD:legacy_ld MEMTRACK:memtrack NET_SEND_FORCE_FRAGMENT:net_send_force_fragment \
+  NOILIBSTACKDEBUG:noilibstackdebug NOTLS:notls NOTURBOJPEG:noturbojpeg NOWEBRTC:nowebrtc OPT:opt \
+  SSL_EXPORTABLE_KEYS:ssl_exportable_keys SSL_TRACE:ssl_trace TLS_WRITE_TRACE:tls_write_trace \
+  WARN:warn WatchDog:watchdog WEBLOG:weblog WEBRTCDEBUG:webrtcdebug V:v VERBOSE:verbose \
+  UPDATEMODULES:updatemodules SYNC:sync DRYRUN:dryrun MODULE:module FILTER:filter YES:yes \
+  CCACHE:ccache OSSLVER:osslver SIGN:sign SIGN_ADHOC:sign_adhoc
+$(foreach msa,$(MAKE_SWITCH_ALIASES),$(eval $(if $(filter command line,$(origin $(word 2,$(subst :, ,$(msa))))),$(word 1,$(subst :, ,$(msa))) := $($(word 2,$(subst :, ,$(msa)))))))
+
+# Default output is the phase lines plus whatever the tools print themselves (warnings and
+# errors). V=1 or VERBOSE=1 echoes every command instead; the CI's older V=@ quiet spelling
+# still works, since quiet is now the default.
+ifeq ($(filter 1,$(V) $(VERBOSE)),)
+override V := @
+MAKEFLAGS += --no-print-directory
+.SILENT:
+else
+override V :=
+endif
 
 # Microstack & Microscript
 SOURCES = microstack/ILibAsyncServerSocket.c microstack/ILibAsyncSocket.c microstack/ILibAsyncUDPSocket.c microstack/ILibParsers.c microstack/ILibMulticastSocket.c
@@ -195,427 +162,896 @@ SOURCES += meshcore/agentcore.c meshconsole/main.c meshcore/meshinfo.c
 MESH_VER = 195
 EXENAME = meshagent
 
-# Cross-compiler paths
-PATH_MIPS = ../ToolChains/ddwrt/3.4.6-uclibc-0.9.28/bin/
-PATH_MIPS24KC = ../ToolChains/toolchain-mips_24kc_gcc-7.3.0_musl/
-PATH_OPENWRT_ARMVIRT32 = ../ToolChains/staging_dir/toolchain-arm_cortex-a15+neon-vfpv4_gcc-8.4.0_musl_eabi/
-PATH_MIPSEL24KC = ../ToolChains/toolchain-mipsel_24kc_gcc-7.3.0_musl/
-PATH_ARM5 = ../ToolChains/LinuxArm/bin/
-PATH_POGO = ../ToolChains/pogoplug-gcc/bin/
-PATH_LINARO = ../ToolChains/linaro-arm/bin/
-PATH_POKY = ../Galileo/arduino-1.5.3/hardware/tools/sysroots/x86_64-pokysdk-linux/usr/bin/i586-poky-linux-uclibc/
-PATH_POKY64 = /opt/poky/1.6.1/sysroots/x86_64-pokysdk-linux/usr/bin/x86_64-poky-linux/
-PATH_AARCH64 = ../ToolChains/aarch64--glibc--stable/
-PATH_AARCH64_CORTEXA53 = ../ToolChains/toolchain-aarch64_cortex-a53_gcc-7.5.0_musl/
-PATH_ARMADA370_HF = /home/dev/arm-unknown-linux-gnueabi/
-PATH_RPI = ../ToolChains/arm-rpi-4.9.3-linux-gnueabihf/
-PATH_OPENWRT_X86_64 = /home/dev/openwrt/staging_dir/toolchain-x86_64_gcc-7.3.0_musl/
-PATH_RISCV64 = ../ToolChains/riscv64-linux-musl-x86_64/
-
-OBJECTS = $(patsubst %.c,%.o, $(SOURCES))
-
-# Compiler command name
+# Compiler defaults. A target block below may override CC and STRIP.
 CC = gcc
 STRIP = strip
 
-# Compiler for the Alpine / musl x86-64 target (ARCHID 33)
-# Building natively on Alpine it resolves to the host gcc, which is already musl.
-# For cross-compile: apt install musl-tools.
-# musl-gcc drives the host gcc with -nostdinc and musl's own include path, so
-# the kernel headers are not on it and <linux/limits.h> cannot be found.
-# -idirafter appends the system directories AFTER musl's, so musl still wins
-# for everything it provides and only linux/* and asm/* come from the host.
-# Do not use -I here - that would shadow musl's headers with glibc's.
-# On Alpine none of that applies: musl-gcc does not exist there and
-# /usr/include/x86_64-linux-gnu is a Debian path, so detect a musl host
-# compiler and use it as-is. Override with "make MUSL_CC=..." for any other
-# musl toolchain.
-MUSL_CC ?= $(shell gcc -dumpmachine 2>/dev/null | grep -q musl && echo gcc || echo musl-gcc -idirafter /usr/include/x86_64-linux-gnu -idirafter /usr/include)
+# Captured before any XDIR block prepends a cross toolchain's bin/ directory, so ASAN
+# builds can restore it and use the host's `as` instead of an old cross-toolchain `as`.
+HOSTPATH := $(PATH)
 
-# Need to be separate for dependency generation	
-INCDIRS = -I. -Iopenssl/include -Imicrostack -Imicroscript -Imeshcore -Imeshconsole
+# Kept separate because dependency generation needs the include directories on their own.
+INCDIRS = -I. $(OSSLINC) -Ilib-jpeg-turbo/includes -Imicrostack -Imicroscript -Imeshcore -Imeshconsole
+
+# Warnings show by default and the tree builds clean with -Wall, so a new one is visible at once. WARN=0 hides
+# them with -w, which gcc, clang and GNU ld all take, so one flag covers both compiling and linking.
+WARN ?= 1
+WARNFLAGS = $(if $(filter 0,$(WARN)),-w,)
 
 # Compiler and linker flags
-CFLAGS ?= -std=gnu99 -g -Wall -D_POSIX -DMICROSTACK_PROXY $(CWEBLOG) $(CWATCHDOG) -fno-strict-aliasing $(INCDIRS) -DDUK_USE_DEBUGGER_SUPPORT -DDUK_USE_INTERRUPT_COUNTER -DDUK_USE_DEBUGGER_INSPECT -DDUK_USE_DEBUGGER_PAUSE_UNCAUGHT
+# 64-bit file offsets on the 32-bit targets, so stat() works past 2 GB and readdir() does not fail with EOVERFLOW
+# on 64-bit directory offsets, which is what every readdirSync() returned empty under qemu-user. No effect on 64-bit.
+CFLAGS ?= -std=$(CSTD) -g -Wall -D_POSIX -D_FILE_OFFSET_BITS=64 -DMICROSTACK_PROXY $(CWATCHDOG) -fno-strict-aliasing $(INCDIRS) -DDUK_USE_DEBUGGER_SUPPORT -DDUK_USE_INTERRUPT_COUNTER -DDUK_USE_DEBUGGER_INSPECT -DDUK_USE_DEBUGGER_PAUSE_UNCAUGHT
+# Snapshot before any ARCH_<id> block's `CFLAGS +=` runs (that eval happens further down), so
+# `make list`/print-cflags-extra can show just the per-ARCHID addition, not the whole line.
+BASE_CFLAGS := $(CFLAGS)
 LDFLAGS ?= -L. -lpthread -lutil -lm
-CEXTRA = -D_FORTIFY_SOURCE=2 -Wformat -Wformat-security -fstack-protector -fno-strict-aliasing
-LDEXTRA = 
+LDINT =
 
-WatchDog = 6000000
+WatchDog = 180000
 KVMMaxTile = 0
-SKIPFLAGS = 0
-ifeq ($(AID), 7)
-SKIPFLAGS = 1
-endif
-ifeq ($(AID), 28)
-SKIPFLAGS = 1
-endif
-ifeq ($(AID), 9)
-SKIPFLAGS = 1
-endif
-ifeq ($(AID), 13)
-SKIPFLAGS = 1
-endif
-ifeq ($(AID), 25)
-SKIPFLAGS = 1
-endif
+
+# One directory per target and variant under build/, so the binary, its unstripped DEBUG_ copy,
+# the objects, a build-stamp.txt recording what produced the binary, and the agent's runtime
+# side-files (.msh, .db and .log) stay with their own arch.
+# Switching ARCHID therefore needs no `make clean`, and -MMD -MP tracks header changes.
+OUTDIR  = build/$(ARCHNAME)$(EXENAME2)$(if $(DEBUG),-debug)
+OUTBIN  = $(OUTDIR)/$(EXENAME)_$(ARCHNAME)$(EXENAME2)
+OBJDIR  = $(OUTDIR)/obj
+OBJECTS = $(patsubst %.c,$(OBJDIR)/%.o,$(SOURCES))
 
 ifeq ($(FIPS),1)
 DYNAMICTLS = 1
 NOWEBRTC = 1
 endif
 
-ifeq ($(ARCHID),33)
-ARCHNAME = alpine-x86-64
-CC = $(MUSL_CC)
-KVM=0
-CRASH_HANDLER=0
+# Cross-compiler roots. The version-less names are symlinks created by ./fetch-toolchains.sh,
+# so bumping a toolchain does not also mean editing this makefile. The pinned Bootlin and
+# musl.cc paths match the toolchains the OpenSSL archives were built with.
+PATH_X86 = ../ToolChains/x86-i686-glibc/
+PATH_X86_64 = ../ToolChains/x86-64-glibc/
+PATH_MIPS = ../ToolChains/mips32el-uclibc/
+PATH_MIPS24KC = ../ToolChains/toolchain-mips_24kc_musl/
+PATH_MIPSEL24KC = ../ToolChains/toolchain-mipsel_24kc_musl/
+PATH_OPENWRT_X86_64 = ../ToolChains/toolchain-x86_64_musl/
+PATH_ARM5 = ../ToolChains/armv5-eabi-glibc/
+PATH_LINARO = ../ToolChains/armv7-eabihf-glibc/
+PATH_AARCH64 = ../ToolChains/aarch64-glibc/
+PATH_SPARC64 = ../ToolChains/sparc64-glibc/
+PATH_POWERPC64LE = ../ToolChains/powerpc64le-glibc/
+PATH_AARCH64_CORTEXA53 = ../ToolChains/toolchain-aarch64_generic_musl/
+PATH_ARMADA370_HF = ../ToolChains/arm-linux-musleabihf-cross/
+PATH_X86_64_MUSL = ../ToolChains/x86_64-linux-musl-cross/
+PATH_RPI = ../ToolChains/arm-rpi-4.9.3-linux-gnueabihf/
+# Vendor T-Head Xuantie C906 musl SDK. It has no public upstream URL, so it was built from
+# source once and mirrored at PTR-inc/meshagent-toolchains/TC, which is what
+# ./fetch-toolchains.sh riscv64-xthead downloads. See ARCH_45 below.
+PATH_RISCV64 = ../ToolChains/riscv64-linux-musl-x86_64/
+PATH_RISCV64_MUSL = ../ToolChains/riscv64-linux-musl-cross/
+PATH_RISCV32_MUSL = ../ToolChains/riscv32-linux-musl-cross/
+
+# Zig's bundled Clang, for CCOVERRIDE - see its own doc comment above the target table. Zig's own
+# layout has no bin/ subdirectory (the binary sits at $(PATH_ZIG)zig directly, unlike a normal
+# cross toolchain), so CCOVERRIDE lines reference it as $(PATH_ZIG)zig, not $(PATH_ZIG)bin/zig.
+PATH_ZIG = ../ToolChains/zig/
+
+# ----------------------------------------------------------------------------
+# Target table, one block per ARCHID, sorted. ARCHNAME is the only required field.
+#   ARCHNAME  binary suffix, and also the jpeg archive directory
+#   OSSLTARGET the openssl/build/targets.sh target whose prefix openssl/$(OSSLVER)/<target>/ this links
+#   OSSLVER   optional, pins this target to another installed OpenSSL series than openssl/VERSION
+#   CLASS     one of generic, openwrt, vendor, native, bsd or macos (used by make list-archs)
+#   XDIR      SDK root, from which PATH, STAGING_DIR, CC, STRIP and INCDIRS are derived
+#   XPREFIX   gcc and strip prefix inside $(XDIR)bin/. XSTRIP overrides it for strip only
+#   XTRIPLE   triple subdirectory added to PATH. XSYSROOT=1 also passes --sysroot=$(XDIR)
+#   CCOVERRIDE  replaces the whole $(XDIR)bin/$(XPREFIX)gcc[...] rule wholesale when set - the
+#             compiler command verbatim (may be multi-word, e.g. a `zig cc -target ...` line;
+#             CCBIN's $(firstword $(CC)) already handles that for the toolchain-presence check).
+#             XSYSROOT's implicit --sysroot=$(XDIR) is NOT applied on top - bake --sysroot into
+#             CCOVERRIDE itself if the override needs one. XDIR/XPREFIX/XTRIPLE keep governing
+#             STRIP/PATH/INCDIRS as usual, so a real toolchain directory can stay in place for
+#             those while only the compiler swaps out - point XDIR at a directory with no real
+#             toolchain only if STRIP is not needed either (or is separately overridden via
+#             XSTRIP with its own real path). A zig cc override specifically needs
+#             -Wno-date-time added (zig's clang errors on ScriptContainer.c's __TIME__/__DATE__
+#             use by default; neither the vendor toolchains nor upstream clang/gcc do) - see
+#             ARCH_45's CCOVERRIDE for a worked example, including the CFLAGS reasons above.
+#             `zig cc` also embeds DWARF debug info by default even with no -g flag on the
+#             command line (unlike plain clang/gcc). The agent's own objects keep that, so a
+#             zig-built ARCHID's DEBUG_ binary (see STRIP_AND_SYMBOLCP below) resolves real
+#             file/line frames while $(STRIP) removes it from the shipped OUTBIN. The OpenSSL
+#             archives are built with -g0 since 2026-09-04 (openssl/build/targets.sh), so
+#             frames inside OpenSSL only resolve when linking a <target>-debug prefix.
+#   BSDREL    bsd class only, the OS release used for the default cross-build triple and sysroot
+#   TUNE      the -march, -mcpu and -mabi flags for this silicon
+#   HARDEN    one of full (the default), basic or none
+#   NOLDHARDEN 1 = old binutils, so link without -z noexecstack, -z relro and -z now
+#   KVM LMS   feature defaults
+# ----------------------------------------------------------------------------
+
+# Bootlin x86-i686 glibc 2.24 (pinned), its oldest published x86 release (stable-2017.05),
+# rather than host gcc -m32, because apt toolchains floor at GLIBC_2.34. A glibc 2.17 floor
+# would be lower still but has no working toolchain source.
+define ARCH_5
+  ARCHNAME = x86
+  OSSLTARGET = linux-i686-glibc
+  CLASS    = generic
+  XDIR     = $(PATH_X86)
+  XPREFIX  = i686-linux-
+  XTRIPLE  = i686-buildroot-linux-gnu
+  FETCH    = bootlin-x86
+  # 2026-08-30: CC moved to zig via CCOVERRIDE - same glibc 2.24 floor as the Bootlin toolchain
+  # it replaces (linux-i686-glibc's own OSSLTARGET pin). XDIR/XPREFIX/XTRIPLE/FETCH untouched, so
+  # the Bootlin toolchain stays in place for STRIP.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target x86-linux-gnu.2.24 -Wno-date-time
+  # zig's bundled lld does not resolve -l:lib-jpeg-turbo/.../libturbojpeg.a (a slash-containing
+  # name passed to the GNU-ld/gold -l: exact-filename extension) the way GNU ld does - "unable to
+  # find library". LEGACY_LD's plain-relative-path linking already exists for exactly this class
+  # of linker difference and works identically well with lld.
+  LEGACY_LD = 1
+  KVM      = 1
+  LMS      = 1
+endef
+
+# Bootlin x86-64-core-i7 glibc 2.24 (pinned), the same floor fix as ARCH_5.
+# TUNE resets -march=core-i7 back to generic because this target must not inherit it.
+define ARCH_6
+  ARCHNAME = x86-64
+  OSSLTARGET = linux-x86_64-glibc
+  CLASS    = generic
+  XDIR     = $(PATH_X86_64)
+  XPREFIX  = x86_64-linux-
+  XTRIPLE  = x86_64-buildroot-linux-gnu
+  FETCH    = bootlin-x86-64
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same glibc 2.24 floor. TUNE dropped, not just
+  # replaced: zig's -march=/-mtune= route through a -mcpu= lookup with no 'x86-64'/'generic'
+  # entries ("unknown target CPU"), unlike real clang/gcc - and zig's default x86_64 baseline is
+  # already generic, so the override was only ever needed for the old core-i7-named toolchain.
+  # Previously: TUNE = -march=x86-64 -mtune=generic.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target x86_64-linux-gnu.2.24 -Wno-date-time
+  # See ARCH_5's comment: zig's lld needs LEGACY_LD's plain-relative-path libjpeg linking.
+  LEGACY_LD = 1
+  KVM      = 1
+  LMS      = 1
+endef
+
+# mipsel on uClibc (Bootlin mips32el, pinned). The linux/mips directory is big-endian,
+# this target uses linux/mipsel. The toolchain matches the uClibc family the OpenSSL
+# archive was built with.
+define ARCH_7
+  ARCHNAME = mips
+  OSSLTARGET = linux-mips32r1el-musl
+  CLASS    = vendor
+  XDIR     = $(PATH_MIPS)
+  XPREFIX  = mipsel-linux-
+  XTRIPLE  = mipsel-buildroot-linux-uclibc
+  FETCH    = bootlin-mipsel-uclibc
+  HARDEN   = basic
+  NOLDHARDEN = 1
+  CFLAGS  += -DBADMATH
+  # 2026-08-31: dynamic uClibc -> static musl. The old binary needed a compatible uClibc-ng on the
+  # device itself, which nothing here can guarantee, so it now carries its own libc. zig defaults
+  # this triple to mips32r2, so -mcpu=mips32 pins the MIPS32r1 baseline the target exists for.
+  # The Bootlin uClibc toolchain stays in XDIR/XPREFIX/XTRIPLE/FETCH only to supply STRIP, the
+  # same way ARCH_28 and ARCH_40 keep their OpenWrt toolchains - nothing links uClibc any more.
+  # XTRIPLE still reading uclibc is what keeps NOILIBSTACKDEBUG off, which musl needs too.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target mipsel-linux-musleabi -mcpu=mips32 -Wno-date-time
+  LDINT    = -static
+  IPADDR_MONITOR_DISABLE = 1
+  IFADDR_DISABLE = 1
+  KVM      = 0
+  LMS      = 0
+endef
+
+# ARMv5TE armel using Bootlin armv5-eabi glibc 2.31 (pinned) rather than apt's gcc, whose
+# floor is GLIBC_2.34. Its binutils 2.33.1 handles hardening fine, so HARDEN=basic.
+define ARCH_9
+  ARCHNAME = arm
+  OSSLTARGET = linux-armv5sf-glibc
+  CLASS    = generic
+  XDIR     = $(PATH_ARM5)
+  XPREFIX  = arm-linux-
+  XTRIPLE  = arm-buildroot-linux-gnueabi
+  FETCH    = bootlin-armv5
+  HARDEN   = basic
+  CFLAGS  += -D_NOFSWATCHER
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same glibc 2.31 floor.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target arm-linux-gnueabi.2.31 -Wno-date-time
+  KVM      = 0
+  LMS      = 0
+endef
+
+# macOS uses Xcode clang on a Mac and osxcross when cross-built from Linux (see the CLASS=macos
+# block below). The 10.15 floor lets clang resolve the @available check in mac_kvm.c statically,
+# because osxcross ships no compiler-rt for ___isPlatformVersionAtLeast.
+define ARCH_16
+  ARCHNAME = osx-x86-64
+  OSSLTARGET = macos-x86_64
+  CLASS    = macos
+  OSXARCH  = x86_64
+  MACOSARCH = -mmacosx-version-min=10.15
+  KVM      = 1
+  LMS      = 0
+  HOST     = darwin
+  FETCH    = osxcross
+endef
+
+# Same toolchain as ARCH_5, see there.
+define ARCH_19
+  ARCHNAME = x86
+  OSSLTARGET = linux-i686-glibc
+  CLASS    = generic
+  XDIR     = $(PATH_X86)
+  XPREFIX  = i686-linux-
+  XTRIPLE  = i686-buildroot-linux-gnu
+  FETCH    = bootlin-x86
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same glibc 2.24 floor as ARCH_5.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target x86-linux-gnu.2.24 -Wno-date-time
+  EXENAME2 = _nokvm
+  KVM      = 0
+  LMS      = 1
+endef
+
+# Same toolchain as ARCH_6, see there.
+define ARCH_20
+  ARCHNAME = x86-64
+  OSSLTARGET = linux-x86_64-glibc
+  CLASS    = generic
+  XDIR     = $(PATH_X86_64)
+  XPREFIX  = x86_64-linux-
+  XTRIPLE  = x86_64-buildroot-linux-gnu
+  FETCH    = bootlin-x86-64
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same reasoning and same glibc 2.24 floor as
+  # ARCH_6. Previously: TUNE = -march=x86-64 -mtune=generic.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target x86_64-linux-gnu.2.24 -Wno-date-time
+  EXENAME2 = _nokvm
+  KVM      = 0
+  LMS      = 1
+endef
+
+# ARMv7 hardfloat using Bootlin armv7-eabihf glibc 2.31 (pinned) rather than apt's gcc,
+# whose floor is GLIBC_2.34.
+define ARCH_24
+  ARCHNAME = arm-linaro
+  OSSLTARGET = linux-armv7hf-glibc
+  CLASS    = generic
+  XDIR     = $(PATH_LINARO)
+  XPREFIX  = arm-linux-
+  XTRIPLE  = arm-buildroot-linux-gnueabihf
+  FETCH    = bootlin-armv7hf
+  HARDEN   = basic
+  CFLAGS  += -D_NOFSWATCHER
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same glibc 2.31 floor.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target arm-linux-gnueabihf.2.31 -Wno-date-time
+  # See ARCH_5's comment: zig's lld needs LEGACY_LD's plain-relative-path libjpeg linking.
+  LEGACY_LD = 1
+  # 2026-08-31: KVM on. This is the ARMv7 32-bit target, so it covers every Pi from the 2 up on a
+  # 32-bit userland, which ARCH_25 no longer does now that ARCH_25 is a real ARMv6 build.
+  # No arm-linaro jpeg archive exists, and the ARMv6 one links and runs here - see JPEGARCH.
+  JPEGARCH = arm6hf
+  KVM      = 1
+  LMS      = 0
+endef
+
+# Cross-compiles by default. CROSS=0 builds natively on the Pi instead.
+# Raspberry Pi 1 and Zero / Zero W, the ARM1176JZF-S boards: ARMv6 with VFPv2, which no
+# Debian-style armhf toolchain defaults to - both apt's gcc and zig's own default land on
+# ARMv7+VFPv3. 2026-08-31: -mcpu=arm1176jzf_s makes this the ARMv6 build the target was always
+# named for; measured before that, the shipped binary was v7 and could not run on a Pi 1 or Zero
+# at all, even though the committed lib-jpeg-turbo/linux/arm6hf archive is v6/VFPv2. Pi 2 and
+# newer are ARCH_24's, which is the same 32-bit userland one ISA level up.
+# glibc 2.28 is Raspbian Buster, the oldest Pi OS still seen in the field.
+define ARCH_25
+  ARCHNAME = arm6hf
+  OSSLTARGET = linux-armv6hf-glibc
+  CLASS    = generic
+  CC       = $(PATH_ZIG)zig cc -target arm-linux-gnueabihf.2.28 -mcpu=arm1176jzf_s -Wno-date-time
+  STRIP    = arm-linux-gnueabihf-strip
+  # See ARCH_5's comment: zig's lld needs LEGACY_LD's plain-relative-path libjpeg linking.
+  LEGACY_LD = 1
+  HARDEN   = none
+  NOLDHARDEN = 1
+  KVM      = 1
+  LMS      = 0
+  APTPKG   = binutils-arm-linux-gnueabihf
+endef
+
+# apt gcc-aarch64-linux-gnu is a real cross toolchain, so this target is not HOST-gated and
+# builds from any machine.
+define ARCH_26
+  ARCHNAME = arm64
+  OSSLTARGET = linux-aarch64-glibc
+  CLASS    = generic
+  # 2026-08-30: CC moved to zig directly, not via the CCOVERRIDE indirection every other switched
+  # ARCH block uses: this one sets CC without going through XDIR/XPREFIX, and an inline
+  # CCOVERRIDE-conditional CC line does not work placed in the same define block as CCOVERRIDE's
+  # own assignment - a define block's whole text expands in one pass when eval'd (standard
+  # recursive-variable behaviour), so CC's reference would resolve before CCOVERRIDE's own line
+  # in the same block took effect, always empty (worse: writing that literal construct out again
+  # here as an example, even inside a comment, was tried and caused a genuine Make "Recursive
+  # variable references itself" parse error - a comment inside a define block is not safe from
+  # expansion the way an ordinary makefile comment is, so avoid writing eval/override syntax
+  # in prose here at all). The shared ifdef-XDIR rule avoids the whole problem because it lives
+  # outside any eval'd block, deferred until real use - not an option for a block that sets its
+  # own CC directly.
+  # Pinned to glibc 2.40 on request, which keeps this ARCHID the "general/newest" aarch64 target
+  # and widens the gap from ARCH_32's older 2.31 pin - see targets.sh's own comment on why one
+  # archive serves both. The pin is a ceiling, not a floor: it lets the linker pick each symbol's
+  # newest version up to 2.40, so the binary now needs GLIBC_2.38 where the unpinned build needed
+  # 2.29. That is Ubuntu 24.04 or Debian 13 and newer, and it excludes Debian 12 (2.36), Ubuntu
+  # 22.04 (2.35) and RHEL 9 (2.34). The 2.38 requirement comes from __isoc23_sscanf,
+  # __isoc23_strtoull and fmod, which glibc versioned at 2.38.
+  # Previously: -target aarch64-linux-gnu (unpinned), and before that CC = aarch64-linux-gnu-gcc.
+  CC       = $(PATH_ZIG)zig cc -target aarch64-linux-gnu.2.40 -Wno-date-time
+  # See ARCH_5's comment: zig's lld needs LEGACY_LD's plain-relative-path libjpeg linking.
+  LEGACY_LD = 1
+  STRIP    = aarch64-linux-gnu-strip
+  HARDEN   = none
+  KVM      = 1
+  LMS      = 0
+  APTPKG   = gcc-aarch64-linux-gnu
+endef
+
+define ARCH_28
+  ARCHNAME = mips24kc
+  OSSLTARGET = linux-mips32r2eb-musl
+  CLASS    = openwrt
+  XDIR     = $(PATH_MIPS24KC)
+  XPREFIX  = mips-openwrt-linux-musl-
+  XTRIPLE  = mips-openwrt-linux-musl
+  XSYSROOT = 1
+  FETCH    = openwrt-mips24kc
+  HARDEN   = basic
+  NOLDHARDEN = 1
+  CFLAGS  += -DBADMATH
+  # 2026-08-30: CC moved to zig via CCOVERRIDE. XSYSROOT's implicit --sysroot=$(XDIR) does not
+  # apply on top of an override (see CCOVERRIDE's own doc comment) - not needed anyway, zig
+  # bundles its own musl headers for this target, same as every other zig-switched musl OpenSSL
+  # target this session (no --sysroot was needed for any of them either). soft-float musleabi:
+  # OpenWrt's mips24kc toolchain defaults to soft-float, confirmed via -Q --help=target when this
+  # was first established on the OpenSSL side. XDIR/XPREFIX/XTRIPLE/FETCH untouched, so the
+  # OpenWrt toolchain stays in place for STRIP.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target mips-linux-musleabi -Wno-date-time
+  KVM      = 0
+  LMS      = 0
+endef
+
+# No -target here, because it overrides the triple the osxcross wrapper derives from argv0 and
+# silently breaks its ld64 selection. -arch on a Mac and the prefixed clang under osxcross
+# already fix the target, so the version floor is all that is left to state.
+define ARCH_29
+  ARCHNAME = osx-arm-64
+  OSSLTARGET = macos-arm64
+  CLASS    = macos
+  OSXARCH  = arm64
+  MACOSARCH = -mmacosx-version-min=11.0
+  KVM      = 1
+  LMS      = 0
+  HOST     = darwin
+  FETCH    = osxcross
+endef
+
+define ARCH_30
+  ARCHNAME = freebsd_x86-64
+  OSSLTARGET = freebsd-x86_64
+  CLASS    = bsd
+  CC       = clang
+  CFLAGS  += -I/usr/local/include
+  KVM      = 0
+  LMS      = 0
+  HOST     = freebsd
+  BSDREL   = 14.3
+endef
+
+# Legacy-ABI arm64 compatibility target using Bootlin aarch64--glibc--stable (2.31, pinned),
+# which matches the toolchain the OpenSSL archive was built with.
+define ARCH_32
+  ARCHNAME = aarch64
+  OSSLTARGET = linux-aarch64-glibc
+  CLASS    = generic
+  XDIR     = $(PATH_AARCH64)
+  XPREFIX  = aarch64-linux-
+  XTRIPLE  = aarch64-buildroot-linux-gnu
+  FETCH    = bootlin-aarch64
+  HARDEN   = basic
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, glibc 2.31 floor pinned (unlike ARCH_26's own
+  # linux-aarch64-glibc row, deliberately - see its comment for why).
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target aarch64-linux-gnu.2.31 -Wno-date-time
+  # See ARCH_5's comment: zig's lld needs LEGACY_LD's plain-relative-path libjpeg linking.
+  LEGACY_LD = 1
+  KVM      = 1
+  LMS      = 0
+endef
+
+# musl.cc x86_64-linux-musl-cross is a standalone toolchain with its own kernel UAPI headers.
+# The host's musl-gcc is not usable because a glibc multiarch host has no plain
+# /usr/include/asm and its headers conflict with glibc's own.
+define ARCH_33
+  ARCHNAME = alpine-x86-64
+  OSSLTARGET = linux-x86_64-musl
+  CLASS    = generic
+  XDIR     = $(PATH_X86_64_MUSL)
+  XPREFIX  = x86_64-linux-musl-
+  XTRIPLE  = x86_64-linux-musl
+  FETCH    = muslcc-x86_64
+  # 2026-08-30: CC moved to zig via CCOVERRIDE.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target x86_64-linux-musl -Wno-date-time
+  KVM      = 0
+  LMS      = 1
+endef
+
+# musl.cc arm-linux-musleabihf, matching the toolchain the OpenSSL archive was built with.
+# Previously the agent was glibc and could not link against the musl archive at all.
+#
+define ARCH_35
+  ARCHNAME = linux-armada370-hf
+  OSSLTARGET = linux-armv7hf-musl
+  CLASS    = vendor
+  XDIR     = $(PATH_ARMADA370_HF)
+  XPREFIX  = arm-linux-musleabihf-
+  XTRIPLE  = arm-linux-musleabihf
+  FETCH    = muslcc-armhf
+  HARDEN   = basic
+  # 2026-08-30: CC moved to zig via CCOVERRIDE. TUNE dropped entirely, not just replaced: the
+  # -linux-musleabihf triple already encodes hardfloat, and zig's -march= routes through a
+  # -mcpu= lookup with no 'armv7-a' entry (same class of error as x86_64/riscv above) - confirmed
+  # dropping it entirely still compiles clean. Previously:
+  # TUNE = -march=armv7-a -marm -mfpu=vfp -mfloat-abi=hard.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target arm-linux-musleabihf -Wno-date-time
+  KVM      = 0
+  LMS      = 0
+  # Real hardware here runs vendor glibc firmware, not a musl userland, so unlike the OpenWrt
+  # musl ARCHIDs there is no musl loader on the device. Linked static, or the binary cannot
+  # find /lib/ld-musl-armhf.so.1 and will not start at all.
+  LDINT    = -static
+endef
+
+define ARCH_36
+  ARCHNAME = openwrt_x86_64
+  OSSLTARGET = linux-x86_64-musl
+  CLASS    = openwrt
+  XDIR     = $(PATH_OPENWRT_X86_64)
+  XPREFIX  = x86_64-openwrt-linux-musl-
+  XTRIPLE  = x86_64-openwrt-linux-musl
+  XSYSROOT = 1
+  FETCH    = openwrt-openwrt_x86_64
+  HARDEN   = basic
+  CFLAGS  += -DBADMATH
+  # 2026-08-30: CC moved to zig via CCOVERRIDE - see ARCH_28's comment on why XSYSROOT's implicit
+  # --sysroot is neither applied nor needed here.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target x86_64-linux-musl -Wno-date-time
+  KVM      = 0
+  LMS      = 0
+endef
+
+define ARCH_37
+  ARCHNAME = openbsd_x86-64
+  OSSLTARGET = openbsd-x86_64
+  CLASS    = bsd
+  CC       = clang
+  CFLAGS  += -I/usr/local/include
+  KVM      = 0
+  LMS      = 0
+  HOST     = openbsd
+  BSDREL   = 7.9
+endef
+
+define ARCH_40
+  ARCHNAME = mipsel24kc
+  OSSLTARGET = linux-mips32r2el-musl
+  CLASS    = openwrt
+  XDIR     = $(PATH_MIPSEL24KC)
+  XPREFIX  = mipsel-openwrt-linux-musl-
+  XTRIPLE  = mips-openwrt-linux-musl
+  XSYSROOT = 1
+  FETCH    = openwrt-mipsel24kc
+  HARDEN   = basic
+  CFLAGS  += -DBADMATH
+  # 2026-08-30: CC moved to zig via CCOVERRIDE - see ARCH_28's comment (soft-float, and why
+  # XSYSROOT's implicit --sysroot is neither applied nor needed here).
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target mipsel-linux-musleabi -Wno-date-time
+  KVM      = 0
+  LMS      = 0
+endef
+
+define ARCH_41
+  ARCHNAME = aarch64-cortex-a53
+  OSSLTARGET = linux-aarch64-musl
+  CLASS    = openwrt
+  XDIR     = $(PATH_AARCH64_CORTEXA53)
+  XPREFIX  = aarch64-openwrt-linux-
+  XTRIPLE  = aarch64-openwrt-linux-musl
+  HARDEN   = basic
+  FETCH    = openwrt-aarch64-cortex-a53
+  # 2026-08-30: CC moved to zig via CCOVERRIDE.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target aarch64-linux-musl -Wno-date-time
+  KVM      = 0
+  LMS      = 0
+endef
+
+# The original ARCHID=45 target, restored as it was before commit a4ce0e3 swapped it for a
+# generic build. It needs the T-Head Xuantie C906 vendor musl
+# SDK at PATH_RISCV64. Its OpenSSL archive is the generic rv64gc one.
+define ARCH_45
+  ARCHNAME = riscv64
+  OSSLTARGET = linux-riscv64-musl
+  CLASS    = vendor
+  XDIR     = $(PATH_RISCV64)
+  XPREFIX  = riscv64-unknown-linux-musl-
+  XTRIPLE  = riscv64-unknown-linux-musl
+  # 2026-08-30: CC moved to zig via CCOVERRIDE (see its own doc comment above the target table).
+  # Investigated reaching the T-Head extension set through zig first: LLVM's riscv64 backend has
+  # no -mcpu= alias for c906fdv (only baseline_rv32/baseline_rv64/generic/sifive-*/etc.), and
+  # while the vendor gcc's 20 individual extensions do parse one at a time via
+  # -Xclang -target-feature -Xclang +xtheadXXX, 4 of them - including the flagship xtheadvector -
+  # silently downgrade to "ignoring feature" when combined (LLVM 20.1.2/21.1.0/22.1.8 alike).
+  # Nothing in this codebase has a correctness dependency on any of it either way: OpenSSL 1.1.1
+  # ships zero RISC-V asm, and the only RISC-V-conditional code here is Duktape's portable
+  # __riscv/__riscv_xlen check. So this now matches ARCH_46 exactly rather than attempt a partial,
+  # 16-of-20 vendor-extension reconstruction for unmeasured benefit - see meshagent-zig-toolchain.md.
+  # -march=rv64gc is dropped (not just replaced) because zig's -target riscv64-linux-musl already
+  # defaults to the RV64GC feature set, and zig's own -march= is not clang's - it resolves to a
+  # -mcpu= lookup with no 'rv64gc' entry ("unknown CPU: 'rv64gc'"), unlike real clang/gcc.
+  # XDIR/XPREFIX/XTRIPLE/FETCH are untouched - the vendor toolchain stays in place for STRIP,
+  # since CCOVERRIDE only replaces CC.
+  # Previously: TUNE = -mcpu=c906fdv -mcmodel=medany -mabi=lp64d (on this toolchain - gcc 14.1.1
+  # from the XuanTie fork - -mcpu=c906fdv alone expands to the full T-Head extension set; the
+  # original vendor gcc 10.2.0 spelling -march=rv64imafdcv0p7xthead is rejected here because
+  # 'xthead' is no longer a single extension name).
+  # -Wno-date-time: zig's clang treats -Wdate-time as an error by default (a reproducibility
+  # guard neither upstream clang nor gcc enable on their own), which the vendor gcc never hit.
+  # microscript/ILibDuktape_ScriptContainer.c's __TIME__/__DATE__ compileTime string trips it -
+  # this will hit any future CCOVERRIDE'd ARCH_<id> block too, not just this one.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target riscv64-linux-musl -Wno-date-time
+  TUNE     = -mabi=lp64d
+  HARDEN   = basic
+  KVM      = 0
+  LMS      = 0
+  LDINT    = -static
+  FETCH    = riscv64-xthead
+endef
+
+# Generic RISC-V64 (rv64gc, no vendor extensions), musl, static - same reason as ARCH_35: real
+# hardware has no musl loader built in.
+define ARCH_46
+  ARCHNAME = riscv64-generic
+  OSSLTARGET = linux-riscv64-musl
+  CLASS    = generic
+  XDIR     = $(PATH_RISCV64_MUSL)
+  XPREFIX  = riscv64-linux-musl-
+  XTRIPLE  = riscv64-linux-musl
+  HARDEN   = basic
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same as ARCH_45 (see its own comment for the
+  # full riscv64/zig writeup, including why -march=rv64gc is dropped rather than kept - zig's
+  # target already defaults to the RV64GC feature set, and its -march= isn't clang's).
+  # Previously: TUNE = -march=rv64gc -mabi=lp64d.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target riscv64-linux-musl -Wno-date-time
+  TUNE     = -mabi=lp64d
+  KVM      = 0
+  LMS      = 0
+  LDINT    = -static
+  FETCH    = muslcc-riscv64
+endef
+
+# Generic RISC-V32 (rv32gc), musl, static - same reasoning as ARCH_46, 32-bit instead of 64.
+# OpenSSL 1.1.1 has no riscv32 Configure target at all (only linux64-riscv64/BSD-riscv64 exist),
+# so this Configures as linux-generic32 like arm/arm-linaro/pogo - no asm regardless of flags.
+#
+# On direct request this reports SERVER_ARCHID=45 (the classic RISC-V64 identity), even though 45
+# is really a 64-bit board and this one is 32-bit. This was pointed out and approved before it was
+# built.
+define ARCH_47
+  ARCHNAME = riscv32-generic
+  OSSLTARGET = linux-riscv32-musl
+  CLASS    = generic
+  XDIR     = $(PATH_RISCV32_MUSL)
+  XPREFIX  = riscv32-linux-musl-
+  XTRIPLE  = riscv32-linux-musl
+  HARDEN   = basic
+  # 2026-08-30: CC moved to zig via CCOVERRIDE - same -march=rv32gc-dropped reasoning as
+  # ARCH_46/ARCH_45 (confirmed separately for riscv32: 'unknown CPU: rv32gc').
+  # Previously: TUNE = -march=rv32gc -mabi=ilp32d.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target riscv32-linux-musl -Wno-date-time
+  TUNE     = -mabi=ilp32d
+  KVM      = 0
+  LMS      = 0
+  LDINT    = -static
+  FETCH    = muslcc-riscv32
+  SERVER_ARCHID = 45
+endef
+
+# Generic SPARC64 (SPARC V9), glibc, dynamic - no vendor hardware target, built purely as a
+# reference/CI target the same way riscv32-generic (47) is. Reports itself to the server as 45
+# (the classic RISC-V64 identity), the same SERVER_ARCHID override ARCH_47 uses, on direct request.
+# No real hardware relationship to 45 exists; this is only reusing an already-known agent identity.
+define ARCH_60
+  ARCHNAME = sparc64-generic
+  OSSLTARGET = linux-sparc64-glibc
+  CLASS    = generic
+  XDIR     = $(PATH_SPARC64)
+  XPREFIX  = sparc64-linux-
+  XTRIPLE  = sparc64-linux-gnu
+  HARDEN   = basic
+  KVM      = 0
+  LMS      = 0
+  FETCH    = bootlin-sparc64
+  SERVER_ARCHID = 45
+endef
+
+# Generic PowerPC64LE (POWER8), glibc, dynamic - same reasoning as ARCH_60: no vendor hardware,
+# built as a reference/CI target, and reports SERVER_ARCHID=45 on the same on-purpose basis.
+# Unlike sparc64, OpenSSL's ppc64_asm modules are real and maintained, so asm stays enabled.
+define ARCH_70
+  ARCHNAME = powerpc64le-generic
+  OSSLTARGET = linux-ppc64le-glibc
+  CLASS    = generic
+  XDIR     = $(PATH_POWERPC64LE)
+  XPREFIX  = powerpc64le-linux-
+  XTRIPLE  = powerpc64le-linux-gnu
+  HARDEN   = basic
+  # 2026-08-30: CC moved to zig via CCOVERRIDE, same glibc 2.31 floor.
+  CCOVERRIDE = $(PATH_ZIG)zig cc -target powerpc64le-linux-gnu.2.31 -Wno-date-time
+  KVM      = 0
+  LMS      = 0
+  FETCH    = bootlin-powerpc64le
+  SERVER_ARCHID = 45
+endef
+
+$(eval $(ARCH_$(ARCHID)))
+
+# SERVER_ARCHID is the id reported to the server (MESH_AGENTID). It defaults to ARCHID itself; an
+# ARCH_ block sets it directly when the target should report a different, classic id instead (see
+# ARCH_47, ARCH_60, ARCH_70) - ?= leaves that override in place.
+SERVER_ARCHID ?= $(ARCHID)
+# `make all` with no ARCHID is the build-every-out-of-date-target loop, the same meaning `all` has
+# in openssl/build/build.sh. It selects no target of its own, it only drives one sub-make per
+# ARCHID, so it has to reach its recipe without tripping the guard below.
+ALLLOOP := $(if $(ARCHID),,$(filter all,$(MAKECMDGOALS)))
+
+# These goals do not need a target selected.
+ifeq ($(ALLLOOP)$(filter $(MAKECMDGOALS),list list-archs listflags list-flags flags print-archids clean cleanbin update-modules),)
+$(if $(ARCHNAME),,$(error unknown or missing ARCHID '$(ARCHID)' - run 'make list'))
 endif
 
-ifeq ($(ARCHID),32)
-ARCHNAME = aarch64
-export PATH := $(PATH_AARCH64)bin:$(PATH_AARCH64)libexec/gcc/aarch64-buildroot-linux-gnu/5.4.0:$(PATH_AARCH64)aarch64-buildroot-linux-gnu/bin:$(PATH)
-export STAGING_DIR := $(PATH_AARCH64)
-CC = $(PATH_AARCH64)bin/aarch64-linux-gcc 
-STRIP = $(PATH_AARCH64)bin/aarch64-linux-strip
-CEXTRA = -D_FORTIFY_SOURCE=2 -D_NOILIBSTACKDEBUG -D_NOFSWATCHER -Wformat -Wformat-security -fno-strict-aliasing
-INCDIRS += -I$(PATH_AARCH64)include
-KVM = 1
-LMS = 0
-endif
+# CROSS defaults to 1 (cross-compile). Pass CROSS=0 to build natively instead.
+# Assigned with ?= so a command-line CROSS= still wins.
+CROSS ?= 1
 
-ifeq ($(ARCHID),41)
-ARCHNAME = aarch64-cortex-a53
-export PATH := $(PATH_AARCH64_CORTEXA53)bin:$(PATH_AARCH64_CORTEXA53)libexec/gcc/aarch64-openwrt-linux-musl/7.5.0:$(PATH_AARCH64_CORTEXA53)aarch64-openwrt-linux-musl/bin:$(PATH)
-export STAGING_DIR := $(PATH_AARCH64_CORTEXA53)
-CC = $(PATH_AARCH64_CORTEXA53)bin/aarch64-openwrt-linux-gcc
-STRIP = $(PATH_AARCH64_CORTEXA53)bin/aarch64-openwrt-linux-strip
-CEXTRA = -D_FORTIFY_SOURCE=2 -D_NOILIBSTACKDEBUG -D_NOFSWATCHER -Wformat -Wformat-security -fno-strict-aliasing
-INCDIRS += -I$(PATH_AARCH64_CORTEXA53)include
-KVM = 0
-LMS = 0
-endif
-
-
-ifeq ($(ARCHID),35)
-ARCHNAME = linux-armada370-hf
-export PATH := $(PATH_ARMADA370_HF)bin:$(PATH_ARMADA370_HF)libexec/gcc/arm-unknown-linux-gnueabi/7.5.0:$(PATH_ARMADA370_HF)arm-unknown-linux-gnueabi/bin:$(PATH)
-export STAGING_DIR := $(PATH_ARMADA370_HF)
-CC = $(PATH_ARMADA370_HF)bin/arm-unknown-linux-gnueabi-gcc
-STRIP = $(PATH_ARMADA370_HF)bin/arm-unknown-linux-gnueabi-strip
-CEXTRA = -D_FORTIFY_SOURCE=2 -D_NOILIBSTACKDEBUG -D_NOFSWATCHER -Wformat -Wformat-security -fno-strict-aliasing
-INCDIRS += -I$(PATH_AARCH64_CORTEXA53)include
-KVM = 0
-LMS = 0
-endif
-
-
-
-# Official Linux x86 32bit
-ifeq ($(ARCHID),5)
-ARCHNAME = x86
-CC = gcc -m32
-KVM = 1
-LMS = 1
-endif
-
-# Official Linux x86 64bit
-ifeq ($(ARCHID),6)
-ARCHNAME = x86-64
-KVM = 1
-LMS = 1
-endif
-
-# Official macOS x86 64bit
-ifeq ($(ARCHID),16)
-ARCHNAME = osx-x86-64
-KVM = 1
-LMS = 0
-MACOSARCH = -mmacosx-version-min=10.12
-CC = gcc -arch x86_64
-endif
-
-# Official macOS ARM 64bit
-ifeq ($(ARCHID),29)
-ARCHNAME = osx-arm-64
-KVM = 1
-LMS = 0
-MACOSARCH = -target arm64-apple-macos11
-CC = gcc -arch arm64
-endif
-
-
-# Official Linux MIPSEL
-ifeq ($(ARCHID),7)
-ARCHNAME = mips
-CC = $(PATH_MIPS)mipsel-linux-gcc
-STRIP = $(PATH_MIPS)mipsel-linux-strip
-CEXTRA = -D_FORTIFY_SOURCE=2 -D_NOILIBSTACKDEBUG -D_NOFSWATCHER -Wformat -Wformat-security -fno-strict-aliasing -DILIBCHAIN_GLOBAL_LOCK
-CFLAGS += -DBADMATH 
-IPADDR_MONITOR_DISABLE = 1
-IFADDR_DISABLE = 1
-KVM = 0
-LMS = 0
-endif
-
-
-# Official OpenWRT X86_64
-ifeq ($(ARCHID),36)
-ARCHNAME = openwrt_x86_64
-export PATH := $(PATH_OPENWRT_X86_64)bin:$(PATH_OPENWRT_X86_64)libexec/gcc/x86_64-openwrt-linux-musl/7.3.0:$(PATH_OPENWRT_X86_64)x86_64-openwrt-linux-musl/bin:$(PATH)
-export STAGING_DIR := $(PATH_OPENWRT_X86_64)
-CC = $(PATH_OPENWRT_X86_64)bin/x86_64-openwrt-linux-musl-gcc --sysroot=$(PATH_OPENWRT_X86_64)
-STRIP = $(PATH_OPENWRT_X86_64)bin/x86_64-openwrt-linux-musl-strip
-CEXTRA = -D_FORTIFY_SOURCE=2 -D_NOILIBSTACKDEBUG -D_NOFSWATCHER -Wformat -Wformat-security -fno-strict-aliasing
-CFLAGS += -DBADMATH 
-INCDIRS += -I$(PATH_OPENWRT_X86_64)include
-KVM = 0
-LMS = 0
-endif
-
-
-# Official Linux MIPS24KC (OpenWRT)
-ifeq ($(ARCHID),28)
-ARCHNAME = mips24kc
-export PATH := $(PATH_MIPS24KC)bin:$(PATH_MIPS24KC)libexec/gcc/mips-openwrt-linux-musl/7.3.0:$(PATH_MIPS24KC)mips-openwrt-linux-musl/bin:$(PATH)
-export STAGING_DIR := $(PATH_MIPS24KC)
-CC = $(PATH_MIPS24KC)bin/mips-openwrt-linux-musl-gcc --sysroot=$(PATH_MIPS24KC)
-STRIP = $(PATH_MIPS24KC)bin/mips-openwrt-linux-musl-strip
-CEXTRA = -D_FORTIFY_SOURCE=2 -D_NOILIBSTACKDEBUG -D_NOFSWATCHER -Wformat -Wformat-security -fno-strict-aliasing
-CFLAGS += -DBADMATH 
-INCDIRS += -I$(PATH_MIPS24KC)include
-
-KVM = 0
-LMS = 0
-endif
-
-# Official Linux MIPSEL24KC (OpenWRT)
-ifeq ($(ARCHID),40)
-ARCHNAME = mipsel24kc
-export PATH := $(PATH_MIPSEL24KC)bin:$(PATH_MIPSEL24KC)libexec/gcc/mips-openwrt-linux-musl/7.3.0:$(PATH_MIPSEL24KC)mips-openwrt-linux-musl/bin:$(PATH)
-export STAGING_DIR := $(PATH_MIPSEL24KC)
-CC = $(PATH_MIPSEL24KC)bin/mipsel-openwrt-linux-musl-gcc --sysroot=$(PATH_MIPSEL24KC)
-STRIP = $(PATH_MIPSEL24KC)bin/mipsel-openwrt-linux-musl-strip
-CEXTRA = -D_FORTIFY_SOURCE=2 -D_NOILIBSTACKDEBUG -D_NOFSWATCHER -Wformat -Wformat-security -fno-strict-aliasing
-CFLAGS += -DBADMATH 
-INCDIRS += -I$(PATH_MIPSEL24KC)include
-
-KVM = 0
-LMS = 0
-endif
-
-# Official Linux ARMVIRT32 (OpenWRT)
-ifeq ($(ARCHID),44)
-ARCHNAME = armvirt32
-export PATH := $(PATH_OPENWRT_ARMVIRT32)bin:$(PATH_OPENWRT_ARMVIRT32)libexec/gcc/arm-openwrt-linux-muslgnueabi/8.4.0:$(PATH_OPENWRT_ARMVIRT32)arm-openwrt-linux-muslgnueabi/bin:$(PATH)
-export STAGING_DIR := $(PATH_OPENWRT_ARMVIRT32)
-CC = $(PATH_OPENWRT_ARMVIRT32)bin/arm-openwrt-linux-gcc --sysroot=$(PATH_OPENWRT_ARMVIRT32)
-STRIP = $(PATH_OPENWRT_ARMVIRT32)bin/arm-openwrt-linux-muslgnueabi-strip
-CEXTRA = -D_FORTIFY_SOURCE=2 -D_NOILIBSTACKDEBUG -D_NOFSWATCHER -Wformat -Wformat-security -fno-strict-aliasing
-CFLAGS += -DBADMATH 
-INCDIRS += -I$(PATH_OPENWRT_ARMVIRT32)include
-
-KVM = 0
-LMS = 0
-endif
-
-# Official Linux RISC-V 64bit
-ifeq ($(ARCHID),45)
-ARCHNAME = riscv64
-export PATH := $(PATH_RISCV64)bin:$(PATH_RISKV64)libexec/gcc/riscv64-unknown-linux-musl/10.2.0:$(PATH_RISCV64)riscv64-unknown-linux-musl/bin:$(PATH)
-export STAGING_DIR := $(PATH_RISCV64)
-CC = $(PATH_RISCV64)bin/riscv64-unknown-linux-musl-gcc
-STRIP = $(PATH_RISCV64)bin/riscv64-unknown-linux-musl-strip
-CEXTRA = -D_FORTIFY_SOURCE=2 -D_NOILIBSTACKDEBUG -D_NOFSWATCHER -Wformat -Wformat-security -fno-strict-aliasing -mcpu=c906fdv -march=rv64imafdcv0p7xthead -mcmodel=medany -mabi=lp64d
-INCDIRS += -I$(PATH_RISCV64)include
-KVM = 0
-LMS = 0
-endif
-
-# Official Linux ARM
-ifeq ($(ARCHID),9)
-ARCHNAME = arm
-CC = $(PATH_ARM5)arm-none-linux-gnueabi-gcc
-STRIP = $(PATH_ARM5)arm-none-linux-gnueabi-strip
-KVM = 0
-LMS = 0
-CFLAGS += -D_NOFSWATCHER 
-CFLAGS += -DILIBCHAIN_GLOBAL_LOCK
-CEXTRA = -fno-strict-aliasing
-endif
-
-# Official Linux PogoPlug
-ifeq ($(ARCHID),13)
-ARCHNAME = pogo
-CC = $(PATH_POGO)arm-none-linux-gnueabi-gcc
-STRIP = $(PATH_POGO)arm-none-linux-gnueabi-strip
-KVM = 0
-LMS = 0
-CEXTRA = -D_FORTIFY_SOURCE=2 -D_NOILIBSTACKDEBUG -D_NOFSWATCHER -Wformat -Wformat-security -fno-strict-aliasing -DILIBCHAIN_GLOBAL_LOCK
-endif
-
-# Official Linux POKY
-ifeq ($(ARCHID),15)
-ARCHNAME = poky
-CC = $(PATH_POKY)i586-poky-linux-uclibc-gcc --sysroot=../Galileo/arduino-1.5.3/hardware/tools/sysroots/i586-poky-linux-uclibc
-STRIP = $(PATH_POKY)i586-poky-linux-uclibc-strip
-KVM = 0
-LMS = 0
-CFLAGS += -D_NOFSWATCHER
-CEXTRA = -D_FORTIFY_SOURCE=2 -Wformat -Wformat-security -fno-strict-aliasing
-endif
-
-# Official Linux POKY64
-ifeq ($(ARCHID),18)
-ARCHNAME = poky64
-CC = $(PATH_POKY64)x86_64-poky-linux-gcc
-STRIP = $(PATH_POKY64)x86_64-poky-linux-strip
-KVM = 0
-LMS = 0
-CFLAGS += -D_NOFSWATCHER
-#CEXTRA = -D_FORTIFY_SOURCE=2 -Wformat -Wformat-security -fno-strict-aliasing
-endif
-
-# Official Linux x86 32bit NOKVM
-ifeq ($(ARCHID),19)
-ARCHNAME = x86
-CC = gcc -m32
-KVM = 0
-LMS = 1
-EXENAME2=_nokvm
-endif
-
-# Official Linux x86 64bit NOKVM
-ifeq ($(ARCHID),20)
-ARCHNAME = x86-64
-KVM = 0
-LMS = 1
-EXENAME2=_nokvm
-endif
-
-# Official Linux ARM 32bit HardFloat Linaro
-ifeq ($(ARCHID),24)
-ARCHNAME = arm-linaro
-CC = $(PATH_LINARO)arm-linux-gnueabihf-gcc
-STRIP = $(PATH_LINARO)arm-linux-gnueabihf-strip
-KVM = 0
-LMS = 0
-CFLAGS += -D_NOFSWATCHER 
-CEXTRA = -fno-strict-aliasing 
-endif
-
-# Official Linux ARM 32bit HardFloat
+# ARCHID 25 cross-compiles with the zig CC in its own ARCH_25 block, which needs no sysroot and
+# pins the ARMv6 core. CROSS=0 builds natively on the Pi instead, with the apt
+# arm-linux-gnueabihf-gcc; -march is then the board's own, so pass MFLAGS if that board is a Pi 1.
+# 2026-08-31: this used to override CC with the Raspberry Pi buildroot toolchain
+# ($(PATH_RPI)bin/arm-linux-gnueabihf-gcc --sysroot=...), a gcc 4.9.3 from 2015 that also defaults
+# to ARMv7. It stays only as STRIP's source when it happens to be installed.
 ifeq ($(ARCHID),25)
-ARCHNAME = armhf
-ifeq ($(CROSS),1)
-	CC = $(PATH_RPI)bin/arm-linux-gnueabihf-gcc --sysroot=$(PATH_RPI)arm-linux-gnueabihf/sysroot
-	STRIP = $(PATH_RPI)bin/arm-linux-gnueabihf-strip
+ifeq ($(CROSS),0)
+CC = arm-linux-gnueabihf-gcc
+STRIP = arm-linux-gnueabihf-strip
+HOST =
 endif
-KVM = 1
-LMS = 0
-CEXTRA = -fno-strict-aliasing 
 endif
 
-# Official Linux ARM 64bit
-ifeq ($(ARCHID),26)
-ARCHNAME = arm64
-#CC = arm-linux-gnueabihf-gcc
-#STRIP = arm-linux-gnueabihf-strip
-KVM = 1
-LMS = 0
-CEXTRA = -fno-strict-aliasing 
+# BSD targets cross-compile by default with clang and a sysroot, and CROSS=0 builds natively.
+# SYSROOT defaults to the tree shared with env.sh and fetch-toolchains.sh. Assigned with := so
+# HOST and BUILDROOT are captured before the cross guard below clears HOST.
+BSDHOST := $(HOST)
+BSDTRIPLE := x86_64-unknown-$(BSDHOST)$(BSDREL)
+BUILDROOT ?= /opt/buildroot
+ifeq ($(CLASS),bsd)
+ifneq ($(CROSS),0)
+SYSROOT ?= $(BUILDROOT)/sysroots/$(BSDHOST)-$(BSDREL)
+CC = clang --target=$(BSDTRIPLE) --sysroot=$(SYSROOT) -fuse-ld=lld -Wno-unused-command-line-argument
+HOST =
+endif
 endif
 
-# Official Linux ARM 32bit HardFloat on Raspian 7 2015-02-02
-ifeq ($(ARCHID),27)
-ARCHNAME = armhf2
-#CC = arm-linux-gnueabihf-gcc
-#STRIP = arm-linux-gnueabihf-strip
-KVM = 0
-LMS = 0
-CFLAGS += -D_NOFSWATCHER 
-CEXTRA = -fno-strict-aliasing 
+# ---- derived from the target block above ----------------------------------
+# openssl/VERSION is the default. An ARCH_ block may set OSSLVER to pin one target to another
+# installed series, for a staged migration. `make ARCHID=n OSSLVER=3.x.y` beats both, but an
+# OSSLVER environment variable only beats the file, never a block, as make's own rules go.
+# The per-target include dir comes first so its generated opensslconf.h is the one found.
+OSSLVER ?= $(shell tr -d '[:space:]' < openssl/VERSION)
+OSSLPREFIX = openssl/$(OSSLVER)/$(OSSLTARGET)
+OSSLINC = -I$(OSSLPREFIX)/include -Iopenssl/$(OSSLVER)/include
+
+# Optional glibc floor pin, for example `make ARCHID=9 GLIBCVER=2.28`. It repoints XDIR at the
+# version-specific alias that fetch-toolchains.sh creates, for the Bootlin glibc targets only.
+# ARCHID 5, 6, 19 and 20 default to 2.24 but can still opt into a newer pin here.
+BOOTLIN_GLIBC_FETCH = bootlin-x86 bootlin-x86-64 bootlin-armv5 bootlin-armv7hf bootlin-aarch64
+ifdef GLIBCVER
+ifneq ($(filter $(FETCH),$(BOOTLIN_GLIBC_FETCH)),)
+XDIR := $(patsubst %/,%-$(GLIBCVER)/,$(XDIR))
+else
+$(error GLIBCVER is not supported for ARCHID=$(ARCHID) (FETCH=$(FETCH)) - only $(BOOTLIN_GLIBC_FETCH))
+endif
 endif
 
-# Official FreeBSD x86-64
-ifeq ($(ARCHID),30)
-ARCHNAME = freebsd_x86-64
-CC = clang
-CFLAGS += -I/usr/local/include
-KVM = 0
-LMS = 0
+ifdef XDIR
+export PATH := $(XDIR)bin:$(if $(XTRIPLE),$(XDIR)$(XTRIPLE)/bin:,)$(PATH)
+export STAGING_DIR := $(XDIR)
+# CCOVERRIDE replaces this rule wholesale - see its own doc comment above the target table.
+# STRIP/PATH/INCDIRS are untouched by it, so XDIR can still point at a real toolchain directory
+# for those while only the compiler comes from CCOVERRIDE.
+CC = $(if $(CCOVERRIDE),$(CCOVERRIDE),$(XDIR)bin/$(XPREFIX)gcc$(if $(XSYSROOT), --sysroot=$(XDIR),))
+STRIP = $(XDIR)bin/$(if $(XSTRIP),$(XSTRIP),$(XPREFIX))strip
+INCDIRS += -I$(XDIR)include
 endif
 
-# Official OpenBSD x86-64
-ifeq ($(ARCHID),37)
-ARCHNAME = openbsd_x86-64
-CC = clang
-CFLAGS += -I/usr/local/include
-KVM = 0
-LMS = 0
+# ---- toolchain availability -------------------------------------------------
+# FETCH is the ./fetch-toolchains.sh component that installs this target's compiler, and APTPKG
+# is the apt package that does. When neither is set you bring your own compiler (see README).
+CCBIN = $(firstword $(CC))
+
+# HOST names the machine a native target must be built on. Those blocks have no cross compiler,
+# just plain gcc or clang, so the compiler existing says nothing about whether it can produce
+# this target. An empty HOSTOK means this is the wrong machine.
+UNAME_S := $(shell uname -s | tr A-Z a-z)
+UNAME_M := $(shell uname -m)
+HOSTOK_darwin  = $(filter darwin,$(UNAME_S))
+HOSTOK_freebsd = $(filter freebsd,$(UNAME_S))
+HOSTOK_openbsd = $(filter openbsd,$(UNAME_S))
+HOSTOK_alpine  = $(wildcard /etc/alpine-release)
+HOSTOK_x86_64  = $(filter x86_64 amd64,$(UNAME_M))
+HOSTOK_x86     = $(filter x86_64 amd64 i386 i486 i586 i686,$(UNAME_M))
+HOSTOK_arm64   = $(filter aarch64 arm64,$(UNAME_M))
+HOSTOK_armhf   = $(filter armv6l armv7l,$(UNAME_M))
+HOSTOK = $(if $(HOST),$(HOSTOK_$(HOST)),1)
+
+# On Darwin, macOS targets use Xcode's clang with -arch. Anywhere else they use osxcross's
+# <triple>-apple-darwin<ver>-clang from $OSXCROSS_BIN, globbed because the darwin version is whatever
+# osxcross was built with. HOST is cleared so ensure_toolchain's native-only guard does not fire on Linux.
+ifeq ($(CLASS),macos)
+ifneq ($(UNAME_S),darwin)
+OSXCROSS_BIN ?= $(BUILDROOT)/osxcross/target/bin
+# clang locates <triple>-ld through PATH, not next to itself. Without this it silently falls
+# back to the host's /usr/bin/ld, which fails with "unrecognised emulation mode: llvm".
+export PATH := $(OSXCROSS_BIN):$(PATH)
+OSXTRIPLE = $(if $(filter arm64,$(OSXARCH)),aarch64,$(OSXARCH))
+OSXCC := $(firstword $(wildcard $(OSXCROSS_BIN)/$(OSXTRIPLE)-apple-darwin*-clang))
+CC = $(or $(OSXCC),$(OSXCROSS_BIN)/$(OSXTRIPLE)-apple-darwin-clang)
+STRIP = $(patsubst %-clang,%-strip,$(CC))
+HOST =
+else
+CC = gcc -arch $(OSXARCH)
+endif
 endif
 
+# Runs before every build. If the compiler is absent it offers to fetch it, defaulting to yes.
+# YES=1 or a non-tty answers for you.
+define ensure_toolchain
+@cc='$(CCBIN)'; \
+if [ -z '$(HOSTOK)' ]; then \
+  echo "ARCHID=$(ARCHID) ($(ARCHNAME)) is a native build for '$(HOST)'; this is $$(uname -s)/$$(uname -m)."; \
+  echo "  build it on that machine (or in a $(HOST) container)"; exit 1; \
+fi; \
+if command -v "$$cc" >/dev/null 2>&1 || [ -x "$$cc" ]; then exit 0; fi; \
+echo "ARCHID=$(ARCHID) ($(ARCHNAME)): compiler '$$cc' not found."; \
+if [ -n "$(FETCH)" ] && [ -x ./fetch-toolchains.sh ]; then \
+  if [ "$(YES)" = 1 ]; then r=y; \
+  elif [ -t 0 ]; then printf "  Fetch it now with 'GLIBCVER=$(GLIBCVER) ./fetch-toolchains.sh $(FETCH)'? [Y/n] "; read -r r; \
+  else r=n; echo "  (stdin is not a terminal - re-run with YES=1 to fetch without asking)"; fi; \
+  case "$$r" in \
+    ""|[yY]|[yY][eE][sS]) GLIBCVER=$(GLIBCVER) ./fetch-toolchains.sh $(FETCH) || exit 1 ;; \
+    *) echo "  run: GLIBCVER=$(GLIBCVER) ./fetch-toolchains.sh $(FETCH)"; exit 1 ;; \
+  esac; \
+  command -v "$$cc" >/dev/null 2>&1 || [ -x "$$cc" ] || \
+    { echo "  fetched, but $$cc is still not there - check the path in the ARCH_$(ARCHID) block"; exit 1; }; \
+elif [ -n "$(APTPKG)" ]; then \
+  if [ "$(YES)" = 1 ]; then r=y; \
+  elif [ -t 0 ]; then printf "  Install it now with 'sudo apt-get install -y $(APTPKG)'? [Y/n] "; read -r r; \
+  else r=n; echo "  (stdin is not a terminal - re-run with YES=1 to install without asking)"; fi; \
+  case "$$r" in \
+    ""|[yY]|[yY][eE][sS]) if [ "$(YES)" = 1 ]; then sudo apt-get -qq update >/dev/null && sudo apt-get -qq -y install $(APTPKG) >/dev/null; \
+                          else sudo apt-get update && sudo apt-get install -y $(APTPKG); fi || exit 1 ;; \
+    *) echo "  run: sudo apt-get install -y $(APTPKG)"; exit 1 ;; \
+  esac; \
+  command -v "$$cc" >/dev/null 2>&1 || [ -x "$$cc" ] || \
+    { echo "  installed, but $$cc is still not there - check the ARCH_$(ARCHID) block"; exit 1; }; \
+else \
+  echo "  no automated source for this toolchain - see openssl/build/README.md"; exit 1; \
+fi
+endef
+
+# Runs before a Linux KVM build. libdrm, EGL, GLESv2 and wayland-client are only needed for their
+# headers (the libraries themselves are dlopen'd at runtime by the KVM backend, never linked), but
+# pkg-config still needs their .pc files on disk to hand out -I flags. Same YES=1/interactive
+# pattern as ensure_toolchain, defaulting to yes on a real terminal.
+# Debian moved egl.pc/glesv2.pc out of libegl1-mesa-dev/libgles2-mesa-dev and into libglvnd's
+# libegl-dev/libgles-dev (confirmed on Debian 13 trixie: the mesa packages now ship only headers).
+# Both pairs are listed so this also works unchanged on an older host where the mesa packages still
+# carry the .pc files directly - apt is fine being asked for a package it already has.
+KVMDESKTOPPKG = libdrm-dev libegl-dev libgles-dev libegl1-mesa-dev libgles2-mesa-dev libwayland-dev pkg-config
+# Always /usr/bin/pkg-config, never the bare "pkg-config" off PATH: a cross ARCH_ block prepends
+# its toolchain's bin/ to PATH (for STRIP etc.), and Bootlin/Buildroot toolchains ship their own
+# pkg-config wrapper there that points PKG_CONFIG_LIBDIR/SYSROOT_DIR at the target's own tiny
+# sysroot - which has no libdrm/EGL/GLESv2/wayland-client .pc files, so it always reports missing
+# regardless of what is actually installed on the host. These are host-side, arch-neutral headers
+# (like KVMINC's X11 ones above), so the host's own pkg-config is the only one that should ever run.
+define ensure_kvm_desktop_libs
+@/usr/bin/pkg-config --exists libdrm egl glesv2 wayland-client 2>/dev/null && exit 0; \
+echo "ARCHID=$(ARCHID) ($(ARCHNAME)): libdrm/EGL/GLESv2/wayland-client development packages not found via pkg-config."; \
+if [ "$(YES)" = 1 ]; then r=y; \
+elif [ -t 0 ]; then printf "  Install them now with 'sudo apt-get install -y $(KVMDESKTOPPKG)'? [Y/n] "; read -r r; \
+else r=n; echo "  (stdin is not a terminal - re-run with YES=1 to install without asking)"; fi; \
+case "$$r" in \
+  ""|[yY]|[yY][eE][sS]) if [ "$(YES)" = 1 ]; then sudo apt-get -qq update >/dev/null && sudo apt-get -qq -y install $(KVMDESKTOPPKG) >/dev/null; \
+                        else sudo apt-get update && sudo apt-get install -y $(KVMDESKTOPPKG); fi || exit 1 ;; \
+  *) echo "  run: sudo apt-get install -y $(KVMDESKTOPPKG)"; exit 1 ;; \
+esac; \
+/usr/bin/pkg-config --exists libdrm egl glesv2 wayland-client 2>/dev/null || \
+  { echo "  installed, but pkg-config still can't find them - check pkg-config's search path"; exit 1; }
+endef
+
+# Three hardening flavours. _FORTIFY_SOURCE=3 also checks heap and variable-length destinations, which
+# level 2 only does for compile-time-constant sizes. It needs gcc 12 or clang 15 with glibc 2.34 or
+# later, and older headers silently treat it as level 2, while musl has no fortify at all.
+HARDEN ?= full
+CEXTRA_full  = -D_FORTIFY_SOURCE=3 -Wformat -Wformat-security -fstack-protector -fno-strict-aliasing
+CEXTRA_basic = -D_FORTIFY_SOURCE=3 -D_NOFSWATCHER -Wformat -Wformat-security -fno-strict-aliasing
+CEXTRA_none  = -fno-strict-aliasing
+CHARDEN = $(CEXTRA_$(HARDEN))$(if $(TUNE), $(TUNE),)
+# CEXTRA and LDEXTRA are user hooks only, as in `make linux ARCHID=6 CEXTRA=-DFOO LDEXTRA=-Wl,-Map=x`.
+# They go last on the compile and link lines, so they never drop the per-target hardening and
+# tuning flags, and where they conflict they win because gcc and clang take the last flag of a name.
+CEXTRA ?=
+LDEXTRA ?=
+
+# Old binutils on these targets reject -z noexecstack, -z relro and -z now.
+SKIPFLAGS = $(if $(NOLDHARDEN),1,0)
 
 ifeq ($(WEBLOG),1)
 CFLAGS += -D_REMOTELOGGINGSERVER -D_REMOTELOGGING
 endif
 
+# The jpeg archive directory is the ARCHNAME by default, but an ARCH block can point elsewhere when
+# a suitable archive already exists: ARCH_24 (ARMv7) links the ARMv6 one, whose objects run
+# unchanged on ARMv7 and whose VFPv2 is a subset of VFPv3, rather than carrying a second copy.
+JPEGARCH ?= $(ARCHNAME)
+
 ifeq ($(KVM),1)
-# Mesh Agent KVM, this is only included in builds that have KVM support
+# Mesh Agent KVM sources, only included in builds that have KVM support. The Wayland/DRM/EGL/XKB
+# and evdev backend files are internally guarded with #if defined(__linux__) and talk to their
+# external libraries via dlopen(), not link-time symbols, so listing them here is safe even though
+# freebsd/openbsd builds (ADDITIONALSOURCES="$(LINUXKVMSOURCES)" below) share this same variable.
 LINUXKVMSOURCES = meshcore/KVM/Linux/linux_kvm.c meshcore/KVM/Linux/linux_kvm_wayland.c meshcore/KVM/Linux/linux_kvm_drm.c meshcore/KVM/Linux/linux_kvm_drm_egl.c meshcore/KVM/Linux/linux_kvm_rotated.c meshcore/KVM/Linux/linux_kvm_xkb.c meshcore/KVM/Linux/linux_events.c meshcore/KVM/Linux/linux_events_evdev.c meshcore/KVM/Linux/linux_tile.c meshcore/KVM/Linux/linux_compression.c
 MACOSKVMSOURCES = meshcore/KVM/MacOS/mac_kvm.c meshcore/KVM/MacOS/mac_events.c meshcore/KVM/MacOS/mac_tile.c meshcore/KVM/Linux/linux_compression.c
 CFLAGS += -D_LINKVM
 DRMLIBS =
-# The DRM/Wayland header probes only make sense on Linux goals; macOS/BSD also set KVM=1 but a
-# parse-time $(error) here would kill e.g. 'make macos' on hosts without wayland-client.
-ifneq (,$(filter linux pi,$(MAKECMDGOALS)))
-    DRMCFLAGS = $(shell pkg-config --cflags libdrm egl glesv2 2>/dev/null)
-    # libdrm/libEGL/libGLESv2 are dlopen'd at runtime (linux_kvm_drm*.c), not linked, so they stay
-    # out of NEEDED and the agent runs without a DRM/GL stack. Headers still needed (DRMCFLAGS).
-    WAYLANDCLIENT = $(shell pkg-config --exists wayland-client 2>/dev/null && echo 1)
-    ifneq ($(strip $(DRMCFLAGS)),)
-        CFLAGS += $(DRMCFLAGS)
-    else
-        $(error Linux KVM builds require the libdrm, EGL and GLES development packages (pkg-config libdrm egl glesv2))
-    endif
-    ifneq ($(WAYLANDCLIENT),1)
-        $(error Linux KVM builds require the wayland-client development package)
-    endif
-    CFLAGS += $(shell pkg-config --cflags wayland-client)
-    # libwayland-client is dlopen'd at runtime (linux_kvm_drm.c), not linked — headers only.
-    # If the system headers are jpeg8 (JPEG_LIB_VERSION >= 80) and a v80 lib exists, default to it
-    # so the linked lib matches the headers, else libjpeg aborts at runtime ("Wrong JPEG library
-    # version"). Skipped when JPEGVER is set explicitly or NOTURBOJPEG=1.
-    ifeq ($(JPEGVER),)
-        ifneq ($(NOTURBOJPEG),1)
-            JPEG_HDR_VERSION := $(shell $(CC) -include jpeglib.h -E -dM -xc - </dev/null 2>/dev/null | sed -n 's/.*JPEG_LIB_VERSION \([0-9][0-9]*\).*/\1/p' | head -n1)
-            ifeq ($(shell test "$(JPEG_HDR_VERSION)" -ge 80 2>/dev/null && test -f lib-jpeg-turbo/linux/$(ARCHNAME)/v80/libturbojpeg.a && echo yes),yes)
-                JPEGVER = v80
-$(info MeshAgent: system libjpeg is v$(JPEG_HDR_VERSION) (jpeg8); auto-selecting JPEGVER=v80)
-            endif
-        endif
-    endif
+# libdrm, EGL, GLESv2 and wayland-client are all dlopen'd at runtime by the new KVM backend files,
+# never linked, so DRMLIBS stays empty and only their headers are needed at compile time. CFLAGS is
+# a recursively-expanded variable (defined with plain "?="), so this $(shell pkg-config ...) call is
+# deferred and re-runs every time CFLAGS is expanded, including inside the linux: recipe below,
+# after ensure_kvm_desktop_libs has had a chance to install anything missing - not just once, here,
+# against whatever was on disk when make started parsing. Gated on CLASS, not on MAKECMDGOALS
+# containing "linux"/"pi": ARCH_16/ARCH_29 (macOS) also set KVM=1 and have no use for this, but a
+# goal-name filter made print-stampfields (goal "print-stampfields", used by `make list`/`make all`
+# to judge staleness) recompute CFLAGS without these flags even though the real `make linux` build
+# that wrote the stamp had them - a permanent, spurious "stale(cflags)" right after a clean build.
+# CLASS is resolved from the ARCH_ block per ARCHID, so it stays the same regardless of which
+# top-level goal invoked make.
+ifneq ($(CLASS),macos)
+CFLAGS += $(shell /usr/bin/pkg-config --cflags libdrm egl glesv2 wayland-client 2>/dev/null)
 endif
-    ifneq ($(JPEGVER),)
-        ifeq ($(LEGACY_LD),1)
-            LINUXFLAGS = lib-jpeg-turbo/linux/$(ARCHNAME)/$(JPEGVER)/libturbojpeg.a
-        else
-            LINUXFLAGS = -l:lib-jpeg-turbo/linux/$(ARCHNAME)/$(JPEGVER)/libturbojpeg.a
-        endif
-        MACOSFLAGS = ./lib-jpeg-turbo/macos/$(ARCHNAME)/$(JPEGVER)/libturbojpeg.a
-    else
-        ifeq ($(NOTURBOJPEG),1)
-            LINUXFLAGS = -ljpeg
-        else
-            ifeq ($(LEGACY_LD),1)
-                LINUXFLAGS = lib-jpeg-turbo/linux/$(ARCHNAME)/libturbojpeg.a
-            else
-                LINUXFLAGS = -l:lib-jpeg-turbo/linux/$(ARCHNAME)/libturbojpeg.a
-            endif
-            MACOSFLAGS = ./lib-jpeg-turbo/macos/$(ARCHNAME)/libturbojpeg.a
-        endif
-    endif
-    BSDFLAGS = /usr/local/lib/libjpeg.a
+	ifneq ($(JPEGVER),)
+		ifeq ($(LEGACY_LD),1)
+			LINUXFLAGS = lib-jpeg-turbo/linux/$(JPEGARCH)/$(JPEGVER)/libturbojpeg.a
+		else
+			LINUXFLAGS = -l:lib-jpeg-turbo/linux/$(JPEGARCH)/$(JPEGVER)/libturbojpeg.a
+		endif
+		MACOSFLAGS = ./lib-jpeg-turbo/macos/$(JPEGARCH)/$(JPEGVER)/libturbojpeg.a
+	else
+		ifeq ($(NOTURBOJPEG),1)
+			LINUXFLAGS = -ljpeg
+		else
+			ifeq ($(LEGACY_LD),1)
+				LINUXFLAGS = lib-jpeg-turbo/linux/$(JPEGARCH)/libturbojpeg.a
+			else
+				LINUXFLAGS = -l:lib-jpeg-turbo/linux/$(JPEGARCH)/libturbojpeg.a
+			endif
+			MACOSFLAGS = ./lib-jpeg-turbo/macos/$(JPEGARCH)/libturbojpeg.a
+		endif
+	endif
+	BSDFLAGS = /usr/local/lib/libjpeg.a
 endif
 
 ifeq ($(LMS),0)
@@ -634,15 +1070,17 @@ endif
 ifeq ($(NOTLS),1)
 SOURCES += microstack/nossl/sha384-512.c microstack/nossl/sha224-256.c microstack/nossl/md5.c microstack/nossl/sha1.c
 CFLAGS += -DMICROSTACK_NOTLS
-LINUXSSL = 
+LINUXSSL =
 MACSSL =
 BSDSSL =
 else
-LINUXSSL = -Lopenssl/libstatic/linux/$(ARCHNAME)
-MACSSL = -Lopenssl/libstatic/macos/$(ARCHNAME)
-BSDSSL = -Lopenssl/libstatic/bsd/$(ARCHNAME)
+LINUXSSL = -L$(OSSLPREFIX)/lib
+MACSSL = -L$(OSSLPREFIX)/lib
+BSDSSL = -L$(OSSLPREFIX)/lib
 CFLAGS += -DMICROSTACK_TLS_DETECT
-LDEXTRA += -lssl -lcrypto
+# -lpthread is repeated after -lcrypto because static link order matters, and glibc 2.24
+# (ARCHID 5, 6, 19 and 20) needs pthread_atfork resolved after libcrypto pulls it in.
+LDINT += -lssl -lcrypto -lpthread
 endif
 
 ifeq ($(DYNAMICTLS),1)
@@ -652,15 +1090,52 @@ BSDSSL =
 INCDIRS = -I. -I/usr/include/openssl -Imicrostack -Imicroscript -Imeshcore -Imeshconsole
 endif
 
+DEBUGBIN = $(dir $(OUTBIN))DEBUG_$(notdir $(OUTBIN))
+PREMTIME = $(OUTBIN).premtime
+# Every function and object in its own section, so the linker can drop the unreferenced ones. macOS
+# gets the same from -dead_strip, and the BSD recipes are left as they are.
+ifeq ($(filter bsd macos,$(CLASS)),)
+CFLAGS += -ffunction-sections -fdata-sections
+LDFLAGS += -Wl,--gc-sections
+endif
+
 ifeq ($(DEBUG),1)
-# Debug Build, include Symbols
-CFLAGS += -g -D_DEBUG 
-STRIP = $(NOECHO) $(NOOP)
-SYMBOLCP = $(NOECHO) $(NOOP)
+# Debug build, so keep the symbols.
+CFLAGS += -g -D_DEBUG
+SNAP_OUTBIN_MTIME = $(NOECHO) $(NOOP)
+STRIP_AND_SYMBOLCP = $(NOECHO) $(NOOP)
 else
-CFLAGS += -O2
-STRIP += ./$(EXENAME)_$(ARCHNAME)$(EXENAME2)
-SYMBOLCP = cp ./$(EXENAME)_$(ARCHNAME)$(EXENAME2) ./DEBUG_$(EXENAME)_$(ARCHNAME)$(EXENAME2)
+# Speed by default. The openwrt and vendor classes are routers and boards short on flash and RAM, so
+# they default to size. OPT=-O2 or OPT=-Os overrides either.
+OPT ?= $(if $(filter openwrt vendor,$(CLASS)),-Os,-O2)
+CFLAGS += $(OPT)
+# linux:/macos:/etc. always re-run, so a simple copy+strip step would overwrite DEBUGBIN's real
+# symbols with an already-stripped OUTBIN even when nothing changed. Comparing file times does not
+# work directly, since strip changes OUTBIN's time too - so that time is saved first.
+# For a zig-built ARCHID (see CCOVERRIDE/PATH_ZIG above), DEBUGBIN carries the agent's own DWARF
+# without any -g (zig cc emits it by default); the release OpenSSL archives are built with -g0,
+# so OpenSSL frames only resolve against a <target>-debug prefix. Strip removes all of it from OUTBIN.
+SNAP_OUTBIN_MTIME = if [ -e "$(OUTBIN)" ]; then touch -r "$(OUTBIN)" "$(PREMTIME)"; else rm -f "$(PREMTIME)"; fi
+STRIP_AND_SYMBOLCP = if [ ! -e "$(PREMTIME)" ] || [ -n "$$(find "$(OUTBIN)" -newer "$(PREMTIME)" 2>/dev/null)" ] || [ ! -e "$(DEBUGBIN)" ]; then cp "$(OUTBIN)" "$(DEBUGBIN)" && $(STRIP) "$(OUTBIN)" && echo "strip   $(OUTBIN)  (symbols kept in $(DEBUGBIN))"; else echo "  $(OUTBIN) unchanged - keeping existing $(DEBUGBIN) symbols"; fi; rm -f "$(PREMTIME)"; $(REFRESH_STAMP_SIZE)
+endif
+
+ifeq ($(ASAN),1)
+# Keeps the binary unstripped like DEBUG=1 and enables the halt_on_error=0 recovery mode that
+# the ASan phase of test/test-agent.sh relies on, with the <binary>_asan suffix that script detects.
+# Uses the host gcc because old Bootlin cross-gccs lack -fsanitize-recover=address.
+# The host gcc builds for the host's own word size, so a 32-bit target got x86-64 objects and the link
+# skipped its own archives with "skipping incompatible openssl/.../libssl.a when searching for -lssl".
+ASANBITS = $(if $(findstring -i686,$(OSSLTARGET)),-m32,)
+ifeq ($(if $(findstring -i686,$(OSSLTARGET)),x,$(findstring -x86_64,$(OSSLTARGET))),)
+$(warning ASAN=1 uses the host gcc, which cannot build for $(OSSLTARGET). Expect a link failure on ARCHID $(ARCHID).)
+endif
+EXENAME2 := $(EXENAME2)_asan
+CC = gcc
+export PATH := $(HOSTPATH)
+CFLAGS += -fsanitize=address -fsanitize-recover=address -fno-omit-frame-pointer $(ASANBITS)
+LDFLAGS += -fsanitize=address $(ASANBITS)
+SNAP_OUTBIN_MTIME = $(NOECHO) $(NOOP)
+STRIP_AND_SYMBOLCP = $(NOECHO) $(NOOP)
 endif
 
 ifeq ($(SSL_TRACE),1)
@@ -679,7 +1154,20 @@ ifeq ($(FSWATCH_DISABLE),1)
 CFLAGS += -D_NOFSWATCHER
 endif
 
-ifeq ($(CRASH_HANDLER),0)
+# The crash handler (_NOILIBSTACKDEBUG compiles it out) is a debug aid, so it is only in for DEBUG=1, and never
+# where it cannot work: musl and uClibc have no execinfo.h, and the BSD and macOS recipes do not link -lexecinfo.
+# NOILIBSTACKDEBUG=0 or 1 overrides that.
+ifndef NOILIBSTACKDEBUG
+ifeq ($(DEBUG)$(findstring musl,$(XTRIPLE))$(findstring uclibc,$(XTRIPLE))$(filter bsd macos,$(CLASS)),1)
+NOILIBSTACKDEBUG = 0
+else
+NOILIBSTACKDEBUG = 1
+endif
+endif
+ifeq ($(NOILIBSTACKDEBUG),0)
+# ILibParsers.h tests !(_NOILIBSTACKDEBUG) by value, so undefine it rather than pass =0, which the #ifndef sites would still see as set.
+CFLAGS += -U_NOILIBSTACKDEBUG
+else
 CFLAGS += -D_NOILIBSTACKDEBUG
 endif
 
@@ -699,7 +1187,7 @@ ifeq ($(KVM_ALL_TILES),1)
 CFLAGS += -DKVM_ALL_TILES
 endif
 
-ifeq ($(BIGCHAINLOCK),1)
+ifeq ($(ILIBCHAIN_GLOBAL_LOCK),1)
 CFLAGS += -DILIBCHAIN_GLOBAL_LOCK
 endif
 
@@ -718,144 +1206,448 @@ ifeq ($(MEMTRACK),1)
 CFLAGS += -DILIBMEMTRACK
 endif
 
+# C17 is C11 plus defect fixes, so gnu17 and gnu11 compile the same code. Pinned to gnu11 rather
+# than probed per-compiler: the two Bootlin 2017.05 toolchains (gcc 5.4, the glibc 2.24 pin for
+# x86 and x86-64) predate the gnu17 name, and a 2026-08-30 matrix build of every OpenSSL target
+# confirmed gnu11 compiles clean everywhere while gnu17 fails on just those two.
+CSTD := gnu11
+
+# The crash handler prints raw addresses that only resolve against a non-PIE image, so only builds that
+# carry it give up ASLR. Commit 3336756 (branch add-PIE-support) makes the handler PIE-safe via dladdr.
+ifeq ($(NOILIBSTACKDEBUG),0)
 GCCTEST := $(shell $(CC) meshcore/dummy.c -o /dev/null -no-pie > /dev/null 2>&1 ; echo $$? )
 ifeq ($(GCCTEST),0)
 LDFLAGS += -no-pie
 endif
+endif
 
 GITTEST := $(shell git log -1 > /dev/null 2>&1 ; echo $$? )
 ifeq ($(GITTEST),0)
+# Rewriting this header on every parse changes its mtime and forces a rebuild of everything that
+# includes it, so only regenerate when the commit actually changed. The hash covers every value in
+# the file, and it is written last so that finding it also proves the file was written completely.
+GITHASH := $(shell git log -1 --format=%H )
+ifneq ($(shell grep -qs '"$(GITHASH)"' microscript/ILibDuktape_Commit.h && echo uptodate),uptodate)
 $(shell echo "// This file is auto-generated, any edits may be overwritten" > microscript/ILibDuktape_Commit.h )
-$(shell git log -1 | grep "Date: " | awk '{ aLen=split($$0, a, " "); printf "#define SOURCE_COMMIT_DATE \"%s-%s-%s %s%s\"\n", a[6], a[3], a[4], a[5], a[7]; }' >> microscript/ILibDuktape_Commit.h )
+$(shell git log -1 --format=%cI | awk '{ printf "#define SOURCE_COMMIT_DATE \"%s\"\n", $$0; }' >> microscript/ILibDuktape_Commit.h )
+$(shell git rev-parse --short=12 HEAD | awk '{ printf "#define SOURCE_COMMIT_HASH_SHORT \"%s\"\n", $$0; }' >> microscript/ILibDuktape_Commit.h )
+$(shell git log -1 --date=format:'%y,%m,%d,%H%M' --format=%cd | awk '{ printf "#define SOURCE_COMMIT_FILEVERSION %s\n", $$0; }' >> microscript/ILibDuktape_Commit.h )
 $(shell git log -1 --format=%H | awk '{ printf "#define SOURCE_COMMIT_HASH \"%s\"\n", $$0; }' >> microscript/ILibDuktape_Commit.h )
 endif
-
-.PHONY: all clean
-
-all: $(EXENAME) $(LIBNAME)
-
-$(EXENAME): $(OBJECTS)
-ifeq ($(SKIPFLAGS), 1)
-	$(V)$(CC) $^ $(LDFLAGS) -lrt -o $@
-else
-	$(V)$(CC) $^ $(LDFLAGS) $(ADDITIONALFLAGS) -o $@
 endif
-sign:
-	strip ./$(EXENAME)
-	./agent/signer/signer_linux $(EXENAME) $(shell ./$(EXENAME) -v)
+
+.PHONY: all clean cleanbin force-rebuild update-modules list list-archs listflags list-flags flags print-toolchain print-ossldir print-ossltarget print-osslver print-bsdrel print-macosarch print-archids print-archname print-cclabel print-linkmode print-libc print-cflags-extra print-outdir print-stampfields
+
+# The OS recipes re-invoke make with EXENAME= and the full per-target CFLAGS, and that inner make
+# is the only one meant to reach the compile rules. A bare `make ARCHID=n` used to fall into them
+# with the generic CFLAGS and fail with "execinfo.h: No such file", so route it to the right recipe.
+ifeq ($(origin EXENAME),command line)
+all: $(EXENAME)
+else ifneq ($(ALLLOOP),)
+# `make all` with no ARCHID, the openssl/build/build.sh meaning: build every ARCHID whose stamp says
+# it is out of date, skip the ones already current, and never let a single failure stop the rest.
+# Narrow it with FILTER=<class> and rebuild regardless with FORCE=1, the same switches `make list`
+# and a single-target build already take.
+all:
+	@echo "building every out-of-date ARCHID$(if $(FILTER), in class $(FILTER))$(if $(filter 1,$(FORCE)), (FORCE=1, so rebuilding even the current ones))"
+	@rc=0; built=; current=; notc=; failed=; \
+	for id in $$($(MAKE) -s --no-print-directory print-archids $(if $(FILTER),CLASS=$(FILTER))); do \
+	  n=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-archname); \
+	  $(TOOLCHAIN_STATE); \
+	  if [ "$$st" != ready ]; then notc="$$notc $$id"; echo "  skip   ARCHID $$id ($$n) - toolchain $$st: $$how"; continue; fi; \
+	  $(AGENT_STAMP_STATE); \
+	  if [ "$$sp" = current ] && [ "$(FORCE)" != 1 ]; then current="$$current $$id"; echo "  ok     ARCHID $$id ($$n) - up to date"; continue; fi; \
+	  echo "=================== ARCHID $$id ($$n) - $$sp ==================="; \
+	  if $(MAKE) --no-print-directory ARCHID=$$id; then built="$$built $$id"; else failed="$$failed $$id"; rc=1; fi; \
+	done; \
+	echo; echo "Summary:"; \
+	printf "  built:        %s\n" "$${built:- none}"; \
+	printf "  up to date:   %s\n" "$${current:- none}"; \
+	printf "  no toolchain: %s\n" "$${notc:- none}"; \
+	printf "  FAILED:       %s\n" "$${failed:- none}"; \
+	exit $$rc
+else
+OSGOAL = $(if $(filter macos,$(CLASS)),macos,$(if $(filter bsd,$(CLASS)),$(BSDHOST),linux))
+all:
+	@echo "ARCHID=$(ARCHID) ($(ARCHNAME)) is built by the '$(OSGOAL)' recipe - running: make $(OSGOAL) ARCHID=$(ARCHID)"
+	@$(MAKE) --no-print-directory $(OSGOAL) ARCHID=$(ARCHID)
+endif
+
+# 'flags' is a no-op goal, only so `make list flags` doesn't fail as "no rule to make target".
+flags: ;
+
+# EXTRA cflags cost one extra sub-make per ARCHID to compute, so they're only shown for
+# listflags/list-flags/`make list flags` - plain list/list-archs skip that work and the column.
+SHOWFLAGS := $(filter flags listflags list-flags,$(MAKECMDGOALS))
+
+# Resolves $$id into $$st (ready, MISSING or n/a), $$how (the command that would fix a MISSING one)
+# and $$libc, out of print-toolchain's tuple. Shared by `list` and the `all` loop so that both judge
+# buildability by the same rule rather than drifting apart.
+define TOOLCHAIN_STATE
+	  i=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-toolchain); \
+	  cc=$${i%%|*}; r=$${i#*|}; fetch=$${r%%|*}; r=$${r#*|}; \
+	  apt=$${r%%|*}; r=$${r#*|}; host=$${r%%|*}; r=$${r#*|}; hostok=$${r%%|*}; libc=$${r#*|}; \
+	  if [ -n "$$host" ] && [ -z "$$hostok" ]; then st=n/a; how="native build - run it on $$host"; \
+	  elif command -v "$$cc" >/dev/null 2>&1 || [ -x "$$cc" ]; then st=ready; how="$$cc"; \
+	  elif [ -n "$$fetch" ]; then st=MISSING; how="./fetch-toolchains.sh $$fetch"; \
+	  elif [ -n "$$apt" ]; then st=MISSING; how="apt-get install $$apt"; \
+	  else st=MISSING; how="bring your own ($$cc)"; fi
+endef
+
+# The STAMP column of `make list`, expecting $$id, $$n and $$st from the loop and setting $$sp.
+# print-stampfields is only run when there is a stored stamp to compare it against, so an ARCHID
+# that was never built costs nothing. The field names, not just "stale", so the row says why.
+define AGENT_STAMP_STATE
+	  sd=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-outdir); sf="$$sd/build-stamp.txt"; \
+	  if [ ! -f "$$sf" ]; then [ -d "$$sd" ] && sp=unstamped || sp=absent; \
+	  elif [ "$$st" != ready ]; then sp='?'; \
+	  else \
+	    sp=$$( { $(MAKE) -s --no-print-directory ARCHID=$$id print-stampfields; echo '@@@'; \
+	             sed -e '/^#/d' -e '/^stamp_key:/,$$d' "$$sf"; } | \
+	           awk '$$0=="@@@"{s=1;next} {k=$$1; v=""; i=index($$0,": "); if(i)v=substr($$0,i+2); \
+	                if(!s){if(!(k in now))order[++c]=k; now[k]=v} else had[k]=v} \
+	                END{for(j=1;j<=c;j++){k=order[j]; if(now[k]!=had[k]) \
+	                    printf "%s%s",(o++?",":""),substr(k,1,length(k)-1)}}' ); \
+	    [ -z "$$sp" ] && sp=current || sp="stale($$sp)"; \
+	  fi
+endef
+
+# One line per ARCHID with its toolchain status. Narrow it with make list FILTER=openwrt
+list list-archs listflags list-flags:
+	@echo "usage:    make ARCHID=<id> [switch=value ...]      the ARCHID picks the OS recipe (linux, macos, freebsd or openbsd)"
+	@echo "          make all [FILTER=<class>] [FORCE=1]       build every ARCHID whose stamp is out of date, skipping the current ones"
+	@echo "          make list | list-archs FILTER=<class> | listflags    this table; narrowed to one class; with per-ARCHID EXTRA cflags"
+	@echo "          make clean | cleanbin                    drop the object trees | drop the built binaries"
+	@echo "          make update-modules [MODULE=<name>]      refresh the embedded JS modules in ILibDuktape_Polyfills.c (or add UPDATEMODULES=1 to a build)"
+	@echo "switches: DEBUG=1  ASAN=1  KVM=0|1  CCACHE=1  FORCE=1 (rebuild anyway)  V=1 (verbose)  YES=1 (auto-install toolchains)  CROSS=0  OSSLVER=<ver>  OPT=-Os"
+	@echo "          the full switch list with defaults is in this makefile's header."
+	@echo ""
+	@echo "default cflags: $(BASE_CFLAGS)"
+	@if [ -n "$(SHOWFLAGS)" ]; then \
+	  printf "%6s  %-28s %-26s %-8s %-14s %-9s %-30s %s\n" ARCHID TARGET STAMP CLASS LIBC TOOLCHAIN COMPILER "EXTRA flags"; \
+	else \
+	  printf "%6s  %-28s %-26s %-8s %-14s %-9s %s\n" ARCHID TARGET STAMP CLASS LIBC TOOLCHAIN COMPILER; \
+	fi
+	@awk '/^define ARCH_/{id=$$2; sub(/ARCH_/,"",id); n=""; c="-"; k="1"} \
+	      /^  ARCHNAME/{n=$$3} /^  CLASS/{c=$$3} /^  KVM /{k=$$3} \
+	      /^endef/{if(kv!="") k=kv; if(id!="" && n!="" && (f=="" || c==f)) print id, n, c, k; id=""}' \
+	      f="$(FILTER)" kv="$(if $(filter command line,$(origin KVM)),$(KVM),)" $(firstword $(MAKEFILE_LIST)) | sort -n | \
+	while read -r id n c k; do \
+	  [ "$$k" = "0" ] && n="$$n (NOKVM)"; \
+	  $(TOOLCHAIN_STATE); \
+	  if [ -n "$(SHOWFLAGS)" ]; then extra=$$($(MAKE) -s --no-print-directory ARCHID=$$id print-cflags-extra); fi; \
+	  $(AGENT_STAMP_STATE); \
+	  if [ -n "$(SHOWFLAGS)" ]; then \
+	    printf "%6s  %-28s %-26s %-8s %-14s %-9s %-30s %s\n" "$$id" "$$n" "$$sp" "$$c" "$$libc" "$$st" "$$how" "$${extra:--}"; \
+	  else \
+	    printf "%6s  %-28s %-26s %-8s %-14s %-9s %s\n" "$$id" "$$n" "$$sp" "$$c" "$$libc" "$$st" "$$how"; \
+	  fi; \
+	done
+	@echo
+	@echo "  STAMP = what this ARCHID's build/<dir>/build-stamp.txt says about the binary sitting"
+	@echo "  there: current = the recorded flags, compiler and OpenSSL prefix still match, stale(fields)"
+	@echo "  = those fields have moved since, unstamped = a build dir with no stamp (built before the"
+	@echo "  stamp existed), absent = never built here, ? = toolchain missing, nothing to compare against."
+	@echo
+	@echo "  LIBC = the libc this ARCHID's binary links, and for glibc the floor its -target triple"
+	@echo "  pins, which is the oldest release the binary will start on. musl and uClibc carry no"
+	@echo "  version because they stamp none into the binary, so any release of them will do."
+	@echo "  (static) means the libc is linked into the binary, so the device needs none of it and"
+	@echo "  there is no floor to meet at all."
+
+# Machine-readable ARCHID list, so CI can loop over it instead of hardcoding an ARCHID list of
+# its own. `make print-archids` lists every ARCHID and `make print-archids CLASS=generic`
+# narrows it to one class.
+print-archids:
+	@awk '/^define ARCH_/{id=$$2; sub(/ARCH_/,"",id); c="-"} \
+	      /^  CLASS/{c=$$3} \
+	      /^endef/{if(id!="" && (f=="" || c==f)) print id; id=""}' \
+	      f="$(CLASS)" $(firstword $(MAKEFILE_LIST)) | sort -n | tr '\n' ' '
+	@echo
+
+# The libc the built binary links, and for glibc the floor its -target triple pins. The triple wins
+# where there is one, since that is what decides the floor, and OSSLTARGET's suffix covers the rows
+# built by a plain cross-gcc plus macOS, BSD and Windows, which carry no triple.
+# awk rather than make's own text functions, because a filter pattern may hold only one % and
+# matching x86_64-linux-gnu.2.24 needs two. musl and uClibc print no version on purpose: they stamp
+# none into a binary, so every release of them satisfies it equally.
+_OSSLLIBC     = $(lastword $(subst -, ,$(OSSLTARGET)))
+LIBCFALLBACK  = $(if $(filter glibc musl uclibc,$(_OSSLLIBC)),$(_OSSLLIBC),$(if $(filter macos-%,$(OSSLTARGET)),macos,$(if $(filter windows-%,$(OSSLTARGET)),msvc,bsd)))
+LIBC_LABEL_CMD = echo '$(CC)' | awk -v o='$(LIBCFALLBACK)' '{ \
+                   for (i = 1; i <= NF; i++) if ($$i == "-target") t = $$(i + 1); \
+                   if (t ~ /musl/) { print "musl"; exit } \
+                   if (t ~ /-gnu[a-z]*\.[0-9]/) { v = t; sub(/.*-gnu[a-z]*\./, "", v); printf "glibc-%s\n", v; exit } \
+                   if (t ~ /-gnu/) { print "glibc"; exit } \
+                   print o }'
+
+# Machine-readable single-target probes. print-toolchain gives the loop above what it needs, and
+# print-ossltarget names the targets.sh target this ARCHID links, print-osslver the OpenSSL
+# series it resolved to, and print-ossldir the prefix made of both.
+# The libc field carries " (static)" for a whole-program-static block, because a static binary
+# needs no libc on the device at all and its floor therefore means nothing - the opposite of what
+# the version next to a glibc row is telling you. It is appended here rather than in
+# LIBC_LABEL_CMD so print-libc stays a bare machine-readable label, and it costs no extra sub-make
+# because `make list` already reads this tuple. Keep libc last: the reader takes it as the
+# remainder after the final '|', so it is the only field that may contain a space.
+print-toolchain:
+	@echo "$(CCBIN)|$(FETCH)|$(APTPKG)|$(HOST)|$(HOSTOK)|$$($(LIBC_LABEL_CMD))$(if $(findstring -static,$(LDINT)), (static),)"
+
+print-libc:
+	@$(LIBC_LABEL_CMD)
+
+print-archname:
+	@echo '$(ARCHNAME)'
+
+# A single whitespace-free compiler label for build.sh's ARCHID table. A zig-compiled block is
+# named by the triple it targets plus any -mcpu, since that, not the binary's name, is what
+# decides the ABI and the ISA floor. Anything else is named by its compiler binary.
+# static or dynamic, for build.sh's ARCHID table. LDINT carries -static only for the blocks that
+# link the whole binary that way; everything else resolves its libc at run time on the device.
+print-linkmode:
+	@echo '$(if $(findstring -static,$(LDINT)),static,dynamic)'
+
+print-cclabel:
+	@echo '$(CC)' | awk '{ for (i = 1; i <= NF; i++) { if ($$i == "-target") t = $$(i+1); if ($$i ~ /^-mcpu=/) c = substr($$i, 7) } \
+	                       if (t != "") printf "zig:%s%s\n", t, (c != "" ? "/" c : ""); \
+	                       else { n = $$1; sub(/.*\//, "", n); print n } }'
+
+print-ossltarget:
+	@echo '$(OSSLTARGET)'
+
+print-osslver:
+	@echo '$(OSSLVER)'
+
+# The agent's own build stamp, for `make list`: print-outdir says where it would be, and
+# print-stampfields recomputes the gate-able half so a stored stamp can be compared line by line.
+# Both are outer-make probes, so they never touch $(OBJDIR) the way an EXENAME= sub-make would.
+print-outdir:
+	@echo '$(OUTDIR)'
+
+print-stampfields:
+	@{ $(AGENT_STAMP_FIELDS); }
+
+print-ossldir:
+	@echo '$(OSSLPREFIX)'
+
+# The per-ARCHID addition to CFLAGS (e.g. -DBADMATH, -D_NOFSWATCHER), isolated from BASE_CFLAGS
+# by word-filtering, since ARCH_<id> blocks only ever append flags, never remove or reorder them.
+print-cflags-extra:
+	@echo '$(strip $(filter-out $(BASE_CFLAGS),$(CFLAGS)))'
+
+# The OS release a bsd target cross-builds against. CI reads this to pick the matching sysroot
+# tarball, so the release lives in one place, the target block.
+print-bsdrel:
+	@echo '$(BSDREL)'
+
+# The deployment floor a macos target is built for. targets.sh passes the same flag to OpenSSL's
+# Configure so the archive and the agent agree on minos.
+print-macosarch:
+	@echo '$(MACOSARCH)'
 
 
+# Objects depend on the flags they were built with. $(OBJDIR)/.cflags is rewritten at parse time,
+# only when CC or CFLAGS change, so a tree half-built with other flags recompiles instead of linking
+# stale objects ("undefined reference to ILib_POSIX_CrashHandler"). Only the inner EXENAME= make does this.
+# The compiler's own version is part of that line: a toolchain upgraded in place keeps its path and
+# flags, so nothing else here would notice it. CCACHE_COMPILERCHECK=content covers the same case,
+# but only when CCACHE=1.
+FLAGSTAMP = $(OBJDIR)/.cflags
+# The link has its own stamp, because LDFLAGS can change with CFLAGS untouched (-static, a hardening
+# flag, a different jpeg archive) and every object would then still be current. $(OSSLLIBS) makes a
+# rebuilt or refetched OpenSSL archive relink too - the case no source or header timestamp can show.
+LDSTAMP  = $(OBJDIR)/.ldflags
+# FORCE=1 rebuilds this ARCHID even when make would skip it, for the cases the stamps cannot see:
+# a changed vendored archive with an old mtime, a suspect ccache hit, or just proving a clean build.
+# It is a phony prerequisite rather than a `rm -rf`, so nothing is deleted and other ARCHIDs are untouched.
+FORCEDEP = $(if $(filter 1,$(FORCE)),force-rebuild)
+force-rebuild: ;
+OSSLLIBS = $(wildcard $(OSSLPREFIX)/lib/libcrypto.a $(OSSLPREFIX)/lib/libssl.a)
+ifeq ($(origin EXENAME),command line)
+_CCVER    = $(shell { $(CCBIN) --version 2>/dev/null || $(CCBIN) version 2>/dev/null; } | head -1)
+_FLAGLINE = $(subst ','"'"',$(CC) [$(_CCVER)] $(CFLAGS))
+_LDLINE   = $(subst ','"'"',$(CC) $(LDFLAGS) $(ADDITIONALFLAGS))
+$(shell mkdir -p $(OBJDIR); printf '%s\n' '$(_FLAGLINE)' | cmp -s - $(FLAGSTAMP) 2>/dev/null || printf '%s\n' '$(_FLAGLINE)' > $(FLAGSTAMP))
+$(shell mkdir -p $(OBJDIR); printf '%s\n' '$(_LDLINE)'   | cmp -s - $(LDSTAMP)   2>/dev/null || printf '%s\n' '$(_LDLINE)'   > $(LDSTAMP))
+endif
+
+# CCACHE=1 wraps only the compile step. Linking always runs, so a changed archive, header or
+# commit hash is never served from the cache. The compiler is identified by content rather than
+# mtime and size, so a refetched toolchain of the same size cannot look like the old one.
+ifeq ($(CCACHE),1)
+CCWRAP = ccache
+export CCACHE_COMPILERCHECK ?= content
+endif
+
+$(OBJDIR)/%.o: %.c $(FLAGSTAMP) $(FORCEDEP)
+	@mkdir -p $(@D)
+	$(V)$(CCWRAP) $(CC) $(CFLAGS) -MMD -MP -c $< -o $@ $(WARNFLAGS)
+
+-include $(shell find $(OBJDIR) -name '*.d' 2>/dev/null)
+
+# One build-stamp.txt per output directory, written by the link rule so it records the flags that
+# actually compiled this binary, not the ones a later reader's environment would produce. Make
+# rebuilds on changed sources and headers, never on changed flags, so this is the only record of
+# which toolchain and which OpenSSL prefix produced the binary sitting in build/.
+# The fields above 'stamp_key' are the gate-able ones; everything below it describes the result.
+# openssl_stamp_key ties the two stamps together: a rebuilt OpenSSL prefix changes it, which is
+# the case a source timestamp cannot see.
+# One inner-make flag set per OS recipe, picked the same way $(OSGOAL) picks the recipe itself.
+ICFLAGS   = $(if $(filter macos,$(CLASS)),$(MACOS_ICFLAGS),$(if $(filter bsd,$(CLASS)),$(if $(filter openbsd,$(BSDHOST)),$(OPENBSD_ICFLAGS),$(FREEBSD_ICFLAGS)),$(LINUX_ICFLAGS)))
+ILDFLAGS  = $(if $(filter macos,$(CLASS)),$(MACOS_ILDFLAGS),$(if $(filter bsd,$(CLASS)),$(if $(filter openbsd,$(BSDHOST)),$(OPENBSD_ILDFLAGS),$(FREEBSD_ILDFLAGS)),$(LINUX_ILDFLAGS)))
+IADDFLAGS = $(if $(filter macos bsd,$(CLASS)),,$(LINUX_IADDFLAGS))
+ifeq ($(origin EXENAME),command line)
+STAMP_CFLAGS  = $(CFLAGS)
+STAMP_LDFLAGS = $(LDFLAGS) $(ADDITIONALFLAGS)
+else
+STAMP_CFLAGS  = $(ICFLAGS)
+STAMP_LDFLAGS = $(ILDFLAGS) $(IADDFLAGS)
+endif
+
+STAMPFILE = $(dir $(EXENAME))build-stamp.txt
+# The link rule writes the stamp before the binary is stripped, so the two size fields below the
+# '---' describe the unstripped file until this refreshes them. stamp_key never covers them.
+REFRESH_STAMP_SIZE = f="$(dir $(OUTBIN))build-stamp.txt"; [ -f "$$f" ] && sed -i -e "s|^size: .*|size: $$(wc -c < "$(OUTBIN)")|" -e "s|^sha256: .*|sha256: $$(sha256sum "$(OUTBIN)" | cut -d' ' -f1)|" "$$f" || true
+# The gate-able fields, in one place, because both the link rule that writes them and `make list`,
+# which recomputes them to see whether a binary is still current, must produce the same bytes.
+# CFLAGS and LDFLAGS come through $(STAMP_CFLAGS)/$(STAMP_LDFLAGS): the inner make already has the
+# full strings, the outer one rebuilds them from $(ICFLAGS)/$(ILDFLAGS).
+define AGENT_STAMP_FIELDS
+	  echo "archid: $(ARCHID)"; \
+	  echo "archname: $(ARCHNAME)"; \
+	  echo "server_archid: $(SERVER_ARCHID)"; \
+	  echo "class: $(CLASS)"; \
+	  echo "cc: $(CC)"; \
+	  echo "cc_version: $$( { $(CCBIN) --version 2>/dev/null || $(CCBIN) version 2>/dev/null; } | head -1 )"; \
+	  echo "cflags: $(STAMP_CFLAGS)"; \
+	  echo "ldflags: $(STAMP_LDFLAGS)"; \
+	  echo "strip: $(STRIP)"; \
+	  echo "ossltarget: $(OSSLTARGET)"; \
+	  echo "osslver: $(OSSLVER)"; \
+	  echo "openssl_stamp_key: $$(sed -n 's/^stamp_key: //p' $(OSSLPREFIX)/build-stamp.txt 2>/dev/null | head -1)"; \
+	  echo "kvm: $(KVM)  lms: $(LMS)  harden: $(HARDEN)  debug: $(DEBUG)  asan: $(ASAN)"; \
+	  echo "git_rev: $$(git rev-parse --short HEAD 2>/dev/null)$$(git diff --quiet 2>/dev/null || echo '-dirty')"
+endef
+
+define WRITE_AGENT_STAMP
+	{ echo "# Written by the makefile's link rule. The fields above 'stamp_key' decide whether a"; \
+	  echo "# rebuild is needed; the ones below it only describe the binary that was produced."; \
+	  $(AGENT_STAMP_FIELDS); \
+	} > $(STAMPFILE); \
+	echo "stamp_key: $$(sed '/^#/d' $(STAMPFILE) | sha256sum | cut -d' ' -f1)" >> $(STAMPFILE); \
+	{ echo "---"; \
+	  echo "built_at: $$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+	  echo "binary: $(EXENAME)"; \
+	  echo "size: $$(wc -c < $(EXENAME) 2>/dev/null)"; \
+	  echo "sha256: $$(sha256sum $(EXENAME) 2>/dev/null | cut -d' ' -f1)"; \
+	} >> $(STAMPFILE)
+endef
+
+# $(OBJECTS) rather than $^, because the stamp and the archives are prerequisites that must not
+# reach the command line: the linker rejects .ldflags outright, and the archives already arrive
+# through -lssl -lcrypto.
+$(EXENAME): $(OBJECTS) $(LDSTAMP) $(OSSLLIBS) $(FORCEDEP)
+	@echo "link    $@"
+ifeq ($(SKIPFLAGS), 1)
+	$(V)$(CC) $(OBJECTS) $(LDFLAGS) -lrt -o $@ $(WARNFLAGS)
+else
+	$(V)$(CC) $(OBJECTS) $(LDFLAGS) $(ADDITIONALFLAGS) -o $@ $(WARNFLAGS)
+endif
+	$(V)$(WRITE_AGENT_STAMP)
 clean:
-	rm -f meshconsole/*.o
-	rm -f microstack/*.o
-	rm -f microstack/nossl/*.o
-	rm -f microscript/*.o
-	rm -f meshcore/*.o
-	rm -f meshcore/zlib/*.o
-	rm -f meshcore/KVM/Linux/*.o
-	rm -f meshcore/KVM/MacOS/*.o
-	rm -f microlms/lms/*.o
-	rm -f microlms/heci/*.o
+	rm -rf build/*/obj
 
 cleanbin:
-	rm -f $(EXENAME)_aarch64
-	rm -f $(EXENAME)_aarch64-cortex-a53
-	rm -f $(EXENAME)_alpine-x86-64
-	rm -f $(EXENAME)_arm
-	rm -f $(EXENAME)_armhf
-	rm -f $(EXENAME)_arm-linaro
-	rm -f $(EXENAME)_freebsd_x86-64
-	rm -f $(EXENAME)_openbsd_x86-64
-	rm -f $(EXENAME)_openwrt_x86_64
-	rm -f $(EXENAME)_linux-armada370-hf
-	rm -f $(EXENAME)_mips
-	rm -f $(EXENAME)_mips24kc
-	rm -f $(EXENAME)_mipsel24kc
-	rm -f $(EXENAME)_armvirt32
-	rm -f $(EXENAME)_osx-arm-64
-	rm -f $(EXENAME)_osx-x86-64
-	rm -f $(EXENAME)_osx-universal-64
-	rm -f $(EXENAME)_pi
-	rm -f $(EXENAME)_pi2
-	rm -f $(EXENAME)_pogo
-	rm -f $(EXENAME)_poky
-	rm -f $(EXENAME)_poky64
-	rm -f $(EXENAME)_x86
-	rm -f $(EXENAME)_x86_nokvm
-	rm -f $(EXENAME)_x86-64
-	rm -f $(EXENAME)_x86-64_nokvm
-	rm -f DEBUG_$(EXENAME)_aarch64
-	rm -f DEBUG_$(EXENAME)_aarch64-cortex-a53
-	rm -f DEBUG_$(EXENAME)_alpine-x86-64
-	rm -f DEBUG_$(EXENAME)_arm
-	rm -f DEBUG_$(EXENAME)_armhf
-	rm -f DEBUG_$(EXENAME)_arm-linaro
-	rm -f DEBUG_$(EXENAME)_freebsd_x86-64
-	rm -f DEBUG_$(EXENAME)_openbsd_x86-64
-	rm -f DEBUG_$(EXENAME)_openwrt_x86_64
-	rm -f DEBUG_$(EXENAME)_linux-armada370-hf
-	rm -f DEBUG_$(EXENAME)_mips
-	rm -f DEBUG_$(EXENAME)_mips24kc
-	rm -f DEBUG_$(EXENAME)_mipsel24kc
-	rm -f DEBUG_$(EXENAME)_armvirt32
-	rm -f DEBUG_$(EXENAME)_osx-arm-64
-	rm -f DEBUG_$(EXENAME)_osx-x86-64
-	rm -f DEBUG_$(EXENAME)_osx-universal-64
-	rm -f DEBUG_$(EXENAME)_pi
-	rm -f DEBUG_$(EXENAME)_pi2
-	rm -f DEBUG_$(EXENAME)_pogo
-	rm -f DEBUG_$(EXENAME)_poky
-	rm -f DEBUG_$(EXENAME)_poky64
-	rm -f DEBUG_$(EXENAME)_x86
-	rm -f DEBUG_$(EXENAME)_x86_nokvm
-	rm -f DEBUG_$(EXENAME)_x86-64
-	rm -f DEBUG_$(EXENAME)_x86-64_nokvm
+	rm -f build/*/$(EXENAME)_* build/*/DEBUG_$(EXENAME)_*
 
+# KVM=1 only needs the X11 headers for types and macros, because the real calls are dlopen()'d at
+# runtime in linux_kvm.c, so the host's arch-neutral X11 headers work for any target.
+# Cross toolchains do not search host paths by default, hence -idirafter. Only X11 is staged in,
+# because handing a cross compiler the whole of /usr/include makes Buildroot toolchains warn.
+X11INC  = build/hostinc
+KVMINC  = $(if $(filter 1,$(KVM)), -idirafter $(X11INC))
+STAGE_X11 = $(if $(filter 1,$(KVM)), mkdir -p $(X11INC) && ln -sfn /usr/include/X11 $(X11INC)/X11, :)
 
-depend: $(SOURCES)
-	$(CC) -M $(CFLAGS) $(SOURCES) $(HEADERS) > depend
+# Same reasoning as X11 above for the Wayland/DRM/EGL/XKB KVM backend: arch-neutral headers for
+# libraries that are dlopen'd at runtime, not searched by a cross compiler (zig cc especially) by
+# default. EGL, KHR and GLES2 are whole subdirectories, but the wayland-*.h family and xf86drm.h /
+# xf86drmMode.h install as bare top-level files under /usr/include, so each needs its own symlink
+# rather than one directory link. drm_fourcc.h, drm.h and drm_mode.h are not staged here - they come
+# from pkg-config's own -I/usr/include/libdrm (added to CFLAGS below), which is a real -I so it
+# already reaches a cross compiler without needing -idirafter at all.
+KVMDESKTOPINC_DIRS  = EGL KHR GLES2
+KVMDESKTOPINC_FILES = $(notdir $(wildcard /usr/include/wayland-*.h)) xf86drm.h xf86drmMode.h
+STAGE_KVMDESKTOPINC = $(if $(filter 1,$(KVM)), mkdir -p $(X11INC) \
+  $(foreach d,$(KVMDESKTOPINC_DIRS), && ln -sfn /usr/include/$(d) $(X11INC)/$(d)) \
+  $(foreach f,$(KVMDESKTOPINC_FILES), && ln -sfn /usr/include/$(f) $(X11INC)/$(f)) \
+, :)
 
-run:all
-	strip ./$(EXENAME)
-	./agent/signer/signer_linux $(EXENAME) $(shell ./$(EXENAME) -v)
-	rm -f mtrax
-	set MALLOC_TRACE=mtrax
-	export MALLOC_TRACE;
-	./$(EXENAME)
-	mtrace ./$(EXENAME) mtrax
+# The flags the inner make is handed, named rather than written inline, so `make list` can rebuild
+# the same strings without recursing into a build. They are exact: a variable set on make's command
+# line cannot be appended to from the makefile, so the inner make sees precisely what is passed here.
+LINUX_ICFLAGS   = -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) $(CFLAGS) $(CHARDEN) $(CEXTRA) $(KVMINC)
+# 8 MB pinned rather than inherited, because musl reads its default thread stack size out of PT_GNU_STACK and each toolchain fills that field in differently.
+# Measured 2026-09-05: zig writes 16 MB there and musl clamps it to its own 8 MB DEFAULT_STACK_MAX, but a plain musl gcc writes 0 and every thread falls back to musl's 128 KB built-in default.
+# glibc ignores the field and sizes threads from RLIMIT_STACK, so this changes nothing there, and the 64x swing it prevents would only ever show up as a stack overflow deep in duktape recursion.
+LINUX_STACKSIZE = -Wl,-z,stack-size=8388608
+LINUX_ILDFLAGS  = $(LINUXSSL) $(LINUXFLAGS) $(LDFLAGS) $(LDINT) $(LDEXTRA) $(LINUX_STACKSIZE) -ldl
+LINUX_IADDFLAGS = -lrt -z noexecstack -z relro -z now $(DRMLIBS)
 
-vrun:all
-#	strip ./$(EXENAME)
-#	./agent/signer/signer_linux $(EXENAME) $(shell ./$(EXENAME) -v)
-	valgrind --tool=memcheck --leak-check=yes --show-reachable=yes --num-callers=20 --track-fds=yes --track-origins=yes ./mesh_linux
+# Regenerates the addCompressedModule() entries in ILibDuktape_Polyfills.c from modules/*.js, so an
+# edited module lands in the next build. The script runs inside an already-built agent from build/,
+# which is why a first build has to run without UPDATEMODULES.
+update-modules:
+	@echo "modules refresh (update-modules.sh $(if $(MODULE),$(MODULE),all) $(if $(filter 0,$(SYNC)),nosync) $(if $(filter 1,$(DRYRUN)),dryrun))"
+	$(V)./update-modules.sh $(if $(MODULE),$(MODULE),all) $(if $(filter 0,$(SYNC)),nosync) $(if $(filter 1,$(DRYRUN)),dryrun)
 
-trace:
-	mtrace ./$(EXENAME) mtrax
-
-$(LIBNAME): $(OBJECTS) $(SOURCES)
-	$(CC) $(OBJECTS) -shared -o $(LIBNAME)
-
-# Compile on Raspberry Pi 2/3 with KVM
-pi:
-	$(MAKE) EXENAME="meshagent_pi" CFLAGS="-std=gnu99 -g -Wall -D_POSIX -DMICROSTACK_PROXY -DMICROSTACK_TLS_DETECT -D_LINKVM $(CWEBLOG) $(CWATCHDOG) -fno-strict-aliasing $(INCDIRS) -DMESH_AGENTID=25 -D_NOFSWATCHER -D_NOHECI" ADDITIONALSOURCES="$(LINUXKVMSOURCES)" LDFLAGS="-Lopenssl/libstatic/linux/pi -lrt $(LINUXSSL) $(LINUXFLAGS) $(LDFLAGS) $(LDEXTRA) $(DRMLIBS) -ldl"
-	strip meshagent_pi
+ifeq ($(UPDATEMODULES),1)
+linux macos freebsd openbsd: update-modules
+endif
 
 linux:
-	$(MAKE) EXENAME="$(EXENAME)_$(ARCHNAME)$(EXENAME2)" AID="$(ARCHID)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)" ADDITIONALFLAGS="-lrt -z noexecstack -z relro -z now $(DRMLIBS)" CFLAGS="-DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(ARCHID) $(CFLAGS) $(CEXTRA)" LDFLAGS="$(LINUXSSL) $(LINUXFLAGS) $(LDFLAGS) $(LDEXTRA) -ldl"
-	$(SYMBOLCP)
-	$(STRIP)
+	@echo "build   $(OUTBIN)  (ARCHID $(ARCHID), $(ARCHNAME), $(CLASS))"
+	$(ensure_toolchain)
+	$(V)$(STAGE_X11)
+	$(V)$(STAGE_KVMDESKTOPINC)
+	$(if $(filter 1,$(KVM)),$(ensure_kvm_desktop_libs))
+	$(SNAP_OUTBIN_MTIME)
+	$(MAKE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)" ADDITIONALFLAGS="$(LINUX_IADDFLAGS)" CFLAGS="$(LINUX_ICFLAGS)" LDFLAGS="$(LINUX_ILDFLAGS)"
+	$(STRIP_AND_SYMBOLCP)
 
+# MACOSOPT trails $(CFLAGS), which carries $(OPT), so -O3 wins. It is repeated on the link line
+# because LTO does its codegen there, and -dead_strip drops the unreferenced objects the static
+# OpenSSL and jpeg archives still pull in. -D_FORTIFY_SOURCE=3 and -fstack-protector-strong need Apple clang 15 or later.
+MACOSOPT = -O3 -flto
+# Apple Silicon executes nothing whose signature does not match the file, and strip invalidates
+# ld64's linker signature, so re-sign after strip with macos_sign from build-env.sh (a self-signed
+# identity in $BUILDROOT/private). SIGN=0 skips it and SIGN_ADHOC=1 signs ad-hoc without an identity.
+MACOS_ICFLAGS  = $(MACOSARCH) -std=$(CSTD) -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) -D_POSIX -D_NOHECI -DMICROSTACK_PROXY -D__APPLE__ $(CWEBLOG) -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CHARDEN) -fstack-protector-strong $(MACOSOPT) $(CEXTRA)
+MACOS_ILDFLAGS = $(MACOSARCH) $(MACSSL) $(MACOSFLAGS) -L. -lpthread -lz -framework IOKit -framework ApplicationServices -framework SystemConfiguration -framework CoreServices -framework CoreGraphics -framework CoreFoundation -framework Security -Wl,-dead_strip $(MACOSOPT) $(LDFLAGS) $(LDINT) $(LDEXTRA)
+MACOS_SIGN = $(if $(filter 0,$(SIGN)),@echo "  not signed (SIGN=0)",@bash -c '. ./build-env.sh >/dev/null && macos_sign "$$1"' _ "$(OUTBIN)")
 macos:
-	$(MAKE) $(MAKEFILE) EXENAME="$(EXENAME)_$(ARCHNAME)" ADDITIONALSOURCES="$(MACOSKVMSOURCES)" CFLAGS="$(MACOSARCH) -std=gnu99 -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(ARCHID) -D_POSIX -D_NOILIBSTACKDEBUG -D_NOHECI -DMICROSTACK_PROXY -D__APPLE__ $(CWEBLOG) -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CEXTRA)" LDFLAGS="$(MACSSL) $(MACOSFLAGS) -L. -lpthread -ldl -lz -lutil -framework IOKit -framework ApplicationServices -framework SystemConfiguration -framework CoreServices -framework CoreGraphics -framework CoreFoundation -framework Security -fconstant-cfstrings $(LDFLAGS) $(LDEXTRA)"
-	$(SYMBOLCP)
-	$(STRIP)
+	@echo "build   $(OUTBIN)  (ARCHID $(ARCHID), $(ARCHNAME), $(CLASS))"
+	$(ensure_toolchain)
+	$(SNAP_OUTBIN_MTIME)
+	$(MAKE) $(MAKEFILE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(MACOSKVMSOURCES)" CFLAGS="$(MACOS_ICFLAGS)" LDFLAGS="$(MACOS_ILDFLAGS)"
+	$(STRIP_AND_SYMBOLCP)
+	$(MACOS_SIGN)
+
+FREEBSD_ICFLAGS  = -std=$(CSTD) -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) -D_POSIX -D_FREEBSD -D_NOHECI -DMICROSTACK_PROXY -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CHARDEN) $(CEXTRA)
+FREEBSD_ILDFLAGS = $(BSDSSL) $(BSDFLAGS) -L. -lpthread -ldl -lz -lutil $(filter-out -lutil,$(LDFLAGS)) $(LDINT) $(LDEXTRA)
 
 freebsd:
-	$(MAKE) EXENAME="$(EXENAME)_$(ARCHNAME)$(EXENAME2)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)"  AID="$(ARCHID)" CFLAGS="-std=gnu99 -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(ARCHID) -D_POSIX -D_FREEBSD -D_NOHECI -D_NOILIBSTACKDEBUG -DMICROSTACK_PROXY -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CEXTRA)" LDFLAGS="$(BSDSSL) $(BSDFLAGS) -L. -lpthread -ldl -lz $(filter-out -lutil,$(LDFLAGS)) $(LDEXTRA)"
-	$(SYMBOLCP)
-	$(STRIP)
+	@echo "build   $(OUTBIN)  (ARCHID $(ARCHID), $(ARCHNAME), $(CLASS))"
+	$(ensure_toolchain)
+	$(SNAP_OUTBIN_MTIME)
+	$(MAKE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)"  CFLAGS="$(FREEBSD_ICFLAGS)" LDFLAGS="$(FREEBSD_ILDFLAGS)"
+	$(STRIP_AND_SYMBOLCP)
+
+OPENBSD_ICFLAGS  = -std=$(CSTD) -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(SERVER_ARCHID) -D_POSIX -D_FREEBSD -D_OPENBSD -D_NOHECI -DMICROSTACK_PROXY -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CHARDEN) $(CEXTRA)
+OPENBSD_ILDFLAGS = $(BSDSSL) $(BSDFLAGS) -L. -lpthread -lz -lutil $(filter-out -lutil,$(LDFLAGS)) $(LDINT) $(LDEXTRA)
 
 openbsd:
-	$(MAKE) EXENAME="$(EXENAME)_$(ARCHNAME)$(EXENAME2)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)"  AID="$(ARCHID)" CFLAGS="-std=gnu99 -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(ARCHID) -D_POSIX -D_FREEBSD -D_OPENBSD -D_NOHECI -D_NOILIBSTACKDEBUG -DMICROSTACK_PROXY -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CEXTRA)" LDFLAGS="$(BSDSSL) $(BSDFLAGS) -L. -lpthread -lz $(filter-out -lutil,$(LDFLAGS)) $(LDEXTRA)"
-	$(SYMBOLCP)
-	$(STRIP)
+	@echo "build   $(OUTBIN)  (ARCHID $(ARCHID), $(ARCHNAME), $(CLASS))"
+	$(ensure_toolchain)
+	$(SNAP_OUTBIN_MTIME)
+	$(MAKE) EXENAME="$(OUTBIN)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)"  CFLAGS="$(OPENBSD_ICFLAGS)" LDFLAGS="$(OPENBSD_ILDFLAGS)"
+	$(STRIP_AND_SYMBOLCP)
+

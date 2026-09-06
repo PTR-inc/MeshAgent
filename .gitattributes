@@ -1,0 +1,12 @@
+#prevent crlf hassles
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Prebuilt archives and images
+*.a    binary
+*.lib  binary
+*.png  binary
+*.ico  binary
+*.bmp  binary

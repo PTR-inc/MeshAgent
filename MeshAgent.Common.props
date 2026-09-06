@@ -1,0 +1,243 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shared by all agent projects, imported after Microsoft.Cpp.props. Relative paths resolve
+     from the importing project, so every project must sit one directory below the repo root.
+     A project only sets MeshTargetBase, MeshAgentId*, MeshProjectDefines and MeshProjectLibs. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <MeshTargetSuffix Condition="'$(Platform)'=='x64'">64</MeshTargetSuffix>
+    <MeshTargetSuffix Condition="'$(Platform)'=='ARM64'">ARM64</MeshTargetSuffix>
+    <!-- The OpenSSL prefix this build links: openssl\<version>\windows-<platform>[-debug]\ with
+         include\ and lib\ inside, the layout openssl/build/targets.sh names. openssl\VERSION is the
+         one pin; /p:MeshOpenSSLVersion=3.x.y selects another installed prefix. -->
+    <MeshOpenSSLVersion Condition="'$(MeshOpenSSLVersion)'==''">$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)openssl\VERSION').Trim())</MeshOpenSSLVersion>
+    <MeshOpenSSLPlatform Condition="'$(Platform)'=='Win32'">x86</MeshOpenSSLPlatform>
+    <MeshOpenSSLPlatform Condition="'$(Platform)'=='x64'">x64</MeshOpenSSLPlatform>
+    <MeshOpenSSLPlatform Condition="'$(Platform)'=='ARM64'">arm64</MeshOpenSSLPlatform>
+    <MeshOpenSSLTarget>windows-$(MeshOpenSSLPlatform)</MeshOpenSSLTarget>
+    <MeshOpenSSLTarget Condition="'$(MeshDebug)'=='true'">windows-$(MeshOpenSSLPlatform)-debug</MeshOpenSSLTarget>
+    <MeshOpenSSLDir>$(MSBuildThisFileDirectory)openssl\$(MeshOpenSSLVersion)\</MeshOpenSSLDir>
+    <MeshOpenSSLPrefix>$(MeshOpenSSLDir)$(MeshOpenSSLTarget)\</MeshOpenSSLPrefix>
+    <MeshAgentId Condition="'$(Platform)'=='Win32'">$(MeshAgentIdWin32)</MeshAgentId>
+    <MeshAgentId Condition="'$(Platform)'=='x64'">$(MeshAgentIdx64)</MeshAgentId>
+    <MeshAgentId Condition="'$(Platform)'=='ARM64'">$(MeshAgentIdARM64)</MeshAgentId>
+
+    <!-- Mirrors the makefile's build/<arch>/ output directory. Anchored on this file, not on
+         $(SolutionDir), which resolves to the project folder when a .vcxproj is built alone. -->
+    <OutDir>$(MSBuildThisFileDirectory)build\win-$(PlatformTarget)-$(Configuration)$(MeshToolsetSuffix)\</OutDir>
+    <IntDir>$(OutDir)obj\$(MeshTargetBase)$(MeshTargetSuffix)\</IntDir>
+    <TargetName>$(MeshTargetBase)$(MeshTargetSuffix)</TargetName>
+    <!-- msbuild /p:EnableASAN=true would otherwise overwrite the normal build. The _asan name is
+         also the one test/test-agent.ps1 discovers for its AddressSanitizer phase. -->
+    <TargetName Condition="'$(EnableASAN)'=='true'">$(MeshTargetBase)$(MeshTargetSuffix)_asan</TargetName>
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <ExceptionHandling>Async</ExceptionHandling>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <!-- /sdl: stricter /GS cookies and a few warnings promoted to errors, notably uninitialized locals (C4700/C4703).
+           Off until those two errors are fixed at the source: C4703 on `PACL IPC_ACL` (ILibDuktape_net.c) and on `user` (ILibDuktape_GenericMarshal.c).
+           Both are false positives, each pointer is assigned and freed under the same condition, but the compiler cannot correlate the two branches. -->
+      <SDLCheck>false</SDLCheck>
+      <!-- /std:c17 to match the makefile's -std=gnu17. It brings the conformant preprocessor with it. -->
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <AdditionalIncludeDirectories>$(MeshOpenSSLPrefix)include;$(MeshOpenSSLDir)include;..\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>MESH_AGENTID=$(MeshAgentId);WIN32;WINSOCK2;_WINSOCK_DEPRECATED_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;_CONSOLE;MICROSTACK_NO_STDAFX;MICROSTACK_PROXY;MICROSTACK_TLS_DETECT;NOLMSCOMMANDER;_LINKVM;ILibChain_WATCHDOG_TIMEOUT=180000;DUK_USE_DATE_NOW_WINDOWS;DUK_USE_DEBUGGER_SUPPORT;DUK_USE_INTERRUPT_COUNTER;DUK_USE_DEBUGGER_INSPECT;DUK_USE_DEBUGGER_PAUSE_UNCAUGHT;_MSC_PLATFORM_TOOLSET_$(PlatformToolset);$(MeshProjectDefines);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(MeshWebLog)'=='true'">_REMOTELOGGING;_REMOTELOGGINGSERVER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- The linker's MinimumRequiredVersion only stamps a number into the PE header. This is what
+           keeps the headers from declaring an API that the oldest supported Windows does not export. -->
+      <PreprocessorDefinitions Condition="'$(Platform)'!='ARM64'">_WIN32_WINNT=0x0601;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Platform)'=='ARM64'">_WIN32_WINNT=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Platform)'!='Win32'">WIN64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Platform)'=='ARM64'">ARM64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalOptions>/ignore:4099 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalDependencies>Ncrypt.lib;$(MeshOpenSSLPrefix)lib\libcrypto.lib;$(MeshOpenSSLPrefix)lib\libssl.lib;SetupAPI.lib;Crypt32.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;ws2_32.lib;$(MeshProjectLibs);%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- Oldest supported Windows is 7 SP1. ARM64 Windows starts at 10, so the linker refuses 6.01 there. -->
+      <MinimumRequiredVersion Condition="'$(Platform)'!='ARM64'">6.01</MinimumRequiredVersion>
+      <CETCompat Condition="'$(Platform)'=='x64'">true</CETCompat>
+    </Link>
+    <!-- Only regenerate the commit header when the commit actually changed. Rewriting it on every
+         build changes its mtime and forces a rebuild of every source that includes it. The hash
+         covers every value in the file, and is written last so that finding it also proves the
+         file was written completely. The projects build in parallel and run this same event, so
+         the lines go to a per-project temp file that is moved into place at the end. Written
+         straight to the header, one writer's truncating &gt; lands in the middle of the other's &gt;&gt; appends. -->
+    <PreBuildEvent>
+      <Command>
+        git log -1 &gt; nul 2&gt;&amp;1
+        IF %ERRORLEVEL% NEQ 0 exit 0
+        FOR /F "tokens=1" %%F in ('git rev-parse HEAD') do @set MESHCOMMIT=%%F
+        findstr /c:"%MESHCOMMIT%" "$(ProjectDir)..\microscript\ILibDuktape_Commit.h" &gt; nul 2&gt;&amp;1
+        IF %ERRORLEVEL% EQU 0 exit 0
+        @echo // This file is auto-generated, any edits may be overwritten &gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.$(ProjectName).tmp
+        git log -1 --format=%%cI | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_DATE "%%F" &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.$(ProjectName).tmp
+        git rev-parse --short=12 HEAD | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_HASH_SHORT "%%F" &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.$(ProjectName).tmp
+        git log -1 --date=format:"%%y,%%m,%%d,%%H%%M" --format=%25%25cd | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_FILEVERSION %%F &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.$(ProjectName).tmp
+        git log -1 --format=%%H | FOR /F "tokens=1" %%F in ('findstr "."') do @echo #define SOURCE_COMMIT_HASH "%%F" &gt;&gt; $(ProjectDir)..\microscript\ILibDuktape_Commit.$(ProjectName).tmp
+        move /y $(ProjectDir)..\microscript\ILibDuktape_Commit.$(ProjectName).tmp $(ProjectDir)..\microscript\ILibDuktape_Commit.h &gt; nul
+      </Command>
+    </PreBuildEvent>
+  </ItemDefinitionGroup>
+
+  <!-- The projects pin WindowsTargetPlatformVersion to MeshAgent.Sdk.props' MeshWindowsSdkVersion,
+       so this floor only bites when that pin is lowered or overridden on the command line. -->
+  <PropertyGroup>
+    <MeshMinWindowsSDK>10.0.22621.0</MeshMinWindowsSDK>
+  </PropertyGroup>
+  <Target Name="MeshCheckVcTools" BeforeTargets="ClCompile" Condition="'$(MeshToolset)'=='$(MeshDefaultToolset)'">
+    <!-- Equal for a full pin, prefixed for a Major.Minor one. -->
+    <Error Condition="'$(VCToolsVersion)'!='$(MeshVcToolsVersion)' And !$(VCToolsVersion.StartsWith('$(MeshVcToolsVersion).'))"
+           Text="MSVC toolset $(MeshVcToolsVersion) is pinned by MeshAgent.Configuration.props but $(VCToolsVersion) resolved. Install the '$(MeshToolset) C++ build tools ($(MeshVcToolsVersion))' component, or run: pwsh -c '. openssl/build/windows/env.ps1; Install-BuildRootWindows -VsComponents'." />
+  </Target>
+  <Target Name="MeshCheckWindowsSDK" BeforeTargets="ClCompile">
+    <!-- TargetPlatformVersion is the concrete SDK the 10.0 wildcard resolved to.
+         WindowsTargetPlatformVersion still reads "10.0" here. -->
+    <Error Condition="'$(TargetPlatformVersion)'!='' And $([System.Version]::Parse('$(TargetPlatformVersion)').CompareTo($([System.Version]::Parse('$(MeshMinWindowsSDK)')))) &lt; 0"
+           Text="Windows SDK $(TargetPlatformVersion) is older than this build's floor of $(MeshMinWindowsSDK). Install a newer Windows SDK." />
+  </Target>
+
+  <ItemDefinitionGroup Condition="'$(MeshDebug)'=='true'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <!-- DumpHeap is the debugger-protocol command that streams the whole JS heap, a debug aid only, as on the other platforms. -->
+      <PreprocessorDefinitions>_DEBUG;DUK_USE_DEBUGGER_DUMPHEAP;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(MeshDebug)'=='false'">
+    <ClCompile>
+      <Optimization>MinSpace</Optimization>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <OptimizeReferences>true</OptimizeReferences>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <!-- No LinkTimeCodeGeneration here: WholeProgramOptimization is off in MeshAgent.Configuration.props, and a bare /LTCG with no /GL objects only buys a linker warning. -->
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- The agent itself, the same for both executables. main.c and ServiceMain.c stay in the projects. -->
+  <ItemGroup>
+    <ClCompile Include="..\meshcore\agentcore.c" />
+    <ClCompile Include="..\meshcore\KVM\Windows\input.c" />
+    <ClCompile Include="..\meshcore\KVM\Windows\kvm.c" />
+    <ClCompile Include="..\meshcore\KVM\Windows\tile.cpp" />
+    <ClCompile Include="..\meshcore\meshinfo.c" />
+    <ClCompile Include="..\meshcore\wincrypto.cpp" />
+    <ClCompile Include="..\meshcore\zlib\adler32.c" />
+    <ClCompile Include="..\meshcore\zlib\deflate.c" />
+    <ClCompile Include="..\meshcore\zlib\inffast.c" />
+    <ClCompile Include="..\meshcore\zlib\inflate.c" />
+    <ClCompile Include="..\meshcore\zlib\inftrees.c" />
+    <ClCompile Include="..\meshcore\zlib\trees.c" />
+    <ClCompile Include="..\meshcore\zlib\zutil.c" />
+    <ClCompile Include="..\microscript\duktape.c" />
+    <ClCompile Include="..\microscript\duk_module_duktape.c" />
+    <ClCompile Include="..\microscript\ILibDuktapeModSearch.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_ChildProcess.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_CompressedStream.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_Debugger.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_Dgram.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_DuplexStream.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_EncryptionStream.c" />
+    <ClCompile Include="..\microscript\ILibduktape_EventEmitter.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_fs.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_GenericMarshal.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_Helpers.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_HttpStream.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_MemoryStream.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_net.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_NetworkMonitor.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_Polyfills.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_ReadableStream.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_ScriptContainer.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_SHA256.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_SimpleDataStore.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_WebRTC.c" />
+    <ClCompile Include="..\microscript\ILibDuktape_WritableStream.c" />
+    <ClCompile Include="..\microstack\ILibAsyncServerSocket.c" />
+    <ClCompile Include="..\microstack\ILibAsyncSocket.c" />
+    <ClCompile Include="..\microstack\ILibAsyncUDPSocket.c" />
+    <ClCompile Include="..\microstack\ILibCrypto.c" />
+    <ClCompile Include="..\microstack\ILibIPAddressMonitor.c" />
+    <ClCompile Include="..\microstack\ILibMulticastSocket.c" />
+    <ClCompile Include="..\microstack\ILibParsers.c" />
+    <ClCompile Include="..\microstack\ILibProcessPipe.c" />
+    <ClCompile Include="..\microstack\ILibRemoteLogging.c" />
+    <ClCompile Include="..\microstack\ILibSimpleDataStore.c" />
+    <ClCompile Include="..\microstack\ILibWebClient.c" />
+    <ClCompile Include="..\microstack\ILibWebRTC.c" />
+    <ClCompile Include="..\microstack\ILibWebServer.c" />
+    <ClCompile Include="..\microstack\ILibWrapperWebRTC.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\meshcore\agentcore.h" />
+    <ClInclude Include="..\meshcore\KVM\Windows\input.h" />
+    <ClInclude Include="..\meshcore\KVM\Windows\kvm.h" />
+    <ClInclude Include="..\meshcore\KVM\Windows\tile.h" />
+    <ClInclude Include="..\meshcore\meshdefines.h" />
+    <ClInclude Include="..\meshcore\meshinfo.h" />
+    <ClInclude Include="..\meshcore\wincrypto.h" />
+    <ClInclude Include="..\meshcore\zlib\deflate.h" />
+    <ClInclude Include="..\meshcore\zlib\gzguts.h" />
+    <ClInclude Include="..\meshcore\zlib\inffast.h" />
+    <ClInclude Include="..\meshcore\zlib\inffixed.h" />
+    <ClInclude Include="..\meshcore\zlib\inflate.h" />
+    <ClInclude Include="..\meshcore\zlib\inftrees.h" />
+    <ClInclude Include="..\meshcore\zlib\trees.h" />
+    <ClInclude Include="..\meshcore\zlib\zconf.h" />
+    <ClInclude Include="..\meshcore\zlib\zlib.h" />
+    <ClInclude Include="..\meshcore\zlib\zutil.h" />
+    <ClInclude Include="..\microscript\duktape.h" />
+    <ClInclude Include="..\microscript\duk_config.h" />
+    <ClInclude Include="..\microscript\duk_module_duktape.h" />
+    <ClInclude Include="..\microscript\ILibDuktapeModSearch.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_ChildProcess.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_Commit.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_CompressedStream.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_Debugger.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_Dgram.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_DuplexStream.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_EncryptionStream.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_EventEmitter.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_fs.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_GenericMarshal.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_Helpers.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_net.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_NetworkMonitor.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_Polyfills.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_ReadableStream.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_ScriptContainer.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_SHA256.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_SimpleDataStore.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_WebRTC.h" />
+    <ClInclude Include="..\microscript\ILibDuktape_WritableStream.h" />
+    <ClInclude Include="..\microstack\ILibAsyncServerSocket.h" />
+    <ClInclude Include="..\microstack\ILibAsyncSocket.h" />
+    <ClInclude Include="..\microstack\ILibAsyncUDPSocket.h" />
+    <ClInclude Include="..\microstack\ILibCrypto.h" />
+    <ClInclude Include="..\microstack\ILibIPAddressMonitor.h" />
+    <ClInclude Include="..\microstack\ILibMulticastSocket.h" />
+    <ClInclude Include="..\microstack\ILibParsers.h" />
+    <ClInclude Include="..\microstack\ILibProcessPipe.h" />
+    <ClInclude Include="..\microstack\ILibRemoteLogging.h" />
+    <ClInclude Include="..\microstack\ILibSimpleDataStore.h" />
+    <ClInclude Include="..\microstack\ILibWebClient.h" />
+    <ClInclude Include="..\microstack\ILibWebRTC.h" />
+    <ClInclude Include="..\microstack\ILibWebServer.h" />
+    <ClInclude Include="..\microstack\ILibWrapperWebRTC.h" />
+  </ItemGroup>
+</Project>

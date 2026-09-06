@@ -1,0 +1,81 @@
+# valgrind suppressions for macOS hosts on the LouisBrunner/valgrind-macos fork, arm64 and x86_64.
+# Every entry is Apple runtime initialisation that is allocated once per process and never freed
+# by design. Keep new entries anchored to a system library frame, never to an agent function.
+
+{
+   objc-class-realization
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   fun:realizeClassWithoutSwift*
+}
+{
+   objc-class-realization-2
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   fun:realizeClassMaybeSwiftMaybeRelock*
+}
+{
+   objc-runtime-any
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   obj:*/libobjc.A.dylib
+}
+{
+   dyld-loader
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   obj:*/dyld
+}
+{
+   libdispatch-once
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   fun:_dispatch_once_callout
+}
+{
+   libdispatch-callout
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   fun:_dispatch_client_callout
+}
+{
+   swift-runtime-metadata
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   obj:*/libswiftCore.dylib
+}
+{
+   corefoundation-prefs
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   obj:*/CoreFoundation.framework/*
+}
+{
+   launchservices-xpc
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   obj:*/LaunchServices.framework/*
+}
+{
+   hiservices-accessibility-check
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   fun:AXIsProcessTrustedWithOptions
+}
+{
+   libxpc
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   obj:*/libxpc.dylib
+}
