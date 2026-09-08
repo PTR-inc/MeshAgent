@@ -9564,7 +9564,7 @@ FILE* ILibFile_Open(char *path, char *mode)
 	char *p;
 #ifdef WIN32
 	DWORD access, disposition;
-	int oflags = _O_NOINHERIT, fd;
+	int oflags = _O_NOINHERIT, fd, update;
 	HANDLE h;
 	char *fmode;
 #endif
@@ -9581,14 +9581,17 @@ FILE* ILibFile_Open(char *path, char *mode)
 #ifdef WIN32
 	switch (mode[0])
 	{
-		case 'r': access = GENERIC_READ;  disposition = OPEN_EXISTING; break;
-		case 'w': access = GENERIC_WRITE; disposition = CREATE_ALWAYS; break;
-		default:  access = GENERIC_WRITE; disposition = OPEN_ALWAYS; oflags |= _O_APPEND; break;
+		case 'r': access = FILE_GENERIC_READ;  disposition = OPEN_EXISTING; break;
+		case 'w': access = FILE_GENERIC_WRITE; disposition = CREATE_ALWAYS; break;
+		default:  access = FILE_GENERIC_WRITE; disposition = OPEN_ALWAYS; oflags |= _O_APPEND; break;
 	}
-	if (strchr(mode, '+') != NULL) { access = GENERIC_READ | GENERIC_WRITE; }
+	update = (strchr(mode, '+') != NULL);
+	if (update != 0) { access = FILE_GENERIC_READ | FILE_GENERIC_WRITE; }
 	if (strchr(mode, 'x') != NULL) { disposition = CREATE_NEW; }
+	// FILE_APPEND_DATA without FILE_WRITE_DATA makes the kernel place every write at the end, so two appending processes cannot interleave into each other's data.
+	if (mode[0] == 'a') { access = (access & ~FILE_WRITE_DATA) | FILE_APPEND_DATA; }
 
-	fmode = (access == (GENERIC_READ | GENERIC_WRITE)) ? "r+b" : (mode[0] == 'r' ? "rb" : "wb");
+	fmode = update != 0 ? "r+b" : (mode[0] == 'r' ? "rb" : "wb");
 
 	// _O_NOINHERIT is still needed next to the NULL security attributes, because _spawn and _exec copy every CRT descriptor without it into the child's CRT table (lpReserved2) even when the OS handle cannot be inherited.
 	h = CreateFileW(ILibUTF8ToWide(path, -1), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, disposition, FILE_ATTRIBUTE_NORMAL, NULL);
