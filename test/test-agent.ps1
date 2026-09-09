@@ -3,10 +3,11 @@
     MeshAgent combined test driver for Windows, the PowerShell counterpart of test/test-agent.sh.
 
 .DESCRIPTION
-    This script and test/test-agent.sh are the same driver in two languages, and they were kept in
-    step line for line until 2026-09-01. They are deliberately allowed to diverge for now: the .sh
-    here is still on the seven-phase layout, without the merged stress phase, -q or --no-asan.
-    Do not port changes across in either direction until that decision is revisited.
+    This script and test/test-agent.sh are the same driver in two languages, and were kept in step
+    line for line until 2026-09-01. The one real difference since is valgrind, which .sh has as its
+    phase 5 of 6 and this script cannot: valgrind does not run on Windows. Everything else that
+    exists in .sh (-q/-Quick, -qq/-Quicker, --no-asan/-NoAsan, --strict/-Strict, --lenient/-Lenient)
+    is already here too, so port other changes across in both directions as usual.
 
     The single entry point for automated agent testing on Windows. Runs, in order, against one
     agent binary (MeshConsole*.exe by default):
@@ -15,7 +16,10 @@
       3. the same run delivered via -b64exec                   the meshcore delivery path, must pass
       4. connection test against <binary>.msh                 connect, authenticate, launch meshcore,
                                                               and persist the identity into <binary>.db
-      5. AddressSanitizer over the stress run                 needs an ASan build, see -Asan
+      5. reserved for a Windows valgrind-like test            not implemented - there is no Windows
+                                                              build of valgrind, this is a placeholder
+                                                              so both scripts keep the same phase count
+      6. AddressSanitizer over the stress run                 needs an ASan build, see -Asan
     A testmodule can mark a check as a known defect with check.known(section, cond, msg, ref). Those
     are reported as KNOWN rather than FAIL, which -Lenient accepts and -Strict does not.
     Every check lives in test/testmodules/*.js. This script only launches, judges and tabulates.
@@ -50,7 +54,7 @@
     copied there, overwriting whatever was beside the binary.
 
 .PARAMETER Asan
-    ASan-instrumented agent for phase 5. Default: the Release_ASAN build of the same platform,
+    ASan-instrumented agent for phase 6. Default: the Release_ASAN build of the same platform,
     or <binary>_asan.exe beside the agent. Build one with:
     msbuild MeshAgent-2022.sln /p:Configuration=Release_ASAN /p:Platform=x64
 
@@ -69,11 +73,24 @@
     Short form: -q.
 
 .PARAMETER Quicker
-    Everything -q skips, and phase 2 as well, leaving -b64exec as the only stress delivery.
-    That is the one that resembles how the server starts meshcore. Short form: -qq.
+    Everything -q skips, and phase 3 (-b64exec) as well, leaving the direct stress-test.js run
+    (phase 2) as the only stress delivery. Short form: -qq.
 
 .PARAMETER NoAsan
     Skip only the AddressSanitizer phase.
+
+.PARAMETER FsTest
+    Opt in to the >2 GB section of test/testmodules/15-fs.js, forwarded to phases 2 and 6. Off by
+    default, since a non-sparse scratch volume makes it expensive. On Windows the testmodule itself
+    shells out to `fsutil sparse setflag` on the scratch files first, and degrades to a skip if that
+    needs an elevated prompt it does not have or the scratch volume is not NTFS. Cannot reach phase
+    3, which delivers the run via -b64exec: argv is empty there, so the testmodule never sees it.
+
+.PARAMETER Exclude
+    Skip testmodules whose filename contains any of these comma-separated substrings, forwarded to
+    phases 2 and 6 the same way -FsTest is (and for the same reason, cannot reach phase 3). Phase 6
+    already excludes 06- on its own (the known pre-existing crash - see ISSUES.md); this adds to
+    that rather than replacing it.
 
 .PARAMETER Ci
     GitHub Actions mode: ::group:: folding, annotations, job summary table. Implies -Yes.
@@ -100,6 +117,8 @@ param(
     [Alias('q')][switch]$Quick,
     [Alias('qq')][switch]$Quicker,
     [switch]$NoAsan,
+    [switch]$FsTest,
+    [string]$Exclude,
     [switch]$Ci
 )
 
@@ -110,6 +129,12 @@ if ($PSBoundParameters.Count -eq 0) { Get-Help -Detailed $PSCommandPath; exit 0 
 $ErrorActionPreference = 'Continue'
 if ($Ci -and -not $Lenient) { $Strict = $true }
 if ($Quicker) { $Quick = $true }
+
+# The same shape as the .sh side's ${FSFLAG:+$FSFLAG}: a ready-made array every direct-argv phase
+# can splat in, so nothing there needs its own if/else.
+$FsArgs = @()
+if ($FsTest) { $FsArgs += '--fs-test' }
+if ($Exclude) { $FsArgs += "--exclude=$Exclude" }
 
 # The cwd must be the repo root, because stress-test.js resolves its testmodules relative to it.
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -502,7 +527,7 @@ if ($RunBinary -ne $Binary) { Say ("run-as       : {0}  (hard link, so the agent
 # --- phase 1: -info ---------------------------------------------------------------------------
 # -info already reports the commit the agent was built from, whether TLS is compiled in, and the
 # ARCHID it claims. Reading it turns the banner into a check on what is about to be tested.
-Head2 '[1/5] agent -info'
+Head2 '[1/6] agent -info'
 $r = Invoke-Agent -FilePath $Binary -ArgumentList @('-info') -TimeoutSec 30
 Emit $r 20
 
@@ -547,51 +572,58 @@ else {
 # One run over the whole set. The 06-* sections used to run apart, because the TLS
 # reconnect-after-end() crash took the process down and every later check with it. That fix has
 # landed, so the split bought nothing but a second startup and a second set of totals to reconcile.
-Head2 '[2/5] stress test - every testmodule'
-$core = $null
-if ($Quicker) {
-    Say '  skipped by request (-qq)'
-    Record 'stress' 'SKIP' '-qq runs only the -b64exec delivery'
-}
-else {
-    Clear-TestResidue
-    $r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('test\stress-test.js', '--watchdog=120000') -TimeoutSec 360
-    Emit $r
-    $core = Get-StressTotals $r.Output
-    $verdict = Get-StressVerdict $r $core
-    Record 'stress' $verdict[0] $verdict[1]
-}
-
+# test/stress-test.js isolates every testmodule in its own child process by default regardless (see
+# its own header comment), which is also why the confirmed-still-live 06-tls.js SIGSEGV on Linux
+# does not take this phase down the way it used to - a FAIL reported here after that crash's
+# position in the list may be a section caught by the corrupted-parent limit stress-test.js
+# documents for isolation, not that section's own defect - check it alone with
+# `test\stress-test.js --only=<file>` first.
+Head2 '[2/6] stress test - every testmodule'
+Clear-TestResidue
+$r = Invoke-Agent -FilePath $RunBinary -ArgumentList (@('test\stress-test.js', '--watchdog=120000') + $FsArgs) -TimeoutSec 360
+Emit $r
+$core = Get-StressTotals $r.Output
+$verdict = Get-StressVerdict $r $core
+Record 'stress' $verdict[0] $verdict[1]
 
 # --- phase 3: the same run again, delivered the way meshcore is (-b64exec) -------------------
-Head2 '[3/5] stress test via -b64exec (meshcore delivery path)'
-# argv is empty under -b64exec, so the watchdog default is patched into the script. Nothing is
-# excluded: this phase has to run the same set as phase 2 or the check counts cannot be compared.
-$src = Get-Content -Raw 'test\stress-test.js'
-$src = $src -replace '(?m)^var OPT_WATCHDOG = 10000;', 'var OPT_WATCHDOG = 120000;'
-$b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($src))
-# The whole script travels on the command line, and Windows caps that at 32767 characters. Say so
-# rather than letting the phase fail with an unexplained startup error once the script outgrows it.
-if ($b64.Length -gt 32000) {
-    Say ('  the base64 payload is {0} characters, past the Windows command-line limit' -f $b64.Length)
-    Record 'stress (-b64exec)' 'SKIP' "payload too large for a command line ($($b64.Length) chars)"
+Head2 '[3/6] stress test via -b64exec (meshcore delivery path)'
+if ($Quicker) {
+    Say '  skipped by request (-qq)'
+    Record 'stress (-b64exec)' 'SKIP' '-qq runs only the direct stress-test.js delivery'
 }
 else {
-    Clear-TestResidue
-    $r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('-b64exec', $b64) -TimeoutSec 180
-    Emit $r 30
-    $b64r = Get-StressTotals $r.Output
-    $verdict = Get-StressVerdict $r $b64r
-    # Only the check count "(of N)" must match phase 2. The KNOWN split varies between runs.
-    if ($verdict[0] -ne 'FAIL' -and $null -ne $core -and $b64r.Of -gt 0 -and $b64r.Of -ne $core.Of) {
-        Record 'stress (-b64exec)' 'FAIL' ("ran a different check count than phase 2: '{0}' vs '{1}'" -f $b64r.Line, $core.Line)
+    # argv is empty under -b64exec, so the watchdog default is patched into the script. Nothing is
+    # excluded: this phase has to run the same set as phase 2 or the check counts cannot be compared.
+    $src = Get-Content -Raw 'test\stress-test.js'
+    $src = $src -replace '(?m)^var OPT_WATCHDOG = 10000;', 'var OPT_WATCHDOG = 120000;'
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($src))
+    # The whole script travels on the command line, and Windows caps that at 32767 characters. Say so
+    # rather than letting the phase fail with an unexplained startup error once the script outgrows it.
+    if ($b64.Length -gt 32000) {
+        Say ('  the base64 payload is {0} characters, past the Windows command-line limit' -f $b64.Length)
+        Record 'stress (-b64exec)' 'SKIP' "payload too large for a command line ($($b64.Length) chars)"
     }
-    else { Record 'stress (-b64exec)' $verdict[0] $verdict[1] }
+    else {
+        Clear-TestResidue
+        $r = Invoke-Agent -FilePath $RunBinary -ArgumentList @('-b64exec', $b64) -TimeoutSec 180
+        Emit $r 30
+        $b64r = Get-StressTotals $r.Output
+        $verdict = Get-StressVerdict $r $b64r
+        # Only the check count "(of N)" must match phase 2. The KNOWN split varies between runs. Skipped
+        # when -FsTest or -Exclude was given: neither can reach this phase (argv is empty under
+        # -b64exec), so phase 2 legitimately runs a different set and the counts are expected to differ.
+        if ($FsArgs.Count -gt 0) { Record 'stress (-b64exec)' $verdict[0] $verdict[1] }
+        elseif ($verdict[0] -ne 'FAIL' -and $null -ne $core -and $b64r.Of -gt 0 -and $b64r.Of -ne $core.Of) {
+            Record 'stress (-b64exec)' 'FAIL' ("ran a different check count than phase 2: '{0}' vs '{1}'" -f $b64r.Line, $core.Line)
+        }
+        else { Record 'stress (-b64exec)' $verdict[0] $verdict[1] }
+    }
 }
 
 # --- phase 4: connection test against <binary>.msh ---------------------------------------------
 $mshFile = [IO.Path]::ChangeExtension($Binary, '.msh')
-Head2 ('[4/5] connection test ({0})' -f (Split-Path -Leaf $mshFile))
+Head2 ('[4/6] connection test ({0})' -f (Split-Path -Leaf $mshFile))
 $mshSrcFailed = $false
 if ($Msh -and -not $NoConnect) {
     if (-not (Test-Path $Msh)) {
@@ -694,8 +726,15 @@ else {
     }
 }
 
-# --- phase 5: AddressSanitizer over the stress run ---------------------------------------------
-Head2 '[5/5] AddressSanitizer - stress run'
+# --- phase 5: reserved for a Windows valgrind-like test -----------------------------------------
+# Not implemented. There is no Windows build of valgrind, so this is a placeholder so both scripts
+# keep the same phase count and the same phase numbers from here on.
+Head2 '[5/6] reserved (Windows valgrind-like test)'
+Say '  Reserved for windows valgrind-like test'
+Record 'valgrind (stress)' 'SKIP' 'Reserved for windows valgrind-like test'
+
+# --- phase 6: AddressSanitizer over the stress run ---------------------------------------------
+Head2 '[6/6] AddressSanitizer - stress run'
 if ($NoAsan -or $Quick) {
     Record 'asan (stress)' 'SKIP' $(if ($NoAsan) { '-NoAsan' } else { '-Quick skips the slow phases' })
 }
@@ -725,8 +764,8 @@ else {
     # but still reports only the first: measured on a bare -info, 1 report became 3.
     $env:ASAN_OPTIONS = 'continue_on_error=1:print_legend=0'
     Clear-TestResidue
-    $r = Invoke-Agent -FilePath (New-RootShim $Asan) -TimeoutSec 600 -ArgumentList @(
-        'test\stress-test.js', '--exclude=06-', '--watchdog=300000')
+    $r = Invoke-Agent -FilePath (New-RootShim $Asan) -TimeoutSec 600 -ArgumentList (@(
+        'test\stress-test.js', '--exclude=06-', '--watchdog=300000') + $FsArgs)
     Remove-Item Env:\ASAN_OPTIONS -ErrorAction SilentlyContinue
     Emit $r 12
     $reports = ([regex]::Matches($r.Output, 'ERROR: AddressSanitizer')).Count

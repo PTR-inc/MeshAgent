@@ -33,11 +33,19 @@
 #                         Auto-detected from the binary's architecture when not given.
 #       --no-qemu         never use qemu (fails fast on a foreign-arch binary instead)
 #   -q, --quick           skip the slow phases: valgrind and AddressSanitizer
-#       --quicker         everything -q skips, and phase 2 as well, leaving -b64exec as the only
-#                         stress delivery. That is the one that resembles how the server starts
-#                         meshcore. Short form: -qq
+#       --quicker         everything -q skips, and phase 3 (-b64exec) as well, leaving the direct
+#                         stress-test.js run (phase 2) as the only stress delivery. Short form: -qq
 #       --no-valgrind     skip only the valgrind phases
 #       --no-asan         skip only the AddressSanitizer phase
+#       --fs-test         opt in to the >2 GB section of test/testmodules/15-fs.js, forwarded to
+#                         phases 2, 5 and 6. Off by default, since a non-sparse scratch volume makes
+#                         it expensive. Cannot reach phase 3, which delivers the run via -b64exec:
+#                         argv is empty there, so the testmodule has no way to see the flag.
+#   -e, --exclude LIST    skip testmodules whose filename contains any of these comma-separated
+#                         substrings, forwarded to phases 2, 5 and 6 the same way. For example
+#                         --exclude=06- skips 06-http.js, 06-tls.js and 06-websocket.js together
+#                         (the known pre-existing crash - see ISSUES.md). Cannot reach phase 3,
+#                         for the same reason --fs-test cannot.
 #       --no-connect      skip the .msh connection test
 #       --msh PATH        .msh to connect with. The agent only ever reads <binary>.msh next to
 #                         itself, so PATH is copied there, overwriting whatever was beside the binary.
@@ -78,7 +86,7 @@ QEMU=""
 QEMU_AUTO=1
 RUN_VALGRIND=1
 RUN_ASAN=1
-RUN_STRESS=1
+RUN_B64EXEC=1
 ASSUME_YES=0
 STRICT=0
 LENIENT=0
@@ -87,6 +95,8 @@ RUN_CONNECT=1
 ASAN_BIN=""
 MSH_SRC=""
 CONNECT_TIMEOUT=""
+FS_TEST=0
+EXCLUDE=""
 
 # The manual is the comment block at the top of this file, so it can never drift out of range:
 # every leading # line after the shebang, up to the first line that is not one.
@@ -104,9 +114,11 @@ while [ $# -gt 0 ]; do
         --qemu)          QEMU="${2:-}"; QEMU_AUTO=0; shift 2;;
         --no-qemu)       QEMU=""; QEMU_AUTO=0; shift;;
         -q|--quick)      RUN_VALGRIND=0; RUN_ASAN=0; shift;;
-        -qq|--quicker)   RUN_VALGRIND=0; RUN_ASAN=0; RUN_STRESS=0; shift;;
+        -qq|--quicker)   RUN_VALGRIND=0; RUN_ASAN=0; RUN_B64EXEC=0; shift;;
         --no-valgrind)   RUN_VALGRIND=0; shift;;
         --no-asan)       RUN_ASAN=0; shift;;
+        --fs-test)       FS_TEST=1; shift;;
+        -e|--exclude)    EXCLUDE="${2:-}"; shift 2;;
         --no-connect)    RUN_CONNECT=0; shift;;
         --msh|--mesh)    MSH_SRC="${2:-}"; shift 2;;
         --connect-timeout) CONNECT_TIMEOUT="${2:-}"; shift 2;;
@@ -122,6 +134,13 @@ done
 BIN="$(abspath "$BIN")"; DBGBIN="$(abspath "$DBGBIN")"; LOGFILE="$(abspath "$LOGFILE")"
 ASAN_BIN="$(abspath "$ASAN_BIN")"; MSH_SRC="$(abspath "$MSH_SRC")"
 cd "$REPO_ROOT" || exit 1
+
+# A plain flag, the same shape as ${QEMU:+--qemu}, so every direct-argv phase can append
+# ${FSFLAG:+$FSFLAG} without an if/else at each call site.
+FSFLAG=""
+[ "$FS_TEST" = 1 ] && FSFLAG="--fs-test"
+EXCLUDEFLAG=""
+[ -n "$EXCLUDE" ] && EXCLUDEFLAG="--exclude=$EXCLUDE"
 
 # --------------------------------------------------------------------------------------------
 # logging
@@ -531,39 +550,45 @@ else
 fi
 
 # --- phase 2: stress test, every testmodule --------------------------------------------------
-# One run over the whole suite. The 06-* TLS and WebSocket sections used to run apart, because a
-# native crash there took every other check down with it - that crash is fixed, and a section that
-# still fails is now either a real regression or a check the module marked with check.known().
-TOTAL_LINE=""
-if [ "$RUN_STRESS" = "1" ]; then
-    head2 "[2/6] stress test - every testmodule"
-    OUT="$TMPDIR_RUN/stress.log"
-    run_cmd $((150*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" test/stress-test.js \
-            --watchdog=$((80000*SCALE)) ${QEMU:+--qemu}; RC=$?
-    emit "$OUT"
-    TOTAL_LINE="$(total_line "$OUT")"
-    stress_verdict "stress" "$RC" "$TOTAL_LINE"
-else
-    head2 "[2/6] stress test SKIPPED"
-    say "  reason: skipped by request (-qq)"
-    record "stress" SKIP "-qq runs only the -b64exec delivery"
-fi
+# One run over the whole suite. test/stress-test.js isolates every testmodule in its own child
+# process by default (see its own header comment) specifically because 06-tls.js's native crash is
+# not actually fixed - confirmed 2026-09-07, reproduces standalone every time - so a section after
+# it in the list would otherwise never run at all. A FAIL reported here after that crash's position
+# in the list may be a section caught by the corrupted-parent limit stress-test.js documents for
+# isolation, not that section's own defect - check it alone with --only=<file> before trusting it.
+head2 "[2/6] stress test - every testmodule"
+OUT="$TMPDIR_RUN/stress.log"
+run_cmd $((150*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" test/stress-test.js \
+        --watchdog=$((80000*SCALE)) ${QEMU:+--qemu} ${FSFLAG:+$FSFLAG} ${EXCLUDEFLAG:+$EXCLUDEFLAG}; RC=$?
+emit "$OUT"
+TOTAL_LINE="$(total_line "$OUT")"
+stress_verdict "stress" "$RC" "$TOTAL_LINE"
 
 # --- phase 3: the same run again, delivered the way meshcore is (-b64exec) -------------------
-head2 "[3/6] stress test via -b64exec (meshcore delivery path)"
-OUT="$TMPDIR_RUN/stress-b64.log"
-# argv is empty under -b64exec, so the watchdog default is patched into the script.
-B64="$(sed 's/^var OPT_WATCHDOG = 10000;/var OPT_WATCHDOG = '$((80000*SCALE))';/' test/stress-test.js | base64 -w0)"
-run_cmd $((150*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" -b64exec "$B64"; RC=$?
-emit "$OUT" 30
-B64_TOTAL="$(total_line "$OUT")"
-# Only the check count "(of N)" must match phase 2. The KNOWN split varies between runs.
-B64_OF="$(of_in "$B64_TOTAL")"
-CORE_OF="$(of_in "$TOTAL_LINE")"
-if [ -n "$B64_OF" ] && [ -n "$CORE_OF" ] && [ "$B64_OF" != "$CORE_OF" ] && [ "$RC" -eq 0 ] && [ "$(failed_in "$B64_TOTAL")" = "0" ]; then
-    record "stress (-b64exec)" FAIL "passed, but ran a different check count than phase 2: '$B64_TOTAL' vs '$TOTAL_LINE'"
+if [ "$RUN_B64EXEC" = "1" ]; then
+    head2 "[3/6] stress test via -b64exec (meshcore delivery path)"
+    OUT="$TMPDIR_RUN/stress-b64.log"
+    # argv is empty under -b64exec, so the watchdog default is patched into the script.
+    B64="$(sed 's/^var OPT_WATCHDOG = 10000;/var OPT_WATCHDOG = '$((80000*SCALE))';/' test/stress-test.js | base64 -w0)"
+    run_cmd $((150*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$BIN" -b64exec "$B64"; RC=$?
+    emit "$OUT" 30
+    B64_TOTAL="$(total_line "$OUT")"
+    # Only the check count "(of N)" must match phase 2. The KNOWN split varies between runs. Skipped
+    # when --fs-test or --exclude was given: neither can reach this phase (argv is empty under
+    # -b64exec), so phase 2 legitimately runs a different set and the counts are expected to differ.
+    B64_OF="$(of_in "$B64_TOTAL")"
+    CORE_OF="$(of_in "$TOTAL_LINE")"
+    if [ -n "$FSFLAG" ] || [ -n "$EXCLUDEFLAG" ]; then
+        stress_verdict "stress (-b64exec)" "$RC" "$B64_TOTAL"
+    elif [ -n "$B64_OF" ] && [ -n "$CORE_OF" ] && [ "$B64_OF" != "$CORE_OF" ] && [ "$RC" -eq 0 ] && [ "$(failed_in "$B64_TOTAL")" = "0" ]; then
+        record "stress (-b64exec)" FAIL "passed, but ran a different check count than phase 2: '$B64_TOTAL' vs '$TOTAL_LINE'"
+    else
+        stress_verdict "stress (-b64exec)" "$RC" "$B64_TOTAL"
+    fi
 else
-    stress_verdict "stress (-b64exec)" "$RC" "$B64_TOTAL"
+    head2 "[3/6] stress test via -b64exec SKIPPED"
+    say "  reason: skipped by request (-qq)"
+    record "stress (-b64exec)" SKIP "-qq runs only the direct stress-test.js delivery"
 fi
 
 # --- phase 4: connection test against the server named in <binary>.msh ------------------------
@@ -712,7 +737,7 @@ if [ "$RUN_VALGRIND" = "1" ]; then
     head2 "[5/6] valgrind memcheck - stress run ($DBGBIN)"
     OUT="$TMPDIR_RUN/vg-stress.log"; VG="$TMPDIR_RUN/vg-stress.valgrind"
     run_cmd $((120*VG_SCALE)) "$OUT" valgrind "${VG_ARGS[@]}" --log-file="$VG" \
-            "$DBGBIN" test/stress-test.js --watchdog=$((80000*VG_SCALE)); RC=$?
+            "$DBGBIN" test/stress-test.js --watchdog=$((80000*VG_SCALE)) ${FSFLAG:+$FSFLAG} ${EXCLUDEFLAG:+$EXCLUDEFLAG}; RC=$?
     emit "$OUT" 15
     vg_report "$VG" "valgrind (stress)"
 else
@@ -742,7 +767,7 @@ if [ "$RUN_ASAN" = "1" ]; then
         # run going so one report does not hide the rest.
         ASAN_OPTIONS=halt_on_error=0:detect_leaks=1:print_legend=0 \
             run_cmd $((180*SCALE)) "$OUT" ${RUNNER[@]+"${RUNNER[@]}"} "$ASAN_BIN" test/stress-test.js \
-                --watchdog=$((160000*SCALE)) ${QEMU:+--qemu}
+                --watchdog=$((160000*SCALE)) ${QEMU:+--qemu} ${FSFLAG:+$FSFLAG} ${EXCLUDEFLAG:+$EXCLUDEFLAG}
         RC=$?
         emit "$OUT" 12
         ACOUNT="$(grep -c 'ERROR: AddressSanitizer' "$OUT" 2>/dev/null || true)"
