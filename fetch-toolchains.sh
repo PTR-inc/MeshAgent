@@ -10,8 +10,8 @@
 #   ./fetch-toolchains.sh freebsd openbsd   # named components only
 #   ./fetch-toolchains.sh -y                # answer the apt-get prompts yes
 
-# build-env.sh carries the same fallback. Set BUILDROOT in the
-# environment to override both at once.
+# build-env.sh carries the same fallback. Set BUILDROOT in the environment to override both at once.
+
 export BUILDROOT="${BUILDROOT:-/opt/buildroot}"
 
 . "$(dirname "$(readlink -f "$0")")/build-env.sh"
@@ -193,13 +193,22 @@ p_riscv64_xthead() {
 # there instead of pinning a URL and hash by hand. See ZIG_VERSION/TC_ZIG in build-env.sh.
 zig_smoke_ok() {
     [ -x "$1" ] || return 1
-    echo 'typedef int x;' | "$1" cc -target x86_64-linux-gnu -c -x c -o /dev/null - >/dev/null 2>&1
+    local t; t=$(mktemp -d)
+    printf 'typedef int x;\n' > "$t/smoke.c"
+    "$1" cc -target x86_64-linux-gnu -c "$t/smoke.c" -o "$t/smoke.o" >/dev/null 2>&1
+    local rc=$?
+    rm -rf "$t"
+    return $rc
 }
-p_zig() {
-    zig_smoke_ok "$TC_ZIG/zig" && { log_status zig "already present ($ZIG_VERSION)"; return 0; }
-    local key; key=$(zig_index_key) || { log_status zig "FAILED (unsupported host $(uname -s)-$(uname -m))"; return 1; }
+
+# p_zig_one <status name> <version> <install dir>. Two releases are installed: ZIG_VERSION for the fleet
+# and ZIG_VERSION_MIPS for the MIPS agents, see the TC_ZIG_MIPS comment in build-env.sh for why.
+p_zig_one() {
+    local name="$1" ver="$2" dest="$3"
+    zig_smoke_ok "$dest/zig" && { log_status "$name" "already present ($ver)"; return 0; }
+    local key; key=$(zig_index_key) || { log_status "$name" "FAILED (unsupported host $(uname -s)-$(uname -m))"; return 1; }
     local json; json=$(curl -sSL --fail --retry 3 --retry-delay 2 "https://ziglang.org/download/index.json") \
-        || { log_status zig "FAILED (couldn't fetch ziglang.org/download/index.json)"; return 1; }
+        || { log_status "$name" "FAILED (couldn't fetch ziglang.org/download/index.json)"; return 1; }
     local out; out=$(echo "$json" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
@@ -208,15 +217,21 @@ if not e:
     sys.exit(1)
 print(e["tarball"])
 print(e["shasum"])
-' "$ZIG_VERSION" "$key") || { log_status zig "FAILED (version $ZIG_VERSION has no $key entry in index.json)"; return 1; }
+' "$ver" "$key") || { log_status "$name" "FAILED (version $ver has no $key entry in index.json)"; return 1; }
     local url sha; url=$(echo "$out" | sed -n 1p); sha=$(echo "$out" | sed -n 2p)
     local tarball="$BR_DOWNLOADS/$(basename "$url")"
-    fetch "$url" "$sha" "$tarball" || { log_status zig "FAILED (download)"; return 1; }
-    [ -e "$TC_ZIG" ] && rm -rf "$TC_ZIG"
-    mkdir -p "$TC_ZIG" && tar -xaf "$tarball" -C "$TC_ZIG" --strip-components=1 || { log_status zig "FAILED (extract)"; return 1; }
-    zig_smoke_ok "$TC_ZIG/zig" \
-        && log_status zig "OK ($ZIG_VERSION -> $TC_ZIG/zig)" \
-        || { log_status zig "FAILED (extracted, but $TC_ZIG/zig fails a smoke compile)"; return 1; }
+    fetch "$url" "$sha" "$tarball" || { log_status "$name" "FAILED (download)"; return 1; }
+    [ -e "$dest" ] && rm -rf "$dest"
+    mkdir -p "$dest" && tar -xaf "$tarball" -C "$dest" --strip-components=1 || { log_status "$name" "FAILED (extract)"; return 1; }
+    zig_smoke_ok "$dest/zig" \
+        && log_status "$name" "OK ($ver -> $dest/zig)" \
+        || { log_status "$name" "FAILED (extracted, but $dest/zig fails a smoke compile)"; return 1; }
+}
+p_zig() {
+    local rc=0
+    p_zig_one zig "$ZIG_VERSION" "$TC_ZIG" || rc=1
+    p_zig_one zig-mips "$ZIG_VERSION_MIPS" "$TC_ZIG_MIPS" || rc=1
+    return $rc
 }
 
 # ------------------------------------------------------------ musl.cc cross ----
@@ -532,7 +547,8 @@ wire_makefile_toolchains() {
                 "riscv64-linux-musl-cross:$TC_RISCV64_MUSL" \
                 "riscv32-linux-musl-cross:$TC_RISCV32_MUSL" \
                 "riscv64-linux-musl-x86_64:$TC_RISCV64_XTHEAD" \
-                "zig:$TC_ZIG"; do
+                "zig:$TC_ZIG" \
+                "zig-mips:$TC_ZIG_MIPS"; do
         name="${pair%%:*}"; src="${pair#*:}"
         if [ -d "$src" ]; then
             ln -sfn "$src" "$tc_dir/$name"
@@ -551,7 +567,8 @@ Download+verify+extract every cross toolchain, sysroot and source with a stable
 public URL, and wire the two OpenWrt toolchains the makefile needs (ARCHID 28/40).
 Safe to re-run - anything already present and passing its check is skipped.
 
-  ./fetch-toolchains.sh                   everything fetchable
+  ./fetch-toolchains.sh                   this
+  ./fetch-toolchains.sh all               get everything fetchable
   ./fetch-toolchains.sh list              show status, fetch nothing
   ./fetch-toolchains.sh deps              show which packages are installed
   ./fetch-toolchains.sh help              this message
@@ -592,12 +609,13 @@ EOF
 # -y answers the "install missing host deps?" prompt up front so CI never blocks on it.
 ASSUME_YES="${ASSUME_YES:-0}"
 case "$1" in -y|--yes) ASSUME_YES=1; shift ;; esac
-
+EXPLICIT=1;
 case "$1" in
-    help|-h|--help) usage; exit 0 ;;
+    help|-h|--help|"") usage; exit 0 ;;
     # Both are read-only, so they report status without demanding the fetch and extract tools.
     deps) print_dep_status; exit 0 ;;
     list) print_dep_status; echo; br_check; exit $? ;;
+    all) list="$ALL"; EXPLICIT=0;
 esac
 
 check_host_deps

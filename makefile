@@ -234,6 +234,10 @@ PATH_RISCV32_MUSL = ../ToolChains/riscv32-linux-musl-cross/
 # layout has no bin/ subdirectory (the binary sits at $(PATH_ZIG)zig directly, unlike a normal
 # cross toolchain), so CCOVERRIDE lines reference it as $(PATH_ZIG)zig, not $(PATH_ZIG)bin/zig.
 PATH_ZIG = ../ToolChains/zig/
+# The MIPS blocks (ARCH_7, ARCH_28, ARCH_40) use zig 0.15.2: zig 0.16.0 reimplemented musl's pipe() in Zig and its MIPS
+# syscall_pipe returns fd[0] instead of 0, so every `if (pipe(fd) == 0)` in the agent fails, ILibProcessPipe never
+# gets its pipe ends, a child spawn closes stdin and the chain spins in select() = EBADF. See ZIG_VERSION_MIPS in build-env.sh.
+PATH_ZIG_MIPS = ../ToolChains/zig-mips/
 
 # ----------------------------------------------------------------------------
 # Target table, one block per ARCHID, sorted. ARCHNAME is the only required field.
@@ -335,7 +339,7 @@ define ARCH_7
   # The Bootlin uClibc toolchain stays in XDIR/XPREFIX/XTRIPLE/FETCH only to supply STRIP, the
   # same way ARCH_28 and ARCH_40 keep their OpenWrt toolchains - nothing links uClibc any more.
   # XTRIPLE still reading uclibc is what keeps NOILIBSTACKDEBUG off, which musl needs too.
-  CCOVERRIDE = $(PATH_ZIG)zig cc -target mipsel-linux-musleabi -mcpu=mips32 -Wno-date-time
+  CCOVERRIDE = $(PATH_ZIG_MIPS)zig cc -target mipsel-linux-musleabi -mcpu=mips32 -Wno-date-time
   LDINT    = -static
   IPADDR_MONITOR_DISABLE = 1
   IFADDR_DISABLE = 1
@@ -511,7 +515,7 @@ define ARCH_28
   # OpenWrt's mips24kc toolchain defaults to soft-float, confirmed via -Q --help=target when this
   # was first established on the OpenSSL side. XDIR/XPREFIX/XTRIPLE/FETCH untouched, so the
   # OpenWrt toolchain stays in place for STRIP.
-  CCOVERRIDE = $(PATH_ZIG)zig cc -target mips-linux-musleabi -Wno-date-time
+  CCOVERRIDE = $(PATH_ZIG_MIPS)zig cc -target mips-linux-musleabi -Wno-date-time
   KVM      = 0
   LMS      = 0
 endef
@@ -540,7 +544,7 @@ define ARCH_30
   KVM      = 0
   LMS      = 0
   HOST     = freebsd
-  BSDREL   = 14.3
+  BSDREL   = 14.4
 endef
 
 # Legacy-ABI arm64 compatibility target using Bootlin aarch64--glibc--stable (2.31, pinned),
@@ -649,7 +653,7 @@ define ARCH_40
   CFLAGS  += -DBADMATH
   # 2026-08-30: CC moved to zig via CCOVERRIDE - see ARCH_28's comment (soft-float, and why
   # XSYSROOT's implicit --sysroot is neither applied nor needed here).
-  CCOVERRIDE = $(PATH_ZIG)zig cc -target mipsel-linux-musleabi -Wno-date-time
+  CCOVERRIDE = $(PATH_ZIG_MIPS)zig cc -target mipsel-linux-musleabi -Wno-date-time
   KVM      = 0
   LMS      = 0
 endef

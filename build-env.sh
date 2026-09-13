@@ -212,8 +212,13 @@ export TC_RISCV64_XTHEAD="$BR_TOOLCHAINS/riscv64-linux-musl-xthead"
 # symbol-version floor with a current compiler, decoupled from what glibc version the pinned
 # toolchain's own gcc happened to ship with. See p_zig in fetch-toolchains.sh. Pinned like
 # every other toolchain here, not "latest", so a Zig release bump is a deliberate one-line edit.
-export ZIG_VERSION="${ZIG_VERSION:-0.15.2}"
+export ZIG_VERSION="${ZIG_VERSION:-0.16.0}"
 export TC_ZIG="$BR_TOOLCHAINS/zig-$ZIG_VERSION"
+# The MIPS agents (ARCHID 7, 28, 40) link with 0.15.2 because zig 0.16.0 reimplemented musl's pipe() in Zig
+# and its MIPS syscall_pipe returns fd[0] instead of 0 (lib/std/os/linux/mips.zig, unfixed on master 2026-09-13).
+# So `if (pipe(fd) == 0)` fails everywhere in the agent, a child spawn closes stdin and the chain spins in select() = EBADF.
+export ZIG_VERSION_MIPS="${ZIG_VERSION_MIPS:-0.15.2}"
+export TC_ZIG_MIPS="$BR_TOOLCHAINS/zig-$ZIG_VERSION_MIPS"
 # Maps to the key Zig's own release index (ziglang.org/download/index.json) uses per host,
 # which is <arch>-<os>, not uname's raw field order or spelling.
 zig_index_key() {
@@ -311,8 +316,8 @@ br_check() {
              "$TC_AARCH64_A53_MUSL" "$TC_ARMV7_MUSL_HF" "$TC_X86_64_MUSL" "$TC_RISCV64_MUSL" "$TC_RISCV32_MUSL" \
              "$TC_ARMV5_BOOTLIN" "$TC_ARMV7HF_BOOTLIN" "$TC_AARCH64_BOOTLIN" "$TC_MIPSEL_UCLIBC_BOOTLIN" \
              "$TC_SPARC64_BOOTLIN" "$TC_POWERPC64LE_BOOTLIN" \
-             "$TC_X86_BOOTLIN" "$TC_X86_64_BOOTLIN" "$TC_RISCV64_XTHEAD"; do
-        [ -e "$p" ] || { echo "  MISSING: $p"; missing=1; }
+             "$TC_X86_BOOTLIN" "$TC_X86_64_BOOTLIN" "$TC_RISCV64_XTHEAD" "$TC_ZIG" "$TC_ZIG_MIPS"; do
+        if [ -e "$p" ]; then echo "  present: $p"; else echo "  MISSING: $p"; missing=1; fi
     done
     # The directory alone proves nothing, since a bare clone already has target/bin/xar.
     # The prefixed clang is what `make macos` and targets.sh actually invoke.
