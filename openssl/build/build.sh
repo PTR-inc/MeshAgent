@@ -224,7 +224,8 @@ br_patch_mips_la() {   # $1 is the extracted source tree. Uses T_CC; must run af
         for sym in $(grep -oE 'la[[:space:]]+\$[0-9]+,[A-Za-z_][A-Za-z0-9_]+' "$1/$f" | sed 's/.*,//' | sort -u); do
             grep -q "^$sym:" "$1/$f" || continue
             grep -qE "^[[:space:]]*\.globl[[:space:]]+$sym\$" "$1/$f" && continue
-            sed -i "1i .local $sym" "$1/$f"
+            # Not sed -i: BSD sed (macOS) spells it differently and has no "1i text" form.
+            { printf '.local %s\n' "$sym"; cat "$1/$f"; } > "$1/$f.tmp" && mv "$1/$f.tmp" "$1/$f"
             BR_PATCHES="${BR_PATCHES:+$BR_PATCHES }mips-la:${f##*/}:$sym"
             echo "  forward-declared .local $sym in ${f##*/} (clang la/GOT16 workaround)"
         done
@@ -248,8 +249,8 @@ write_build_stamp() {   # $1 target, $2 the staged prefix directory
         echo "objects: $P_MEMBERS ($P_FORMAT/$P_CLASS $P_MACHINE)"
         echo "glibc_only_refs: $P_GLIBC"
         echo "ucontext_refs: $P_UCONTEXT"
-        echo "libcrypto_sha256: $(sha256sum "$2/lib/libcrypto.a" 2>/dev/null | cut -d' ' -f1)"
-        echo "libssl_sha256: $(sha256sum "$2/lib/libssl.a" 2>/dev/null | cut -d' ' -f1)"
+        echo "libcrypto_sha256: $(br_sha256 "$2/lib/libcrypto.a" 2>/dev/null)"
+        echo "libssl_sha256: $(br_sha256 "$2/lib/libssl.a" 2>/dev/null)"
     } > "$f"
 }
 

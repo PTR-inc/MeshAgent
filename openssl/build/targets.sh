@@ -32,8 +32,9 @@ _osx_tools() {
     [ -n "${_OSX_TOOLS_DONE:-}" ] && return
     _OSX_TOOLS_DONE=1
     local arm_min x64_min sdk
-    arm_min=$(make -s -C "$REPO" ARCHID=29 print-macosarch 2>/dev/null)
-    x64_min=$(make -s -C "$REPO" ARCHID=16 print-macosarch 2>/dev/null)
+    # The deployment floors are the osver= of the two macOS rows in buildscripts/targets-v3.conf.
+    arm_min="-mmacosx-version-min=$("$REPO/buildscripts/target-v3.sh" field 29 OSVER 2>/dev/null)"
+    x64_min="-mmacosx-version-min=$("$REPO/buildscripts/target-v3.sh" field 16 OSVER 2>/dev/null)"
     if [ "$(uname -s)" = Darwin ]; then
         _OSX_ARM_CC="cc $arm_min"; _OSX_X64_CC="cc $x64_min"
         _OSX_ARM_AR=; _OSX_ARM_RANLIB=; _OSX_ARM_NM=; _OSX_X64_AR=; _OSX_X64_RANLIB=; _OSX_X64_NM=
@@ -278,7 +279,7 @@ stamp_gating_fields() {
     cat <<EOF
 target: $1
 openssl_version: $OPENSSL_VERSION
-source_sha256: $(sha256sum "$OPENSSL_TARBALL" 2>/dev/null | cut -d' ' -f1)
+source_sha256: $(br_sha256 "$OPENSSL_TARBALL" 2>/dev/null)
 configure_target: $T_CONF
 configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl $T_FLAGS $T_EXTRA
 make_target: $T_MAKE
@@ -295,7 +296,7 @@ EOF
 }
 
 # sha256 of the gating fields. A rebuild is needed when this differs from the installed stamp's.
-stamp_key() { stamp_gating_fields "$@" | sha256sum | cut -d' ' -f1; }
+stamp_key() { stamp_gating_fields "$@" | { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } | cut -d' ' -f1; }
 
 # Compares an installed prefix's stamp against what targets.sh would produce now, and prints one
 # indented block per field that differs. Empty output means the prefix is up to date. Returns 1
