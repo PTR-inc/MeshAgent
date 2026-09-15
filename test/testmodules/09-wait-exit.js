@@ -41,10 +41,14 @@ exports.run = function (check, deepEqual, done) {
     // Windows has no sub second sleep. ping -n 2 takes about one second.
     function sleeper(sec) { return sh(isWin ? ('ping -n ' + (Math.ceil(sec) + 1) + ' 127.0.0.1 >nul') : ('sleep ' + sec)); }
     var anchors = [];   // Timer objects stay referenced here, see the stress-test.js header.
+    // Debug builds expose child_process._stackRemaining(). The stack lines are information only, no check depends on them.
+    var stackLeft = cp._stackRemaining, stackPrev = -1;
+    function kb(n) { return Math.round(n / 1024) + ' KB'; }
+    if (stackLeft) { var s0 = stackLeft(); console.log(s0 < 0 ? 'stack: bound not available, depth cap only' : ('stack: ' + kb(s0) + ' free at start')); }
 
     // --- a wait nested inside another wait. The outer child's 'exit' handler runs inside the outer
     //     wait's loop, spawns a second child and waits for it there ---
-    var outer = sleeper(0.5), nestOK = false, innerCode = -1, nestErr = null;
+    var outer = sleeper(0.3), nestOK = false, innerCode = -1, nestErr = null;
     outer.on('exit', function () {
         var inner = sh('exit 5');
         try { inner.waitExit(); nestOK = true; innerCode = inner.code; } catch (e) { nestErr = '' + e; }
@@ -53,23 +57,24 @@ exports.run = function (check, deepEqual, done) {
     check(S, nestOK && innerCode == 5, 'nested waitExit() inside another waitExit() failed (ok=' + nestOK + ', code=' + innerCode + ', err=' + nestErr + ')');
 
     // --- the timeout throws, and a timer armed before the wait fires inside it and waits on a second
-    //     child there. waitExit(1) rounds up to one second, and the deadline check has whole second
-    //     precision, so the throw comes between 1 and 2 seconds after the call. The base timer runs
-    //     inside the wait, so the 100 ms timer is dispatched before that deadline ---
+    //     child there. The deadline has millisecond precision, so waitExit(1000) throws about one
+    //     second after the call. The base timer runs inside the wait, so the 100 ms timer is
+    //     dispatched before that deadline ---
     var hung = sleeper(3), threw = null, t0 = Date.now(), timerNestOK = false, timerCode = -1, timerErr = null;
     anchors.push(setTimeout(function () {
         var viaTimer = sh('exit 5');
         try { viaTimer.waitExit(); timerNestOK = true; timerCode = viaTimer.code; } catch (e) { timerErr = '' + e; }
     }, 100));
-    try { hung.waitExit(1); } catch (e) { threw = '' + e; }
+    try { hung.waitExit(1000); } catch (e) { threw = '' + e; }
     var took = Date.now() - t0;
     check(S, timerNestOK && timerCode == 5, 'timer inside a wait: nested waitExit() failed (ok=' + timerNestOK + ', code=' + timerCode + ', err=' + timerErr + ')');
-    check(S, threw != null && threw.indexOf('timed out') >= 0, 'waitExit(1) did not throw a timeout: ' + threw);
-    check(S, took >= 900 && took < 6000, 'waitExit(1) returned after ' + took + 'ms, expected 1 to 2 seconds');
+    check(S, threw != null && threw.indexOf('timed out') >= 0, 'waitExit(1000) did not throw a timeout: ' + threw);
+    check(S, took >= 900 && took < 2500, 'waitExit(1000) returned after ' + took + 'ms, expected about 1 second');
     hung.kill();
 
-    // --- a later wait is not ended by the stale token of the timed out child, and a wait on an
-    //     already exited child returns at once ---
+    // --- the timed out child exits later, from the kill. Its exit ends nothing, because no wait tagged
+    //     with it is live any more, so a later wait runs to its own child's end. A wait on an already
+    //     exited child returns at once ---
     var later = sleeper(0.3), t1 = Date.now();
     later.waitExit();
     var d1 = Date.now() - t1;
@@ -85,13 +90,21 @@ exports.run = function (check, deepEqual, done) {
     var m = sleeper(0.3); t1 = Date.now(); m.waitExit(-1); d1 = Date.now() - t1;
     check(S, m.code == 0 && d1 >= 200, 'waitExit(-1) returned after ' + d1 + 'ms with code ' + m.code);
 
+    // --- two waits pending on the same child. A timer inside the outer wait calls waitExit() on the
+    //     same child, and its one exit must end both waits. Before tags the inner call overwrote the
+    //     outer's token and the outer sat out its whole default timeout ---
+    var twice = sleeper(0.3), innerDone = false, innerErr = null; t1 = Date.now();
+    anchors.push(setTimeout(function () { try { twice.waitExit(); innerDone = true; } catch (e) { innerErr = '' + e; } }, 100));
+    twice.waitExit(); d1 = Date.now() - t1;
+    check(S, innerDone && innerErr == null && twice.exits == 1 && d1 >= 200 && d1 < 3000, 'two waits on one child: inner=' + innerDone + ' err=' + innerErr + ' exits=' + twice.exits + ' took ' + d1 + 'ms');
+
     // --- promise.wait() nested inside promise.wait(). The outer promise settles from a child's
     //     'exit' handler, which runs inside the outer wait's loop and waits there for a second
     //     promise that another child's exit settles ---
-    var host = sleeper(0.5), pv = null, inner = null, perr = null;
+    var host = sleeper(0.3), pv = null, inner = null, perr = null;
     var p1 = new promise(function (res) {
         host.on('exit', function () {
-            var second = sleeper(0.3);
+            var second = sleeper(0.2);
             var p2 = new promise(function (r2) { second.on('exit', function () { r2('inner'); }); });
             try { inner = promise.wait(p2); } catch (e) { perr = '' + e; }
             res('outer');
@@ -109,14 +122,15 @@ exports.run = function (check, deepEqual, done) {
     // --- depth cap: 16 nested waits with 17 children alive at once. The 17th nested wait throws,
     //     and every child's exit still reaches its own wait, so no pipe read was skipped and no fd
     //     or pid was mixed up. A SIGCHLD listener adds the second waitpid() path that raced the
-    //     pipe reap. The children sleep 3 seconds because a timer set inside a nested wait can be
-    //     held back for up to a second by the base timer's select() floor ---
+    //     pipe reap. The children sleep 2 seconds, all 17 spawns are done well inside the first
+    //     second, and the whole module has to stay inside the harness's 10 second watchdog ---
     var depth = 0, maxDepth = 0, capHits = 0, okWaits = 0, launched = 0, lostExits = 0, sigchld = 0;
     var onSig = function () { sigchld++; };
     if (!isWin) { try { process.on('SIGCHLD', onSig); } catch (e) { } }
     function nest() {
         ++depth; if (depth > maxDepth) { maxDepth = depth; }
-        var c = sleeper(3);
+        if (stackLeft) { var sl = stackLeft(); if (sl >= 0) { console.log('depth ' + depth + ': ' + kb(sl) + ' free' + (stackPrev >= 0 ? (' (' + kb(stackPrev - sl) + ' per level)') : '')); stackPrev = sl; } }
+        var c = sleeper(2);
         if (++launched < 17) { anchors.push(setTimeout(nest, 30)); }
         try { c.waitExit(); ++okWaits; if (c.exits != 1) { lostExits++; } }
         catch (e) { if (('' + e).indexOf('nesting depth') >= 0) { ++capHits; } c.kill(); }

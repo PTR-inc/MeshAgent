@@ -24,7 +24,7 @@ runs:
     # only compared the version string, so a flag, compiler or libc change was skipped as current.
     - name: Fetch the OpenSSL source
       shell: bash
-      run: ./fetch-toolchains.sh -y openssl >/dev/null
+      run: ./buildscripts.v2/fetch-toolchains.sh -y openssl >/dev/null
 
     # BR_FETCH=1 lets build.sh provision its own toolchain from the target's T_FETCH
     # tokens, the same table `make list` and fetch-toolchains.sh read. That is why no

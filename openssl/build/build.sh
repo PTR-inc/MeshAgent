@@ -2,7 +2,7 @@
 # Builds one or more OpenSSL targets and installs each into its prefix openssl/<version>/<target>/.
 # Usage is build.sh <target|all|list>, with BUILDROOT, MAKE_JOBS and BR_FETCH=1 as optional knobs.
 # Nothing is installed unless it passes the gates in probe.sh. See openssl/build/README.md.
-. "$(dirname "$(readlink -f "$0")")/../../build-env.sh"
+. "$(dirname "$(readlink -f "$0")")/../../buildscripts.v2/build-env.sh"
 . "$BR_SCRIPTS/targets.sh"
 . "$BR_SCRIPTS/probe.sh"
 
@@ -106,7 +106,7 @@ print_target_list() {
         printf "%-22s %-7s %-9s %-10s %-4s %-4s %-30s %s\n" "$t" "$T_LIBC" "$st" "${ids:--}" "$asm" "$zig" "${T_EXTRA:--}" "openssl/$OPENSSL_VERSION/$t$([ -d "$T_PREFIX/lib" ] || echo ' (absent)')"
     done
     echo
-    echo "  $ready buildable here. MISSING = no compiler, see ./fetch-toolchains.sh. windows = built by windows/build.ps1"
+    echo "  $ready buildable here. MISSING = no compiler, see ./buildscripts.v2/fetch-toolchains.sh. windows = built by windows/build.ps1"
     echo "  ARCHIDS = agent targets linking that prefix ('-' = none, id@version = pinned to another series)"
 }
 
@@ -193,8 +193,8 @@ br_provision() {
         ${SUDO:-sudo} apt-get -qq update >/dev/null && ${SUDO:-sudo} apt-get -qq -y install $apt_pkgs >/dev/null || return 1
     fi
     if [ -n "$comps" ]; then
-        echo "  fetch-toolchains.sh$comps"
-        ( cd "$REPO" && ./fetch-toolchains.sh -y $comps ) || return 1
+        echo "  buildscripts.v2/fetch-toolchains.sh$comps"
+        ( cd "$REPO" && ./buildscripts.v2/fetch-toolchains.sh -y $comps ) || return 1
     fi
 }
 

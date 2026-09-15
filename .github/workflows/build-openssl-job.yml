@@ -84,7 +84,7 @@ jobs:
         name: Resolve version and matrices from targets.sh / build.ps1
         run: |
           set -euo pipefail
-          . ./build-env.sh >/dev/null
+          . ./buildscripts.v2/build-env.sh >/dev/null
           v="${{ inputs.version }}"; [ -n "$v" ] || v="$OPENSSL_VERSION"
           openssl_sha256_lookup "$v" >/dev/null \
             || { echo "::error::'$v' does not resolve to a published OpenSSL release"; exit 1; }

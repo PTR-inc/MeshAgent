@@ -355,7 +355,7 @@ print_target_field() {
 # This block only runs when the file is executed directly, so sourcing it still just
 # defines br_target and BR_ALL_TARGETS as before.
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-    . "$(dirname "$(readlink -f "$0")")/../../build-env.sh" >/dev/null
+    . "$(dirname "$(readlink -f "$0")")/../../buildscripts.v2/build-env.sh" >/dev/null
     case "${1:-}" in
         --names)  print_target_names "${2:-}" ;;
         --field)  print_target_field "$2" "$3" ;;

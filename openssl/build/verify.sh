@@ -4,7 +4,7 @@
 # comes from probe.sh, the same code build.sh runs before it stages anything.
 
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-. "$HERE/../../build-env.sh" >/dev/null || exit 1
+. "$HERE/../../buildscripts.v2/build-env.sh" >/dev/null || exit 1
 . "$BR_SCRIPTS/targets.sh" || exit 1
 . "$BR_SCRIPTS/probe.sh" || exit 1
 cd "$REPO" || exit 1

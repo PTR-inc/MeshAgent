@@ -5,7 +5,8 @@
 
 # REPO comes from this script's own location so sibling checkouts do not
 # stage into each other. Set REPO=... to stage into a different checkout.
-REPO_DEFAULT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# This file lives one level under the repo root, in buildscripts.v2/.
+REPO_DEFAULT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export REPO="${REPO:-$REPO_DEFAULT}"
 
 # The OpenSSL build scripts live under openssl/build, the archives under openssl/<version>/<target>.

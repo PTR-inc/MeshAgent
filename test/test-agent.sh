@@ -348,7 +348,7 @@ if [ "$QEMU_AUTO" = "1" ]; then
             QEMU_SYSROOT="$(qemu_sysroot_for "$NEEDED" "$BIN_INTERP")"
             if [ -n "$BIN_INTERP" ] && [ -z "$QEMU_SYSROOT" ]; then
                 say "No sysroot providing $BIN_INTERP found for this $BIN_LIBC binary (searched: $QEMU_SYSROOT_ROOTS)."
-                say "  fetch the matching toolchain (./fetch-toolchains.sh list) or pass --qemu \"$NEEDED -L <sysroot>\" - aborting."
+                say "  fetch the matching toolchain (./buildscripts.v2/fetch-toolchains.sh list) or pass --qemu \"$NEEDED -L <sysroot>\" - aborting."
                 exit 1
             fi
             QEMU_CPU="$(qemu_cpu_hint "$BIN" "$NEEDED")"

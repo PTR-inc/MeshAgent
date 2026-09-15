@@ -24,7 +24,7 @@ jobs:
       - name: Install clang, lld and ccache
         run: sudo apt-get -qq update >/dev/null && sudo apt-get -qq -y install clang lld ccache >/dev/null
       - name: Fetch the FreeBSD sysroot
-        run: ./fetch-toolchains.sh -y freebsd >/dev/null
+        run: ./buildscripts.v2/fetch-toolchains.sh -y freebsd >/dev/null
       - name: Restore the ccache for ARCHID 30
         uses: actions/cache@v6
         with:

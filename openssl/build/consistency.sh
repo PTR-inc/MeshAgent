@@ -3,7 +3,7 @@
 # or when a pinned constant is copied somewhere that should ask for it instead.
 # Each source of truth owns exactly one kind of constant, and this script is what enforces that.
 
-. "$(dirname "$(readlink -f "$0")")/../../build-env.sh" >/dev/null || exit 1
+. "$(dirname "$(readlink -f "$0")")/../../buildscripts.v2/build-env.sh" >/dev/null || exit 1
 . "$BR_SCRIPTS/targets.sh" || exit 1
 cd "$REPO" || exit 1
 

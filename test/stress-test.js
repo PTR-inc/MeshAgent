@@ -338,13 +338,13 @@ function runIsolated(files) {
         // reach, such as a native loop with no JS involved.
         var deadlineSec = Math.ceil(OPT_WATCHDOG / 1000) + 15;
         var waitThrew = false;
-        try { c.waitExit(deadlineSec); }
+        try { c.waitExit(deadlineSec * 1000); }
         catch (e) { waitThrew = true; }
         process.stdout.write(out);
 
-        // waitExit() is the fast path only, never what the verdict rests on. This branch still has
-        // one global continuation state per chain, so any child's exit ends whichever wait happens
-        // to be running, and a wait can return before its own child has written anything.
+        // waitExit() is the fast path only, never what the verdict rests on. Its timeout is in
+        // milliseconds. Until 2026-09-14 this passed the seconds value, which only went unnoticed
+        // because the deadline had whole second precision and the old code returned silently.
         // Polling for the result file touches neither the chain nor the pipe manager, so the
         // verdict holds whether or not waitExit() behaved.
         var graceMs = (exitSeen || waitThrew) ? 2000 : (deadlineSec * 1000);
