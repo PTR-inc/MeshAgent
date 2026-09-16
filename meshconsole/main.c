@@ -97,7 +97,7 @@ int main(int argc, char **argv)
 		printf("Unable to get the executable path\n");
 		printf("Check if the agent is started with a valid path\n\n");
 		ILIBCRITICALEXIT(246);
-	};
+	}
 #endif
 
 	// Check if .JS file is integrated with executable
