@@ -48,26 +48,28 @@ exports.run = function (check, deepEqual, done) {
 
     // --- a wait nested inside another wait. The outer child's 'exit' handler runs inside the outer
     //     wait's loop, spawns a second child and waits for it there ---
-    var outer = sleeper(0.3), nestOK = false, innerCode = -1, nestErr = null;
+    var outer = sleeper(0.3), nestOK = false, innerCode = -1, nestErr = null, innerExits = -1;
     outer.on('exit', function () {
         var inner = sh('exit 5');
         try { inner.waitExit(); nestOK = true; innerCode = inner.code; } catch (e) { nestErr = '' + e; }
+        innerExits = inner.exits;
     });
     outer.waitExit();
-    check(S, nestOK && innerCode == 5, 'nested waitExit() inside another waitExit() failed (ok=' + nestOK + ', code=' + innerCode + ', err=' + nestErr + ')');
+    check(S, nestOK && innerCode == 5, 'nested waitExit() inside another waitExit() failed (ok=' + nestOK + ', code=' + innerCode + ', exit events=' + innerExits + ', err=' + nestErr + ')');
 
     // --- the timeout throws, and a timer armed before the wait fires inside it and waits on a second
     //     child there. The deadline has millisecond precision, so waitExit(1000) throws about one
     //     second after the call. The base timer runs inside the wait, so the 100 ms timer is
     //     dispatched before that deadline ---
-    var hung = sleeper(3), threw = null, t0 = Date.now(), timerNestOK = false, timerCode = -1, timerErr = null;
+    var hung = sleeper(3), threw = null, t0 = Date.now(), timerNestOK = false, timerCode = -1, timerErr = null, timerExits = -1;
     anchors.push(setTimeout(function () {
         var viaTimer = sh('exit 5');
         try { viaTimer.waitExit(); timerNestOK = true; timerCode = viaTimer.code; } catch (e) { timerErr = '' + e; }
+        timerExits = viaTimer.exits;
     }, 100));
     try { hung.waitExit(1000); } catch (e) { threw = '' + e; }
     var took = Date.now() - t0;
-    check(S, timerNestOK && timerCode == 5, 'timer inside a wait: nested waitExit() failed (ok=' + timerNestOK + ', code=' + timerCode + ', err=' + timerErr + ')');
+    check(S, timerNestOK && timerCode == 5, 'timer inside a wait: nested waitExit() failed (ok=' + timerNestOK + ', code=' + timerCode + ', exit events=' + timerExits + ', err=' + timerErr + ')');
     check(S, threw != null && threw.indexOf('timed out') >= 0, 'waitExit(1000) did not throw a timeout: ' + threw);
     check(S, took >= 900 && took < 2500, 'waitExit(1000) returned after ' + took + 'ms, expected about 1 second');
     hung.kill();
@@ -91,8 +93,8 @@ exports.run = function (check, deepEqual, done) {
     check(S, m.code == 0 && d1 >= 200, 'waitExit(-1) returned after ' + d1 + 'ms with code ' + m.code);
 
     // --- two waits pending on the same child. A timer inside the outer wait calls waitExit() on the
-    //     same child, and its one exit must end both waits. Before tags the inner call overwrote the
-    //     outer's token and the outer sat out its whole default timeout ---
+    //     same child, and its one exit must end both waits. Before, the second call failed with
+    //     "waitExit() already in progress" ---
     var twice = sleeper(0.3), innerDone = false, innerErr = null; t1 = Date.now();
     anchors.push(setTimeout(function () { try { twice.waitExit(); innerDone = true; } catch (e) { innerErr = '' + e; } }, 100));
     twice.waitExit(); d1 = Date.now() - t1;
@@ -113,11 +115,40 @@ exports.run = function (check, deepEqual, done) {
     try { pv = promise.wait(p1); } catch (e) { perr = '' + e; }
     check(S, pv == 'outer' && inner == 'inner' && perr == null, 'nested promise.wait(): outer=' + pv + ' inner=' + inner + ' err=' + perr);
 
+    // --- promise.wait() nested inside waitExit(). A timer inside the wait blocks on a promise that a
+    //     second timer resolves, so both kinds of wait share one stack of continuations ---
+    var pHost = sleeper(0.3), mixed = null, mixedErr = null; t1 = Date.now();
+    anchors.push(setTimeout(function () {
+        var p3 = new promise(function (r3) { anchors.push(setTimeout(function () { r3('mixed'); }, 50)); });
+        try { mixed = promise.wait(p3); } catch (e) { mixedErr = '' + e; }
+    }, 100));
+    pHost.waitExit(); d1 = Date.now() - t1;
+    check(S, mixed == 'mixed' && mixedErr == null && pHost.exits == 1 && pHost.code == 0, 'promise.wait() inside waitExit(): value=' + mixed + ' err=' + mixedErr + ' exits=' + pHost.exits + ' code=' + pHost.code + ' took ' + d1 + 'ms');
+
     // --- 'exit' fires once even with stdout and stderr both piped. Each pipe breaking used to run
     //     the exit handler again ---
     var both = sh(isWin ? 'echo out & echo err 1>&2 & exit 3' : 'echo out; echo err >&2; exit 3');
     both.waitExit();
     check(S, both.exits == 1 && both.code == 3, "'exit' fired " + both.exits + ' time(s) with code ' + both.code + ', expected once with 3');
+
+    // --- process.exit() inside a wait. A child agent calls process.exit(3) from a timer two waits deep.
+    //     Every wait must throw and unwind before the script engine is destroyed, so the child ends
+    //     with code 3 instead of crashing ---
+    var exitScript = [
+        "var cp = require('child_process'), win = process.platform == 'win32';",
+        "function slp() { return (win ? cp.execFile(process.env['windir'] + '\\\\System32\\\\cmd.exe', ['cmd.exe', '/c', 'ping -n 3 127.0.0.1 > nul']) : cp.execFile('/bin/sh', ['sh', '-c', 'sleep 2'])); }",
+        "var a = slp();",
+        "var k1 = setTimeout(function () { var b = slp(); var k2 = setTimeout(function () { console.log('EXIT_CALLED'); process.exit(3); }, 100); b.waitExit(); console.log('INNER_RETURNED'); }, 100);",
+        "a.waitExit();",
+        "console.log('OUTER_RETURNED');"
+    ].join('\n');
+    var ex = cp.execFile(process.execPath, ['meshagent', '-b64exec', Buffer.from(exitScript).toString('base64')]), exOut = '', exCode = -1;
+    ex.stdout.on('data', function (d) { exOut += d.toString(); });
+    ex.stderr.on('data', function (d) { exOut += d.toString(); });
+    ex.on('exit', function (c) { exCode = c; });
+    try { ex.waitExit(20000); } catch (e) { exOut += ' [' + e + ']'; ex.kill(); }
+    var exOK = exCode == 3 && exOut.indexOf('EXIT_CALLED') >= 0 && exOut.indexOf('RETURNED') < 0;
+    check(S, exOK, 'process.exit(3) two waits deep: child code=' + exCode + ', output: ' + exOut.replace(/\s+/g, ' ').substring(0, 300));
 
     // --- depth cap: 16 nested waits with 17 children alive at once. The 17th nested wait throws,
     //     and every child's exit still reaches its own wait, so no pipe read was skipped and no fd

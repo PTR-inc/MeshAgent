@@ -92,6 +92,11 @@
     already excludes 06- on its own (the known pre-existing crash - see ISSUES.md); this adds to
     that rather than replacing it.
 
+.PARAMETER Include
+    The inverse of -Exclude: run only testmodules whose filename contains at least one of these
+    comma-separated substrings. Combines with -Exclude (a file needs to pass both) rather than
+    replacing it, and shares the same phase-3 limitation.
+
 .PARAMETER Ci
     GitHub Actions mode: ::group:: folding, annotations, job summary table. Implies -Yes.
 
@@ -119,6 +124,7 @@ param(
     [switch]$NoAsan,
     [switch]$FsTest,
     [string]$Exclude,
+    [string]$Include,
     [switch]$Ci
 )
 
@@ -135,6 +141,7 @@ if ($Quicker) { $Quick = $true }
 $FsArgs = @()
 if ($FsTest) { $FsArgs += '--fs-test' }
 if ($Exclude) { $FsArgs += "--exclude=$Exclude" }
+if ($Include) { $FsArgs += "--include=$Include" }
 
 # The cwd must be the repo root, because stress-test.js resolves its testmodules relative to it.
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -611,8 +618,9 @@ else {
         $b64r = Get-StressTotals $r.Output
         $verdict = Get-StressVerdict $r $b64r
         # Only the check count "(of N)" must match phase 2. The KNOWN split varies between runs. Skipped
-        # when -FsTest or -Exclude was given: neither can reach this phase (argv is empty under
-        # -b64exec), so phase 2 legitimately runs a different set and the counts are expected to differ.
+        # when -FsTest, -Exclude or -Include was given: none of them can reach this phase (argv is
+        # empty under -b64exec), so phase 2 legitimately runs a different set and the counts are
+        # expected to differ.
         if ($FsArgs.Count -gt 0) { Record 'stress (-b64exec)' $verdict[0] $verdict[1] }
         elseif ($verdict[0] -ne 'FAIL' -and $null -ne $core -and $b64r.Of -gt 0 -and $b64r.Of -ne $core.Of) {
             Record 'stress (-b64exec)' 'FAIL' ("ran a different check count than phase 2: '{0}' vs '{1}'" -f $b64r.Line, $core.Line)

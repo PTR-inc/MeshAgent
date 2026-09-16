@@ -44,6 +44,9 @@ var FAILURES = [];
 // Options. Under -b64exec process.argv is [<exe path>, '-b64exec', <payload>], which matches none of these, so every one keeps its default there.
 //   --watchdog=<ms>        overall watchdog, default 10000. Raise it under valgrind, about 20x slower.
 //   --exclude=a,b          skip testmodules whose filename contains any of these substrings.
+//   --include=a,b          the inverse of --exclude: run only testmodules whose filename contains
+//                          at least one of these substrings. Combines with --exclude (a file needs
+//                          to pass both) rather than replacing it.
 //   --fs-test              opt in to 15-fs.js's >2GB section, which needs a scratch dir that supports sparse files.
 //   --qemu                 running under qemu-user, which raises the default watchdog unless --watchdog= was given.
 //   --only=<file>          run one testmodule and nothing else, which is how an isolated child is told which one is its own.
@@ -54,6 +57,7 @@ var FAILURES = [];
 // -b64exec keeps everything in the one shared process, which is the delivery path it exists to test.
 var OPT_WATCHDOG = 10000;
 var OPT_EXCLUDE = [];
+var OPT_INCLUDE = [];
 var OPT_QEMU = false;
 var OPT_FSTEST = false;
 var OPT_ONLY = '';
@@ -71,6 +75,10 @@ var OPT_RESULTFILE = '';
         else if (a.indexOf('--exclude=') == 0) {
             var parts = a.substring(10).split(',');
             for (var j = 0; j < parts.length; ++j) { if (parts[j] != '') { OPT_EXCLUDE.push(parts[j]); } }
+        }
+        else if (a.indexOf('--include=') == 0) {
+            var iparts = a.substring(10).split(',');
+            for (var k = 0; k < iparts.length; ++k) { if (iparts[k] != '') { OPT_INCLUDE.push(iparts[k]); } }
         }
     }
     if (OPT_QEMU && !watchdogSet) { OPT_WATCHDOG = 60000; }
@@ -233,6 +241,15 @@ function discoverFiles() {
     var fs = require('fs');
     var files = fs.readdirSync(TESTMODULES_DIR).filter(function (f) { return (/\.js$/i).test(f); }).sort();
     if (OPT_ONLY) { return files.filter(function (f) { return f == OPT_ONLY; }); }
+    if (OPT_INCLUDE.length > 0) {
+        files = files.filter(function (f) {
+            for (var x = 0; x < OPT_INCLUDE.length; ++x) {
+                if (f.indexOf(OPT_INCLUDE[x]) >= 0) { return true; }
+            }
+            console.log('SKIP ' + f + ' (--include)');
+            return false;
+        });
+    }
     if (OPT_EXCLUDE.length > 0) {
         files = files.filter(function (f) {
             for (var x = 0; x < OPT_EXCLUDE.length; ++x) {
