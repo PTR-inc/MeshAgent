@@ -57,7 +57,7 @@ export MACOS_SIGN_P12_PASSWORD="${MACOS_SIGN_P12_PASSWORD-}"
 export MACOS_SIGN_CN="${MACOS_SIGN_CN:-MeshAgent self-signed code signing (PTR-inc)}"
 export MACOS_CODESIGN_IDENTITY="${MACOS_CODESIGN_IDENTITY-}"
 
-# FreeBSD sysroots come from pkgbase (pkg.freebsd.org), four packages instead of the 200 MB base.txz.
+# FreeBSD sysroots come from pkgbase (pkg.freebsd.org), five packages instead of the 200 MB base.txz.
 # The repository index is RSA-signed; this is the sha256 of the signing key, the same value FreeBSD ships
 # in /usr/share/keys/pkg/trusted/pkg.freebsd.org.2013102301, so a swapped key is refused.
 export FREEBSD_PKG_REPO="${FREEBSD_PKG_REPO:-https://pkg.freebsd.org}"
@@ -67,7 +67,7 @@ export FREEBSD_PKG_FINGERPRINT="${FREEBSD_PKG_FINGERPRINT:-b0170035af3acc5f3f3ae
 # upstream sets. media.githubusercontent.com, not raw, because the mirror stores them in Git LFS.
 export MESHAGENT_TOOLCHAINS_RAW="${MESHAGENT_TOOLCHAINS_RAW:-https://media.githubusercontent.com/media/PTR-inc/meshagent-toolchains/main}"
 
-# macOS has no sha256sum, only perl's shasum. v3_sha256_stream hashes stdin the same way.
+# macOS has no sha256sum, only perl's shasum. v3_sha256_stream and v3_sha512_stream hash stdin the same way.
 v3_sha256() {
     if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
     else shasum -a 256 "$1" | awk '{print $1}'; fi
@@ -75,6 +75,17 @@ v3_sha256() {
 v3_sha256_stream() {
     if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}'
     else shasum -a 256 | awk '{print $1}'; fi
+}
+v3_sha512_stream() {
+    if command -v sha512sum >/dev/null 2>&1; then sha512sum | awk '{print $1}'
+    else shasum -a 512 | awk '{print $1}'; fi
+}
+
+# Writes the zig libc paths file that makes zig compile against the sysroot or SDK at $1, into $2.
+# zig 0.15.2 puts its bundled FreeBSD, NetBSD and macOS libc headers ahead of --sysroot, -isystem, -nostdlibinc and -nostdinc alike, so without this FreeBSD saw __FreeBSD_version 1400500 instead of the 14.4 sysroot's 1404000.
+# Only ZIG_LIBC=<this file> replaces them, and zig cc has no command-line flag for it.
+zig_libc_file() {
+    mkdir -p "$(dirname "$2")" && printf 'include_dir=%s/usr/include\nsys_include_dir=%s/usr/include\ncrt_dir=%s/usr/lib\nmsvc_lib_dir=\nkernel32_lib_dir=\ngcc_dir=\n' "$1" "$1" "$1" > "$2"
 }
 
 # GNU tar needs --wildcards --no-anchored to match member patterns anywhere in the path; bsdtar (macOS) does

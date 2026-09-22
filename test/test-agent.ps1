@@ -87,15 +87,18 @@
     3, which delivers the run via -b64exec: argv is empty there, so the testmodule never sees it.
 
 .PARAMETER Exclude
-    Skip testmodules whose filename contains any of these comma-separated substrings, forwarded to
+    Skip testmodules whose filename matches any of these comma-separated entries, forwarded to
     phases 2 and 6 the same way -FsTest is (and for the same reason, cannot reach phase 3). Phase 6
     already excludes 06- on its own (the known pre-existing crash - see ISSUES.md); this adds to
     that rather than replacing it.
 
 .PARAMETER Include
-    The inverse of -Exclude: run only testmodules whose filename contains at least one of these
-    comma-separated substrings. Combines with -Exclude (a file needs to pass both) rather than
-    replacing it, and shares the same phase-3 limitation.
+    The inverse of -Exclude: run only testmodules whose filename matches at least one of these
+    comma-separated entries. Combines with -Exclude (a file needs to pass both) rather than
+    replacing it, and shares the same phase-3 limitation. For both parameters an entry with * or ?
+    is a wildcard pattern for the whole filename (-Include '09-*'), any other entry is a substring,
+    and a path is reduced to its filename. A selection that leaves no testmodule fails the run
+    instead of skipping everything.
 
 .PARAMETER Ci
     GitHub Actions mode: ::group:: folding, annotations, job summary table. Implies -Yes.
@@ -515,6 +518,8 @@ Say "             PE machine: $BinMachine, host: $HostArch"
 Say ("powershell  : {0}" -f $PSVersionTable.PSVersion)
 Say ("elevated    : {0}" -f $(if ($IsElevated) { 'yes' } else { 'NO - some connect paths need it' }))
 Say "logfile     : $Log"
+if ($Include) { Say "include     : $Include" }
+if ($Exclude) { Say "exclude     : $Exclude" }
 
 # This has to come before the ASan probe below, which starts the agent to find a runtime it accepts.
 if (-not $CanRun) {

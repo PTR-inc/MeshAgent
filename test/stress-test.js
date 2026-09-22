@@ -43,10 +43,13 @@ var FAILURES = [];
 
 // Options. Under -b64exec process.argv is [<exe path>, '-b64exec', <payload>], which matches none of these, so every one keeps its default there.
 //   --watchdog=<ms>        overall watchdog, default 10000. Raise it under valgrind, about 20x slower.
-//   --exclude=a,b          skip testmodules whose filename contains any of these substrings.
-//   --include=a,b          the inverse of --exclude: run only testmodules whose filename contains
-//                          at least one of these substrings. Combines with --exclude (a file needs
-//                          to pass both) rather than replacing it.
+//   --exclude=a,b          skip testmodules whose filename matches any of these entries.
+//   --include=a,b          the inverse of --exclude: run only testmodules whose filename matches
+//                          at least one of these entries. Combines with --exclude (a file needs
+//                          to pass both) rather than replacing it. An entry with * or ? is a
+//                          wildcard pattern for the whole filename (09-* or 1?-*.js), any other
+//                          entry is a substring. A path is reduced to its filename first. When
+//                          either option leaves no testmodule to run, the run fails instead.
 //   --fs-test              opt in to 15-fs.js's >2GB section, which needs a scratch dir that supports sparse files.
 //   --qemu                 running under qemu-user, which raises the default watchdog unless --watchdog= was given.
 //   --only=<file>          run one testmodule and nothing else, which is how an isolated child is told which one is its own.
@@ -237,6 +240,16 @@ var TESTMODULES_DIR = 'test/testmodules';
 
 // Shared by loadSections() (--only runs) and runIsolated() (the default orchestrator,
 // which never requires() any of these - it only needs the filenames to spawn children for).
+// Matches one --include or --exclude entry against a bare testmodule filename. A path is cut to its filename, and an entry with * or ? is a wildcard pattern for the whole name, anything else a substring.
+// Wildcards are here because with substring matching alone, --include=09-* matched nothing and silently skipped every testmodule.
+function nameMatches(file, entry) {
+    var name = entry.replace(/^.*[\/\\]/, '');
+    if (name == '') { return false; }
+    if (!(/[*?]/).test(name)) { return file.indexOf(name) >= 0; }
+    var re = '^' + name.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$';
+    return new RegExp(re).test(file);
+}
+
 function discoverFiles() {
     var fs = require('fs');
     var files = fs.readdirSync(TESTMODULES_DIR).filter(function (f) { return (/\.js$/i).test(f); }).sort();
@@ -244,7 +257,7 @@ function discoverFiles() {
     if (OPT_INCLUDE.length > 0) {
         files = files.filter(function (f) {
             for (var x = 0; x < OPT_INCLUDE.length; ++x) {
-                if (f.indexOf(OPT_INCLUDE[x]) >= 0) { return true; }
+                if (nameMatches(f, OPT_INCLUDE[x])) { return true; }
             }
             console.log('SKIP ' + f + ' (--include)');
             return false;
@@ -253,10 +266,17 @@ function discoverFiles() {
     if (OPT_EXCLUDE.length > 0) {
         files = files.filter(function (f) {
             for (var x = 0; x < OPT_EXCLUDE.length; ++x) {
-                if (f.indexOf(OPT_EXCLUDE[x]) >= 0) { console.log('SKIP ' + f + ' (--exclude)'); return false; }
+                if (nameMatches(f, OPT_EXCLUDE[x])) { console.log('SKIP ' + f + ' (--exclude)'); return false; }
             }
             return true;
         });
+    }
+    // Both callers report a throw from here as a loader failure, so a filter that selects nothing fails the run.
+    if (files.length == 0 && (OPT_INCLUDE.length > 0 || OPT_EXCLUDE.length > 0)) {
+        var given = [];
+        if (OPT_INCLUDE.length > 0) { given.push('--include=' + OPT_INCLUDE.join(',')); }
+        if (OPT_EXCLUDE.length > 0) { given.push('--exclude=' + OPT_EXCLUDE.join(',')); }
+        throw new Error(given.join(' ') + ' leaves no test module to run');
     }
     return files;
 }

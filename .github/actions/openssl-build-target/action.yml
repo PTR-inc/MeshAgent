@@ -24,11 +24,11 @@ runs:
     # only compared the version string, so a flag, compiler or libc change was skipped as current.
     - name: Fetch the OpenSSL source
       shell: bash
-      run: ./buildscripts.v2/fetch-toolchains.sh -y openssl >/dev/null
+      run: OSSLVER='${{ inputs.version }}' ./buildscripts/fetch-deps-v3.sh openssl >/dev/null
 
     # BR_FETCH=1 lets build.sh provision its own toolchain from the target's T_FETCH
-    # tokens, the same table `make list` and fetch-toolchains.sh read. That is why no
-    # per-target toolchain installation step lives in YAML.
+    # tokens, which name fetch-deps-v3.sh components. That is why no per-target toolchain
+    # installation step lives in YAML.
     - name: Build ${{ inputs.target }}
       id: build
       shell: bash

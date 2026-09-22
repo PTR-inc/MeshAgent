@@ -43,6 +43,7 @@ on:
           - linux-ppc64le-glibc
           - freebsd-x86_64
           - openbsd-x86_64
+          - netbsd-x86_64
           - macos-arm64
           - macos-x86_64
           - windows-x86
@@ -84,7 +85,7 @@ jobs:
         name: Resolve version and matrices from targets.sh / build.ps1
         run: |
           set -euo pipefail
-          . ./buildscripts.v2/build-env.sh >/dev/null
+          . ./openssl/build/env.sh >/dev/null
           v="${{ inputs.version }}"; [ -n "$v" ] || v="$OPENSSL_VERSION"
           openssl_sha256_lookup "$v" >/dev/null \
             || { echo "::error::'$v' does not resolve to a published OpenSSL release"; exit 1; }

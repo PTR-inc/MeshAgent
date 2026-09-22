@@ -42,6 +42,12 @@ KVM ?= $(T_KVM)
 OPT ?= -$(T_OPT)
 CC   = $(T_CC)
 LD   = $(T_LD)
+# zig searches its own bundled FreeBSD, NetBSD and macOS headers before the sysroot unless ZIG_LIBC names a paths file.
+ifneq ($(T_ZIGLIBC),)
+export ZIG_LIBC := $(T_ZIGLIBC)
+else
+unexport ZIG_LIBC
+endif
 # test/test-agent.sh finds an ASan agent as <dir>_asan/<binary>_asan, so both halves carry the suffix.
 ASANSUF = $(if $(filter 1,$(ASAN)),_asan)
 OUTDIR = build/$(T_NAME)$(ASANSUF)
@@ -79,6 +85,7 @@ SOURCES += meshcore/agentcore.c meshconsole/main.c meshcore/meshinfo.c
 KVMSOURCES_linux   = meshcore/KVM/Linux/linux_kvm.c meshcore/KVM/Linux/linux_kvm_wayland.c meshcore/KVM/Linux/linux_kvm_drm.c meshcore/KVM/Linux/linux_kvm_drm_egl.c meshcore/KVM/Linux/linux_kvm_rotated.c meshcore/KVM/Linux/linux_kvm_xkb.c meshcore/KVM/Linux/linux_events.c meshcore/KVM/Linux/linux_events_evdev.c meshcore/KVM/Linux/linux_tile.c meshcore/KVM/Linux/linux_compression.c
 KVMSOURCES_freebsd = $(KVMSOURCES_linux)
 KVMSOURCES_openbsd = $(KVMSOURCES_linux)
+KVMSOURCES_netbsd  = $(KVMSOURCES_linux)
 KVMSOURCES_macos   = meshcore/KVM/MacOS/mac_kvm.c meshcore/KVM/MacOS/mac_events.c meshcore/KVM/MacOS/mac_tile.c meshcore/KVM/Linux/linux_compression.c
 ifeq ($(KVM),1)
 SOURCES += $(KVMSOURCES_$(T_OS))
@@ -93,6 +100,7 @@ DEFINES = -D_POSIX -D_FILE_OFFSET_BITS=64 -DMICROSTACK_PROXY -DMICROSTACK_TLS_DE
           -DDUK_USE_DEBUGGER_SUPPORT -DDUK_USE_INTERRUPT_COUNTER -DDUK_USE_DEBUGGER_INSPECT -DDUK_USE_DEBUGGER_PAUSE_UNCAUGHT
 DEFINES_freebsd = -D_FREEBSD
 DEFINES_openbsd = -D_FREEBSD -D_OPENBSD
+DEFINES_netbsd  = -D_FREEBSD -D_NETBSD
 DEFINES_macos   = -D__APPLE__
 DEFINES += $(DEFINES_$(T_OS))
 ifeq ($(KVM),1)
@@ -164,6 +172,8 @@ LDFLAGS_linux   = $(SSLLIBS) $(T_JPEG) -lpthread -lutil -lm -ldl -lrt $(if $(fil
                   -Wl,--gc-sections -Wl,-z,stack-size=8388608 -z noexecstack -z relro -z now
 LDFLAGS_freebsd = $(SSLLIBS) $(T_JPEG) -lpthread -lutil -lm -ldl -Wl,--gc-sections -z noexecstack -z relro -z now
 LDFLAGS_openbsd = $(SSLLIBS) $(T_JPEG) -lpthread -lutil -lm -Wl,--gc-sections -z noexecstack -z relro -z now
+# No -ldl because NetBSD has no libdl, dlopen is in its libc.
+LDFLAGS_netbsd  = $(SSLLIBS) $(T_JPEG) -lpthread -lutil -lm -Wl,--gc-sections -z noexecstack -z relro -z now
 # LTO codegen happens at link, so the macOS optimisation flags are repeated there. -dead_strip is the -gc-sections of ld64.
 # LTO only with Apple's toolchain (MACOS_CC=xcode): zig objects are not bitcode for the linker that follows them.
 MACOSOPT = -O3 $(if $(filter xcode,$(T_MACOSCC)),-flto)
@@ -191,7 +201,7 @@ endif
 
 # Objects depend on the exact compile line, so a flag change recompiles instead of linking stale objects.
 FLAGSTAMP = $(OBJDIR)/.cflags
-$(shell mkdir -p $(OBJDIR); printf '%s\n' '$(CC) $(CFLAGS)' | cmp -s - $(FLAGSTAMP) 2>/dev/null || printf '%s\n' '$(CC) $(CFLAGS)' > $(FLAGSTAMP))
+$(shell mkdir -p $(OBJDIR); printf '%s\n' 'ZIG_LIBC=$(ZIG_LIBC) $(CC) $(CFLAGS)' | cmp -s - $(FLAGSTAMP) 2>/dev/null || printf '%s\n' 'ZIG_LIBC=$(ZIG_LIBC) $(CC) $(CFLAGS)' > $(FLAGSTAMP))
 
 $(OBJDIR)/%.o: %.c $(FLAGSTAMP)
 	@mkdir -p $(@D)
@@ -240,7 +250,7 @@ $(OUTBIN): $(OBJECTS) $(wildcard $(T_OSSLDIR)/lib/libcrypto.a $(T_OSSLDIR)/lib/l
 	$(V)$(SIGNSTEP)
 	$(V){ echo "archid: $(ARCHID)"; echo "name: $(T_NAME)"; echo "server_archid: $(T_SERVER)"; echo "cc: $(CC)"; echo "ld: $(LD)"; \
 	      echo "cc_version: $$( { $(T_CCBIN) --version 2>/dev/null || $(T_CCBIN) version 2>/dev/null; } | head -1)"; \
-	      echo "cflags: $(CFLAGS)"; echo "ldflags: $(LDFLAGS)"; echo "openssl: $(T_OSSLDIR)"; echo "jpeg: $(T_JPEG)"; \
+	      echo "cflags: $(CFLAGS)"; echo "ldflags: $(LDFLAGS)"; echo "openssl: $(T_OSSLDIR)"; echo "jpeg: $(T_JPEG)"; echo "zig_libc: $(ZIG_LIBC)"; \
 	      echo "kvm: $(KVM)  lms: $(T_LMS)  debug: $(DEBUG)  asan: $(ASAN)"; \
 	      echo "git_rev: $$(git rev-parse --short HEAD 2>/dev/null)$$(git diff --quiet 2>/dev/null || echo '-dirty')"; \
 	      echo "built_at: $$(date -u +%Y-%m-%dT%H:%M:%SZ)"; echo "size: $$(wc -c < $@)"; } > $(STAMPFILE)

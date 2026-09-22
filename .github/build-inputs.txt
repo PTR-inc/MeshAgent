@@ -7,13 +7,16 @@
 
 # Shared by every agent binary
 all: makefile
-all: build-env.sh
-all: fetch-toolchains.sh
+all: buildscripts/**
 all: meshconsole/**
 all: meshcore/**
 all: microscript/**
 all: microstack/**
-all: openssl/VERSION
+# openssl/* is the files sitting directly under it, openssl/VERSION among them. The build scripts
+# and the flags file decide the bytes of every archive, so a change to one touches every platform.
+all: openssl/*
+all: openssl/build/*.sh
+all: openssl/build/flags/**
 all: openssl/*/include/**
 
 # Per platform: the OpenSSL archives it links, plus what only it consumes

@@ -2,9 +2,12 @@
 # Builds one or more OpenSSL targets and installs each into its prefix openssl/<version>/<target>/.
 # Usage is build.sh <target|all|list>, with BUILDROOT, MAKE_JOBS and BR_FETCH=1 as optional knobs.
 # Nothing is installed unless it passes the gates in probe.sh. See openssl/build/README.md.
-. "$(dirname "$(readlink -f "$0")")/../../buildscripts.v2/build-env.sh"
+. "$(dirname "$(readlink -f "$0")")/env.sh"
 . "$BR_SCRIPTS/targets.sh"
 . "$BR_SCRIPTS/probe.sh"
+
+# The agent side of the build. It owns the ARCHID table, so the rows here are asked for, never restated.
+TGT="$REPO/buildscripts/target-v3.sh"
 
 print_manual() {
     cat <<EOF
@@ -47,11 +50,11 @@ unoptimized copy that keeps it, same idea as windows-*-debug.
 targets: $BR_ALL_TARGETS
 
 environment:
-  BUILDROOT   Toolchain and work-directory root (see build-env.sh). Required by
+  BUILDROOT   Toolchain and work-directory root (see openssl/build/env.sh). Required by
               most targets unless already set in the shell.
   MAKE_JOBS   Parallel jobs per target's own make (default: nproc).
   BR_FETCH    When 1, provisions each target's toolchain via T_FETCH (apt
-              packages or fetch-toolchains.sh components) before building.
+              packages or fetch-deps-v3.sh components) before building.
               CI sets this; a local run leaves it 0 so it never surprises you
               with an unattended package install.
 EOF
@@ -74,19 +77,35 @@ done
 set -- $args
 [ $# -ge 1 ] || { print_manual; exit 2; }
 
-# Asks the makefile which ARCHIDs link each target, so its table is never duplicated here.
-# Prints nothing when make or the makefile is absent.
-archid_map() {
-    [ -f "$REPO/makefile" ] && command -v make >/dev/null 2>&1 || return 0
-    make -s -C "$REPO" print-archids 2>/dev/null | tr ' ' '\n' | while read -r id; do
-        [ -n "$id" ] || continue
-        # One sub-make resolves both probes, since every invocation pays a full makefile parse.
-        set -- $(make -s -C "$REPO" ARCHID="$id" print-ossltarget print-osslver 2>/dev/null)
-        [ $# -eq 2 ] || continue
-        # An ARCHID pinned to another series is shown as id@version, so the reader sees it.
-        echo "$1 $id$([ "$2" = "$OPENSSL_VERSION" ] || echo "@$2")"
-    done
+# One tab-separated row per ARCHID: id, binary name, OpenSSL target, link mode, compiler label.
+# Everything comes from targets-v3.conf through its own accessor, so no row is restated here. It is
+# read in a subshell because target-v3.sh sets T_ names of its own that would overwrite targets.sh's.
+# Prints nothing when target-v3.sh is absent.
+archid_rows() {
+    [ -x "$TGT" ] || return 0
+    (
+        . "$TGT"
+        # The compiler that decides the row's ABI and ISA floor. A zig row is named by its target
+        # triple and any -mcpu rather than by the binary, which is "zig" for every one of them.
+        cc_label() {
+            local rest cpu
+            case "$T_CC" in
+                *zig\ cc\ -target\ *|*zig\ clang\ -target\ *)
+                    rest="${T_CC#*-target }"; rest="${rest%% *}"
+                    case "$T_CC" in *-mcpu=*) cpu="${T_CC#*-mcpu=}"; rest="$rest+${cpu%% *}" ;; esac
+                    echo "zig:$rest" ;;
+                *) basename "${T_CC%% *}" ;;
+            esac
+        }
+        for id in $(tgt_ids); do
+            tgt_load "$id" >/dev/null 2>&1 || continue
+            printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$T_NAME" "$T_OSSL" "$T_LINK" "$(cc_label)"
+        done
+    )
 }
+
+# The target-to-ARCHIDs direction of the same table.
+archid_map() { archid_rows | awk -F'\t' '{print $3, $1}'; }
 
 # Prints one line per target so a reader can see what this host can build and who consumes it.
 print_target_list() {
@@ -106,20 +125,18 @@ print_target_list() {
         printf "%-22s %-7s %-9s %-10s %-4s %-4s %-30s %s\n" "$t" "$T_LIBC" "$st" "${ids:--}" "$asm" "$zig" "${T_EXTRA:--}" "openssl/$OPENSSL_VERSION/$t$([ -d "$T_PREFIX/lib" ] || echo ' (absent)')"
     done
     echo
-    echo "  $ready buildable here. MISSING = no compiler, see ./buildscripts.v2/fetch-toolchains.sh. windows = built by windows/build.ps1"
-    echo "  ARCHIDS = agent targets linking that prefix ('-' = none, id@version = pinned to another series)"
+    echo "  $ready buildable here. MISSING = no compiler, see ./buildscripts/fetch-deps-v3.sh. windows = built by windows/build.ps1"
+    echo "  ARCHIDS = agent targets linking that prefix ('-' = none)"
 }
 
-# One row per makefile ARCHID, everything asked from the makefile and targets.sh so
-# nothing is restated here. The inverse view of print_target_list's ARCHIDS column.
-# The STAMP column answers what `build.sh <target>` would do with this prefix right now, using the
-# same stamp_diff the build's own skip check calls. A row pinned to another version series is left
-# at "-", because the stamp would be recomputed against this environment's tarball, not that one.
-prefix_state() {   # $1 target, $2 version. br_target "$1" must already have been called.
+# One row per ARCHID, everything asked from targets-v3.conf and targets.sh so nothing is restated
+# here. The inverse view of print_target_list's ARCHIDS column. The STAMP column answers what
+# `build.sh <target>` would do with this prefix right now, using the same stamp_diff the build's
+# own skip check calls.
+prefix_state() {   # $1 target. br_target "$1" must already have been called.
     local drift
-    [ -d "$REPO/openssl/$2/$1/lib" ] || { echo absent; return; }
-    [ "$2" = "$OPENSSL_VERSION" ] || { echo -; return; }
-    if ! drift=$(stamp_diff "$1" "$REPO/openssl/$2/$1"); then echo unstamped; return; fi
+    [ -d "$T_PREFIX/lib" ] || { echo absent; return; }
+    if ! drift=$(stamp_diff "$1" "$T_PREFIX"); then echo unstamped; return; fi
     # A bare "stale" makes the reader run the build to find out why, so name the disagreeing
     # fields in the parentheses. stamp_diff indents each one as "      <field>:".
     [ -n "$drift" ] || { echo current; return; }
@@ -127,32 +144,30 @@ prefix_state() {   # $1 target, $2 version. br_target "$1" must already have bee
 }
 
 print_archid_list() {
-    local id n t v asm st cc lm
-    [ -f "$REPO/makefile" ] && command -v make >/dev/null 2>&1 || { echo "needs make and the repo makefile"; return 1; }
+    local id n t lm cc asm st rows
+    rows="$(archid_rows)"
+    [ -n "$rows" ] || { echo "needs $TGT"; return 1; }
     printf "%6s  %-20s %-26s %-24s %-32s %-7s %-8s %-4s %s\n" ARCHID ARCHNAME STAMP OSSLTARGET COMPILER LIBC STATIC ASM PREFIX
-    for id in $(make -s -C "$REPO" print-archids); do
-        # Every value is one whitespace-free token, which is why the makefile has print-cclabel
-        # rather than printing $(CC) itself - one sub-make per row already costs a makefile parse.
-        set -- $(make -s -C "$REPO" ARCHID="$id" print-archname print-ossltarget print-osslver print-cclabel print-linkmode 2>/dev/null)
-        [ $# -eq 5 ] || continue
-        n="$1"; t="$2"; v="$3"; cc="$4"; lm="$5"
+    while IFS=$'\t' read -r id n t lm cc; do
+        [ -n "$id" ] || continue
         if br_target "$t"; then
             case "$T_FLAGS" in *-no-asm*) asm=off ;; *) asm=on ;; esac
-            st=$(prefix_state "$t" "$v")
-            printf "%6s  %-20s %-26s %-24s %-32s %-7s %-8s %-4s %s\n" "$id" "$n" "$st" "$t" "$cc" "$T_LIBC" "$lm" "$asm" "openssl/$v/$t$([ -d "$REPO/openssl/$v/$t/lib" ] || echo ' (absent)')"
+            st=$(prefix_state "$t")
+            printf "%6s  %-20s %-26s %-24s %-32s %-7s %-8s %-4s %s\n" "$id" "$n" "$st" "$t" "$cc" "$T_LIBC" "$lm" "$asm" "openssl/$OPENSSL_VERSION/$t$([ -d "$T_PREFIX/lib" ] || echo ' (absent)')"
         else
-            printf "%6s  %-20s %-26s %-24s %-32s %-7s %-8s %-4s %s\n" "$id" "$n" "?" "$t" "$cc" "?" "$lm" "?" "OSSLTARGET unknown to targets.sh"
+            printf "%6s  %-20s %-26s %-24s %-32s %-7s %-8s %-4s %s\n" "$id" "$n" "?" "$t" "$cc" "?" "$lm" "?" "OpenSSL target unknown to targets.sh"
         fi
-    done
+    done <<EOF
+$rows
+EOF
     echo
-    echo "  STATIC = whether the agent links its libc in (LDINT carries -static), so a static row"
-    echo "  needs no matching libc on the device and a dynamic one does."
-    echo "  COMPILER = the agent's own compiler for that ARCHID: a zig block is named by the target"
+    echo "  STATIC = whether the agent links its libc in, so a static row needs no matching libc"
+    echo "  on the device and a dynamic one does."
+    echo "  COMPILER = the agent's own compiler for that ARCHID: a zig row is named by the target"
     echo "  triple and any -mcpu, since those decide the ABI and ISA floor, not the binary's name."
     echo "  STAMP = what a build would do now: current = skipped, stale(fields) = rebuilt because"
     echo "  those build-stamp.txt fields disagree with targets.sh, unstamped = rebuilt (prefix"
-    echo "  predates build-stamp.txt), absent = never built, - = pinned to another version series,"
-    echo "  not comparable here."
+    echo "  predates build-stamp.txt), absent = never built."
 }
 
 # 'list' is the ARCHID view, because that is the question asked most often: what would a build do
@@ -177,7 +192,7 @@ MAKE_JOBS="${MAKE_JOBS:-$ncpu}"
 [ "$MAKE_JOBS" -ge 1 ] 2>/dev/null || MAKE_JOBS=1
 
 # Provisions the toolchain from the target's T_FETCH tokens, which are either a
-# fetch-toolchains.sh component or an apt package. It only runs with BR_FETCH=1, which CI
+# fetch-deps-v3.sh component or an apt package. It only runs with BR_FETCH=1, which CI
 # sets, so a local run is never surprised by a package install.
 BR_FETCH="${BR_FETCH:-0}"
 br_provision() {
@@ -193,8 +208,8 @@ br_provision() {
         ${SUDO:-sudo} apt-get -qq update >/dev/null && ${SUDO:-sudo} apt-get -qq -y install $apt_pkgs >/dev/null || return 1
     fi
     if [ -n "$comps" ]; then
-        echo "  buildscripts.v2/fetch-toolchains.sh$comps"
-        ( cd "$REPO" && ./buildscripts.v2/fetch-toolchains.sh -y $comps ) || return 1
+        echo "  buildscripts/fetch-deps-v3.sh$comps"
+        ( cd "$REPO" && ./buildscripts/fetch-deps-v3.sh $comps ) || return 1
     fi
 }
 
@@ -249,8 +264,8 @@ write_build_stamp() {   # $1 target, $2 the staged prefix directory
         echo "objects: $P_MEMBERS ($P_FORMAT/$P_CLASS $P_MACHINE)"
         echo "glibc_only_refs: $P_GLIBC"
         echo "ucontext_refs: $P_UCONTEXT"
-        echo "libcrypto_sha256: $(br_sha256 "$2/lib/libcrypto.a" 2>/dev/null)"
-        echo "libssl_sha256: $(br_sha256 "$2/lib/libssl.a" 2>/dev/null)"
+        echo "libcrypto_sha256: $(v3_sha256 "$2/lib/libcrypto.a" 2>/dev/null)"
+        echo "libssl_sha256: $(v3_sha256 "$2/lib/libssl.a" 2>/dev/null)"
     } > "$f"
 }
 
@@ -296,6 +311,13 @@ build_one() {
 
     BR_PATCHES=
     src="$BR_WORK/$t"; stage="$BR_WORK/$t.stage"
+    # zig otherwise compiles the BSD and macOS targets against its own bundled headers instead of the pinned
+    # sysroot or SDK. This block runs in the pipeline's subshell, so the export ends with this target.
+    if [ -n "$T_ZIGROOT" ]; then
+        export ZIG_LIBC="$BR_WORK/$t.zig-libc.txt"; zig_libc_file "$T_ZIGROOT" "$ZIG_LIBC"
+    else
+        unset ZIG_LIBC
+    fi
     rm -rf "$src" "$stage" && mkdir -p "$src"
     tar xzf "$OPENSSL_TARBALL" -C "$src" --strip-components=1
 
@@ -360,8 +382,17 @@ build_one() {
         echo "$t: REJECTED - see the REJECT lines above" > "$status_file"; return 1
     fi
 
-    rm -rf "$T_PREFIX" && mkdir -p "$(dirname "$T_PREFIX")"
-    cp -r "$stage/$OPENSSL_VERSION/$t" "$T_PREFIX"
+    # Installed by rename rather than by copying into place. A copy interrupted partway leaves a
+    # half-populated prefix that every later gate reads as a real one, and an empty
+    # include/openssl is indistinguishable from a target whose headers were never generated.
+    # The staging directory is a sibling so the rename stays on one filesystem.
+    local installing="$T_PREFIX.installing"
+    rm -rf "$installing" && mkdir -p "$(dirname "$T_PREFIX")"
+    if ! cp -r "$stage/$OPENSSL_VERSION/$t" "$installing"; then
+        rm -rf "$installing"
+        echo "$t: INSTALL COPY FAILED (openssl/$OPENSSL_VERSION/$t left as it was)" > "$status_file"; return 1
+    fi
+    rm -rf "$T_PREFIX" && mv "$installing" "$T_PREFIX"
     echo "  installed -> openssl/$OPENSSL_VERSION/$t"
     echo "$t: OK $P_VERSION objs=$P_MEMBERS libc=$T_LIBC glibc=$P_GLIBC ucontext=$P_UCONTEXT" > "$status_file"
     } 2>&1 | tee "$log_file"

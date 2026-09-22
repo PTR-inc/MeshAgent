@@ -30,14 +30,14 @@ tgt_load() {
         esac
     done
     [ -n "$T_SERVER" ] || T_SERVER=$T_ARCHID
-    case "$T_OS" in freebsd|openbsd) T_LIBC=bsd ;; macos) T_LIBC=macos ;; esac
+    case "$T_OS" in freebsd|openbsd|netbsd) T_LIBC=bsd ;; macos) T_LIBC=macos ;; esac
     tgt_derive
 }
 
 # Everything below is computed from the row, nothing is stated twice.
 tgt_derive() {
     T_ZIGBIN="$BUILDROOT/toolchains/zig-$T_ZIG/zig"
-    T_SYSROOT=; T_SDK=; T_TUNE=
+    T_SYSROOT=; T_SDK=; T_TUNE=; T_ZIGLIBC=
     # The triple decides the compiler, the libc and the glibc floor at once.
     case "$T_OS" in
         linux)
@@ -48,7 +48,7 @@ tgt_derive() {
             esac
             T_TRIPLE="$T_ARCH-linux-$env"
             case "$T_ARCH" in riscv*) T_TUNE="-mabi=$T_ABI" ;; esac ;;
-        freebsd)
+        freebsd|netbsd)
             T_TRIPLE="$T_ARCH-$T_OS-none"
             T_SYSROOT="$BUILDROOT/sysroots/$T_OS-$T_OSVER" ;;
         openbsd)
@@ -103,12 +103,15 @@ tgt_derive() {
         case "$T_OS" in
             linux)
                 T_CC="$T_ZIGBIN cc -target $T_TRIPLE${T_TUNE:+ $T_TUNE} -Wno-date-time" ;;
-            freebsd)
+            freebsd|netbsd)
                 if [ "$(echo "$T_HOST" | tr A-Z a-z)" = "$T_OS" ]; then T_CC="clang"
                 else
+                    # zig bundles a libc for both and searches it before the sysroot, so ZIG_LIBC points it at the
+                    # sysroot instead, and the headers match osver= (see zig_libc_file in env-v3.sh).
                     # zig adds no sysroot library directories on its own, and prefixes --sysroot onto -L,
                     # so the library paths are written sysroot-relative and go last, after openssl/'s own -L.
-                    T_CC="$T_ZIGBIN cc -target $T_TRIPLE --sysroot=$T_SYSROOT -isystem $T_SYSROOT/usr/include -nostdlibinc -Wno-date-time"
+                    T_CC="$T_ZIGBIN cc -target $T_TRIPLE --sysroot=$T_SYSROOT -Wno-date-time"
+                    T_ZIGLIBC="$REPO/build/.zig-libc-$T_ARCHID.txt"
                     T_LDEXTRA="-L/usr/lib -L/lib"
                 fi ;;
             openbsd)
@@ -128,12 +131,15 @@ tgt_derive() {
                     T_CC="$apple_cc"
                 elif [ "$T_HOST" = Darwin ]; then
                     # zig compiles, Apple's ld64 links (zig's own Mach-O linker is not used, see env-v3.sh).
-                    T_CC="$T_ZIGBIN cc -target $T_TRIPLE --sysroot=$T_SDK -isystem $T_SDK/usr/include -F$T_SDK/System/Library/Frameworks -Wno-date-time"
+                    # ZIG_LIBC makes zig use the SDK's headers instead of its own bundled macOS ones.
+                    T_CC="$T_ZIGBIN cc -target $T_TRIPLE --sysroot=$T_SDK -F$T_SDK/System/Library/Frameworks -Wno-date-time"
+                    T_ZIGLIBC="$REPO/build/.zig-libc-$T_ARCHID.txt"
                     T_LD="$apple_cc"
                 else
                     # Cross from Linux: zig compiles against the osxcross-extracted SDK, the host's clang + ld64.lld links.
                     T_MACOSCC=zig
-                    T_CC="$T_ZIGBIN cc -target $T_TRIPLE --sysroot=$T_SDK -isystem $T_SDK/usr/include -F$T_SDK/System/Library/Frameworks -Wno-date-time"
+                    T_CC="$T_ZIGBIN cc -target $T_TRIPLE --sysroot=$T_SDK -F$T_SDK/System/Library/Frameworks -Wno-date-time"
+                    T_ZIGLIBC="$REPO/build/.zig-libc-$T_ARCHID.txt"
                     T_LD="clang -target $([ "$T_ARCH" = aarch64 ] && echo arm64 || echo x86_64)-apple-macos$T_OSVER -fuse-ld=lld --sysroot=$T_SDK -F$T_SDK/System/Library/Frameworks"
                 fi ;;
         esac
@@ -156,7 +162,7 @@ tgt_derive() {
     return 0
 }
 
-TGT_FIELDS="ARCHID NAME OS OSVER ARCH CPU ABI LIBC LIBCVER LINK KVM LMS OPT SERVER ZIG CFLAGS TRIPLE TUNE OSSL OSSLDIR JPEG CC CCBIN LD LDBIN LDEXTRA STRIP STRIPBIN MACOSCC SYSROOT SDK LIBCLABEL"
+TGT_FIELDS="ARCHID NAME OS OSVER ARCH CPU ABI LIBC LIBCVER LINK KVM LMS OPT SERVER ZIG CFLAGS TRIPLE TUNE OSSL OSSLDIR JPEG CC CCBIN LD LDBIN LDEXTRA STRIP STRIPBIN MACOSCC SYSROOT SDK ZIGLIBC LIBCLABEL"
 
 tgt_show() { tgt_load "$1" || return 1; local f; for f in $TGT_FIELDS; do eval "printf '%-10s %s\n' \"$f\" \"\$T_$f\""; done; }
 
@@ -165,6 +171,8 @@ tgt_show() { tgt_load "$1" || return 1; local f; for f in $TGT_FIELDS; do eval "
 tgt_make() {
     tgt_load "$1" || return 1
     local f v
+    # The makefile exports T_ZIGLIBC as ZIG_LIBC, so the paths file has to exist before it compiles.
+    [ -n "$T_ZIGLIBC" ] && { zig_libc_file "${T_SYSROOT:-$T_SDK}" "$T_ZIGLIBC" || return 1; }
     for f in $TGT_FIELDS; do eval "v=\$T_$f"; printf 'T_%s = %s\n' "$f" "${v//\$/\$\$}"; done
     printf 'T_OSSLVER = %s\n' "$OSSLVER"
 }

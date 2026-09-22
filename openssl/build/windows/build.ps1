@@ -404,8 +404,8 @@ foreach ($t in $list) {
         # The depend step the stock targets run first is for incremental rebuilds, and this
         # script always builds from a freshly extracted tree.
         # build_generated stays on nmake: it is a handful of perl runs whose outputs the compile
-        # step depends on, and 1.1.1w does not declare those dependencies well enough to trust a
-        # parallel run with them. Only the two archives, which are thousands of independent
+        # step depends on, and the 1.1.1 series does not declare those dependencies well enough to
+        # trust a parallel run with them. Only the two archives, which are thousands of independent
         # compiles, go to jom.
         "nmake build_generated"
         "if errorlevel 1 exit /b 1"

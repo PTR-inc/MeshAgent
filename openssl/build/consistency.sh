@@ -3,9 +3,11 @@
 # or when a pinned constant is copied somewhere that should ask for it instead.
 # Each source of truth owns exactly one kind of constant, and this script is what enforces that.
 
-. "$(dirname "$(readlink -f "$0")")/../../buildscripts.v2/build-env.sh" >/dev/null || exit 1
+. "$(dirname "$(readlink -f "$0")")/env.sh" >/dev/null || exit 1
 . "$BR_SCRIPTS/targets.sh" || exit 1
 cd "$REPO" || exit 1
+
+TGT="$REPO/buildscripts/target-v3.sh"
 
 rc=0
 fail() { echo "  FAIL: $*" >&2; rc=1; }
@@ -18,7 +20,7 @@ for t in $BR_ALL_TARGETS; do
     case "$T_LIBC" in glibc|musl|uclibc|bsd|macos|msvc) ;; *) fail "$t has unknown T_LIBC='$T_LIBC'" ;; esac
     case "$T_CI" in linux|macos|windows) ;; *) fail "$t has unknown T_CI='$T_CI'" ;; esac
     case "$t" in
-        linux-*-glibc|linux-*-musl|linux-*-uclibc|freebsd-*|openbsd-*|macos-*|windows-*) ;;
+        linux-*-glibc|linux-*-musl|linux-*-uclibc|freebsd-*|openbsd-*|netbsd-*|macos-*|windows-*) ;;
         *) fail "$t does not follow the <os>-<arch>-<libc> naming" ;;
     esac
 done
@@ -34,19 +36,19 @@ done
 [ $rc -eq 0 ] && ok "every prefix directory is a known target, the pinned version is installed"
 
 echo "== 3. every ARCHID links a target targets.sh knows ========================="
-if command -v make >/dev/null 2>&1; then
+if [ -x "$TGT" ]; then
     bad=0
-    for id in $(make -s print-archids); do
-        t=$(make -s ARCHID="$id" print-ossltarget 2>/dev/null)
-        [ -n "$t" ] || { fail "ARCHID $id has no OSSLTARGET"; bad=1; continue; }
-        br_target "$t" || { fail "ARCHID $id links OSSLTARGET $t, which targets.sh does not define"; bad=1; }
-        # print-ossldir resolves the block's own OSSLVER pin, so a staged migration is checked as such.
-        d=$(make -s ARCHID="$id" print-ossldir 2>/dev/null)
-        [ -d "$d/lib" ] || { fail "ARCHID $id links $d, which is not installed"; bad=1; }
+    for id in $("$TGT" ids); do
+        t=$("$TGT" field "$id" OSSL 2>/dev/null)
+        [ -n "$t" ] || { fail "ARCHID $id has no OSSL target"; bad=1; continue; }
+        br_target "$t" || { fail "ARCHID $id links OSSL target $t, which targets.sh does not define"; bad=1; }
+        # T_OSSLDIR resolves the row's own OSSLVER pin, so a staged migration is checked as such.
+        d=$("$TGT" field "$id" OSSLDIR 2>/dev/null)
+        [ -d "$REPO/$d/lib" ] || { fail "ARCHID $id links $d, which is not installed"; bad=1; }
     done
     [ $bad -eq 0 ] && ok "every non-obsolete ARCHID names an installed target and prefix"
 else
-    echo "  skip: no make on this host"
+    echo "  skip: no $TGT on this host"
 fi
 
 echo "== 4. the CI matrices cover every target =================================="
@@ -87,29 +89,26 @@ done
 [ "$fieldok" = 1 ] && ok "VcConf, --debug and asm agree with targets.sh for every windows target"
 
 echo "== 6. no pinned constant is restated in CI, scripts, the makefile or the props ="
-# Each constant has exactly one home: openssl/VERSION, build-env.sh, or the makefile's ARCH_ blocks.
+# Each constant has exactly one home: openssl/VERSION, env-v3.sh, or a row of targets-v3.conf.
 # Any other file spelling out the literal will drift, so it should ask for the value instead.
 guard() {
     local what="$1" pat="$2" hits
-    # An ARCH_ block's own "OSSLVER = x.y.z" is a deliberate per-target pin, so the makefile is
-    # searched with those lines removed.
+    # targets-v3.conf states each row's own pins deliberately, so it is not searched.
     hits=$(grep -rlE "$pat" --include='*.yml' --include='*.yaml' --include='*.ps1' --include='*.props' --include='*.vcxproj' \
              .github openssl/build MeshAgent.*.props mesh*/ 2>/dev/null | grep -v 'consistency.sh' || true)
-    grep -vE '^  OSSLVER *=' makefile | grep -qE "$pat" && hits="$hits
+    grep -qE "$pat" makefile && hits="$hits
 makefile"
     [ -z "$hits" ] && { ok "$what not restated"; return; }
     fail "$what is pinned in one place but also written out in:"
     echo "$hits" | sed 's/^/          /' >&2
 }
 guard "the OpenSSL version ($OPENSSL_VERSION)"        "$(echo "$OPENSSL_VERSION" | sed 's/\./\\./g')"
-guard "the OpenWrt release ($OWRT_RELEASE)"           "$(echo "$OWRT_RELEASE" | sed 's/\./\\./g')"
-guard "the OpenWrt gcc version ($OWRT_GCC)"           "$(echo "$OWRT_GCC" | sed 's/\./\\./g')"
+guard "the zig release ($ZIG_VERSION)"                "zig-$(echo "$ZIG_VERSION" | sed 's/\./\\./g')"
 guard "the Bootlin release ($BOOTLIN_RELEASE)"        "$(echo "$BOOTLIN_RELEASE" | sed 's/\./\\./g')"
-guard "the Bootlin x86 release ($BOOTLIN_X86_RELEASE)" "$(echo "$BOOTLIN_X86_RELEASE" | sed 's/\./\\./g')"
 guard "the toolchain mirror URL"                      'media\.githubusercontent\.com/media/PTR-inc'
-guard "the FreeBSD release ($FREEBSD_REL, ARCH_30)"   "freebsd-$(echo "$FREEBSD_REL" | sed 's/\./\\./g')"
-guard "the OpenBSD release ($OPENBSD_REL, ARCH_37)"   "openbsd-$(echo "$OPENBSD_REL" | sed 's/\./\\./g')"
-guard "the osxcross darwin version ($OSXCROSS_DARWIN_VER)" "darwin$(echo "$OSXCROSS_DARWIN_VER" | sed 's/\./\\./g')"
+guard "the FreeBSD release ($FREEBSD_REL)"            "freebsd-$(echo "$FREEBSD_REL" | sed 's/\./\\./g')"
+guard "the OpenBSD release ($OPENBSD_REL)"            "openbsd-$(echo "$OPENBSD_REL" | sed 's/\./\\./g')"
+guard "the NetBSD release ($NETBSD_REL)"              "netbsd-$(echo "$NETBSD_REL" | sed 's/\./\\./g')"
 guard "the rcodesign version ($APPLE_CODESIGN_VER)"     "apple-codesign[-/]$(echo "$APPLE_CODESIGN_VER" | sed 's/\./\\./g')"
 guard "the macOS SDK version ($OSXCROSS_SDK_VER)"     "MacOSX$(echo "$OSXCROSS_SDK_VER" | sed 's/\./\\./g')"
 
@@ -119,11 +118,16 @@ if [ ! -f "$ovh" ]; then fail "$ovh is missing"
 elif grep -qF "\"OpenSSL $OPENSSL_VERSION " "$ovh"; then ok "opensslv.h says OpenSSL $OPENSSL_VERSION"
 else fail "$ovh says $(grep -oE 'OpenSSL [0-9.a-z]+' "$ovh" | head -1), not $OPENSSL_VERSION"; fi
 [ -f "openssl/$OPENSSL_VERSION/include/openssl/opensslconf.h" ] && fail "openssl/$OPENSSL_VERSION/include/openssl/opensslconf.h exists, but that header is per target"
+# A prefix with no lib/ was never installed, which is normal for the gitignored -debug ones and
+# for a target nobody has built yet. Only an installed prefix missing its header is a real fault.
+empty=0
 for d in openssl/$OPENSSL_VERSION/*/; do
     t=$(basename "$d"); [ "$t" = include ] && continue
+    if [ ! -d "$d/lib" ]; then empty=$((empty+1)); continue; fi
     [ -f "$d/include/openssl/opensslconf.h" ] || fail "$d has no include/openssl/opensslconf.h"
 done
-[ $rc -eq 0 ] && ok "every prefix carries its generated opensslconf.h"
+[ "$empty" -gt 0 ] && echo "  note: $empty prefix directory/-ies under openssl/$OPENSSL_VERSION/ hold no lib/ - leftovers of an interrupted build, safe to delete"
+[ $rc -eq 0 ] && ok "every installed prefix carries its generated opensslconf.h"
 
 echo "== 8. build.yml offers every platform and build-inputs.txt covers every input ====="
 SEL=.github/scripts/build-changes.sh
@@ -141,7 +145,7 @@ if [ -x "$SEL" ]; then
         platforms=$(printf '%s\n' "openssl/$OPENSSL_VERSION/$t/lib/libcrypto.a" | "$SEL" | tr '\n' ' ')
         case "$t" in
             linux-*)   want=linux ;; macos-*) want=macos ;; windows-*) want=windows ;;
-            freebsd-*) want=freebsd ;; openbsd-*) want=openbsd ;;
+            freebsd-*) want=freebsd ;; openbsd-*) want=openbsd ;; netbsd-*) want=netbsd ;;
         esac
         case " $platforms" in *" $want "*) ;; *) fail "openssl/<version>/$t/ does not start the $want platform (got '${platforms:-nothing}')"; bad=1 ;; esac
     done

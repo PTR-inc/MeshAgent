@@ -22,16 +22,17 @@
 #     stayed 13.0 regardless of the flag's value). The floor has to be baked into the target
 #     triple's own version suffix instead - "aarch64-macos.11.0", not "-target aarch64-macos
 #     -mmacosx-version-min=11.0" - which otool then confirms lands correctly.
-#  2. zig's own bundled generic-macos headers cover plain libc (stdio.h et al.) but not Apple
-#     frameworks - CommonCrypto/CommonCryptoError.h ("crypto/rand.h" pulls it in) 404s under
-#     --sysroot alone. Needs an explicit -isystem $SDK/usr/include forcing the real SDK headers in.
-# This is resolved per call after build-env.sh is sourced.
+#  2. zig's bundled any-macos headers are searched before the SDK, and they lack Apple's own headers such
+#     as CommonCrypto ("crypto/rand.h" pulls it in). T_ZIGROOT hands the SDK to zig through ZIG_LIBC
+#     (build.sh), which replaces the bundled headers with the SDK's (see zig_libc_file in env-v3.sh).
+# This is resolved per call after env.sh is sourced.
 _osx_tools() {
     # br_target calls this for every target, and the two make probes below cost a full makefile
     # parse each, so the result is computed once and reused for the rest of the process.
     [ -n "${_OSX_TOOLS_DONE:-}" ] && return
     _OSX_TOOLS_DONE=1
     local arm_min x64_min sdk
+    _OSX_ZIGROOT=""
     # The deployment floors are the osver= of the two macOS rows in buildscripts/targets-v3.conf.
     arm_min="-mmacosx-version-min=$("$REPO/buildscripts/target-v3.sh" field 29 OSVER 2>/dev/null)"
     x64_min="-mmacosx-version-min=$("$REPO/buildscripts/target-v3.sh" field 16 OSVER 2>/dev/null)"
@@ -39,9 +40,11 @@ _osx_tools() {
         _OSX_ARM_CC="cc $arm_min"; _OSX_X64_CC="cc $x64_min"
         _OSX_ARM_AR=; _OSX_ARM_RANLIB=; _OSX_ARM_NM=; _OSX_X64_AR=; _OSX_X64_RANLIB=; _OSX_X64_NM=
     else
-        sdk="$OSXCROSS_DIR/target/SDK/MacOSX$OSXCROSS_SDK_VER.sdk"
-        _OSX_ARM_CC="$TC_ZIG/zig cc -target aarch64-macos.${arm_min#-mmacosx-version-min=} --sysroot=$sdk -isystem $sdk/usr/include"
-        _OSX_X64_CC="$TC_ZIG/zig cc -target x86_64-macos.${x64_min#-mmacosx-version-min=} --sysroot=$sdk -isystem $sdk/usr/include"
+        # env-v3.sh resolves MACOS_SDK, so the agent and OpenSSL compile against the same SDK tree.
+        sdk="$MACOS_SDK"
+        _OSX_ARM_CC="$TC_ZIG/zig cc -target aarch64-macos.${arm_min#-mmacosx-version-min=} --sysroot=$sdk"
+        _OSX_X64_CC="$TC_ZIG/zig cc -target x86_64-macos.${x64_min#-mmacosx-version-min=} --sysroot=$sdk"
+        _OSX_ZIGROOT="$sdk"
         # Previously (osxcross's own clang wrapper, still what a from-scratch `fetch-toolchains.sh
         # osxcross` provisions - see the T_FETCH note below):
         #   _OSX_ARM_CC="$OSXCROSS_BIN/aarch64-apple-darwin$OSXCROSS_DARWIN_VER-clang $arm_min"
@@ -59,7 +62,7 @@ _osx_tools() {
 
 br_target() {
     _osx_tools
-    T_CONF=; T_CC=; T_EXTRA=; T_AR=; T_RANLIB=; T_NM=; T_FETCH=
+    T_CONF=; T_CC=; T_EXTRA=; T_AR=; T_RANLIB=; T_NM=; T_FETCH=; T_ZIGROOT=
     T_LIBC=glibc; T_CI=linux; T_DEBUG=0
     # build_libs everywhere, because the repo ships only the two archives and the 3.x
     # apps and fuzz link needs 64-bit atomics that the 32-bit targets lack.
@@ -98,8 +101,8 @@ br_target() {
     # Configure+build_libs pass - but not adopted: ziglang.org's release index only exposes a
     # moving "master" key, not that exact dev snapshot, so it isn't a reproducible pin the way
     # every other toolchain here is. Revisit at a tagged 0.17.0 stable release. Stays on the
-    # pinned Bootlin glibc 2.31 toolchain ($TC_SPARC64_BOOTLIN/bin/sparc64-linux-gcc) until then.
-    linux-sparc64-glibc) T_CONF=linux64-sparcv9 ; T_CC="$TC_SPARC64_BOOTLIN/bin/sparc64-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_FETCH="bootlin-sparc64" ;;
+    # pinned Bootlin glibc 2.31 toolchain ($BOOTLIN_SPARC64/bin/sparc64-linux-gcc) until then.
+    linux-sparc64-glibc) T_CONF=linux64-sparcv9 ; T_CC="$BOOTLIN_SPARC64/bin/sparc64-linux-gcc" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_FETCH="bootlin-sparc64" ;;
     # Previously: pinned Bootlin glibc 2.31 toolchain ($TC_POWERPC64LE_BOOTLIN/bin/powerpc64le-linux-gcc).
     linux-ppc64le-glibc) T_CONF=linux-ppc64le ; T_CC="$TC_ZIG/zig cc -target powerpc64le-linux-gnu.2.31" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="-Os" ; T_FETCH="zig" ;;
     # The ARMv8 crypto extensions are runtime-HWCAP-gated, so plain armv8-a code is generated
@@ -172,27 +175,21 @@ br_target() {
     # OpenSSL 1.1.1 has no riscv32 Configure target, so this Configures as linux-generic32.
     # Previously: musl.cc toolchain ($TC_RISCV32_MUSL/bin/riscv32-linux-musl-gcc).
     linux-riscv32-musl) T_CONF=linux-generic32 ; T_CC="$TC_ZIG/zig cc -target riscv32-linux-musl" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_EXTRA="-Os" ; T_LIBC=musl ; T_FETCH="zig" ;;
-    # No -Os: general-purpose operating systems favour speed. 2026-08-30: switched to zig. Zig
-    # bundles no FreeBSD/OpenBSD libc either (same reason as macOS below - real, versioned OS
-    # headers, not something to vendor generically), so --sysroot still points at the same pinned
-    # sysroots either way, forced past zig's own bundled-header attempt with -nostdlibinc
-    # -isystem $SYSROOT/usr/include (found via a real failure: an unforced FreeBSD build silently
-    # compiled against zig's own bundled generic-freebsd headers, targeting __FreeBSD_version
-    # 14.0 rather than this repo's pinned $FREEBSD_REL - a header/sysroot version-drift risk, not
-    # just a missing-file error, so worth the explicit force even where it doesn't hard-fail).
-    # zig has no OS-version triple suffix for these two (unlike glibc's .2.31 or macOS's .11.0) -
-    # $FREEBSD_REL/$OPENBSD_REL take no effect on the compiler here, only on which sysroot tree
-    # is baked into $SYSROOT_FREEBSD/$SYSROOT_OPENBSD already.
+    # No -Os: general-purpose operating systems favour speed. zig bundles FreeBSD and NetBSD headers and
+    # searches them before --sysroot, -isystem and -nostdlibinc, so T_ZIGROOT hands the pinned sysroot to zig
+    # through ZIG_LIBC (build.sh). Without it FreeBSD compiled with __FreeBSD_version 1400500, not 14.4's 1404000.
     # Previously: clang --target=$FREEBSD_TRIPLE --sysroot=$SYSROOT_FREEBSD -fuse-ld=lld (apt:clang apt:lld).
-    freebsd-x86_64)     T_CONF=BSD-x86_64 ; T_CC="$TC_ZIG/zig cc -target x86_64-freebsd-none --sysroot=$SYSROOT_FREEBSD -isystem $SYSROOT_FREEBSD/usr/include -nostdlibinc" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=bsd ; T_FETCH="zig freebsd" ;;
+    freebsd-x86_64)     T_CONF=BSD-x86_64 ; T_CC="$TC_ZIG/zig cc -target x86_64-freebsd-none --sysroot=$SYSROOT_FREEBSD" ; T_ZIGROOT="$SYSROOT_FREEBSD" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=bsd ; T_FETCH="zig freebsd" ;;
     # Previously: clang --target=$OPENBSD_TRIPLE --sysroot=$SYSROOT_OPENBSD -fuse-ld=lld (apt:clang apt:lld).
+    # NetBSD is set up like FreeBSD: zig bundles a NetBSD libc, and ZIG_LIBC puts the pinned sysroot in its place.
+    netbsd-x86_64)      T_CONF=BSD-x86_64 ; T_CC="$TC_ZIG/zig cc -target x86_64-netbsd-none --sysroot=$SYSROOT_NETBSD" ; T_ZIGROOT="$SYSROOT_NETBSD" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=bsd ; T_FETCH="zig netbsd" ;;
     openbsd-x86_64)     T_CONF=BSD-x86_64 ; T_CC="$TC_ZIG/zig cc -target x86_64-openbsd-none --sysroot=$SYSROOT_OPENBSD -isystem $SYSROOT_OPENBSD/usr/include -nostdlibinc" ; T_AR="$TC_ZIG/zig ar" ; T_RANLIB="$TC_ZIG/zig ranlib" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=bsd ; T_FETCH="zig openbsd" ;;
     # No explicit -target beyond what _osx_tools baked in, because the darwin64 Configure targets
     # add -arch themselves and an explicit one breaks the (pre-zig) osxcross wrapper's linker
     # selection - kept as-is since it's still true for the native-Darwin-host branch. T_AR/T_RANLIB
     # come from _osx_tools too now; see its own comment for the zig gotchas found switching this.
-    macos-arm64)        T_CONF=darwin64-arm64-cc  ; T_CC="$_OSX_ARM_CC" ; T_AR="$_OSX_ARM_AR" ; T_RANLIB="$_OSX_ARM_RANLIB" ; T_NM="$_OSX_ARM_NM" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=macos ; T_CI=macos ; T_FETCH=osxcross ;;
-    macos-x86_64)       T_CONF=darwin64-x86_64-cc ; T_CC="$_OSX_X64_CC" ; T_AR="$_OSX_X64_AR" ; T_RANLIB="$_OSX_X64_RANLIB" ; T_NM="$_OSX_X64_NM" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=macos ; T_CI=macos ; T_FETCH=osxcross ;;
+    macos-arm64)        T_CONF=darwin64-arm64-cc  ; T_CC="$_OSX_ARM_CC" ; T_ZIGROOT="$_OSX_ZIGROOT" ; T_AR="$_OSX_ARM_AR" ; T_RANLIB="$_OSX_ARM_RANLIB" ; T_NM="$_OSX_ARM_NM" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=macos ; T_CI=macos ; T_FETCH=osxcross ;;
+    macos-x86_64)       T_CONF=darwin64-x86_64-cc ; T_CC="$_OSX_X64_CC" ; T_ZIGROOT="$_OSX_ZIGROOT" ; T_AR="$_OSX_X64_AR" ; T_RANLIB="$_OSX_X64_RANLIB" ; T_NM="$_OSX_X64_NM" ; T_FLAGS="${T_FLAGS/-no-asm/}" ; T_EXTRA="enable-ec_nistp_64_gcc_128" ; T_LIBC=macos ; T_CI=macos ; T_FETCH=osxcross ;;
 
     # Windows is built natively by windows/build.ps1, whose own table carries the MSVC details.
     # These rows exist so the name list, the Configure target and the libc family have one home
@@ -279,7 +276,7 @@ stamp_gating_fields() {
     cat <<EOF
 target: $1
 openssl_version: $OPENSSL_VERSION
-source_sha256: $(br_sha256 "$OPENSSL_TARBALL" 2>/dev/null)
+source_sha256: $(v3_sha256 "$OPENSSL_TARBALL" 2>/dev/null)
 configure_target: $T_CONF
 configure_args: --prefix=/ --libdir=lib --openssldir=/usr/local/ssl $T_FLAGS $T_EXTRA
 make_target: $T_MAKE
@@ -293,6 +290,8 @@ libc_version: $(stamp_libc_version)
 asm: $(case "$T_FLAGS" in *-no-asm*) echo off ;; *) echo on ;; esac)
 patches: ${2:-none}
 EOF
+    # Only for the rows that set it, so the stamps of every other target stay exactly as they were.
+    [ -z "$T_ZIGROOT" ] || echo "zig_libc: $T_ZIGROOT"
 }
 
 # sha256 of the gating fields. A rebuild is needed when this differs from the installed stamp's.
@@ -332,7 +331,7 @@ linux-aarch64-glibc linux-aarch64-musl \
 linux-armv6hf-glibc linux-armv7hf-glibc linux-armv7hf-musl linux-armv5sf-glibc \
 linux-mips32r2el-musl linux-mips32r1el-musl linux-mips32r2eb-musl \
 linux-riscv64-musl linux-riscv32-musl linux-sparc64-glibc linux-ppc64le-glibc \
-freebsd-x86_64 openbsd-x86_64 macos-arm64 macos-x86_64 \
+freebsd-x86_64 openbsd-x86_64 netbsd-x86_64 macos-arm64 macos-x86_64 \
 windows-x86 windows-x86-debug windows-x64 windows-x64-debug windows-arm64 windows-arm64-debug"
 
 # Prints target names, optionally filtered by T_CI. The CI matrix is built from this,
@@ -355,7 +354,7 @@ print_target_field() {
 # This block only runs when the file is executed directly, so sourcing it still just
 # defines br_target and BR_ALL_TARGETS as before.
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-    . "$(dirname "$(readlink -f "$0")")/../../buildscripts.v2/build-env.sh" >/dev/null
+    . "$(dirname "$(readlink -f "$0")")/env.sh" >/dev/null
     case "${1:-}" in
         --names)  print_target_names "${2:-}" ;;
         --field)  print_target_field "$2" "$3" ;;

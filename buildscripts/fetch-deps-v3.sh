@@ -1,14 +1,14 @@
 #!/bin/bash
 # Fetches what the rows in targets-v3.conf need and nothing else: the zig releases they name, the
-# BSD sysroots for the freebsd/openbsd rows (FreeBSD from pkgbase, OpenBSD from the mirror or streamed
-# sets, see the BSD section), the OpenSSL source tarball for openssl/build, rcodesign for the macOS
+# BSD sysroots for the freebsd/openbsd/netbsd rows (FreeBSD from pkgbase, OpenBSD and NetBSD from the
+# mirror or streamed sets, see the BSD section), the OpenSSL source tarball for openssl/build, rcodesign for the macOS
 # rows, and the Bootlin gcc for the one row that cannot use zig. Every download is verified by the
 # publisher's checksum or signature where one exists, or by a smoke compile where none does.
 #
 #   buildscripts/fetch-deps-v3.sh list           status of every dependency, fetch nothing
 #   buildscripts/fetch-deps-v3.sh all            fetch everything the table needs
 #   buildscripts/fetch-deps-v3.sh zig openssl    named components only
-#   components: zig openssl freebsd openbsd rcodesign bootlin-sparc64 macos
+#   components: zig openssl freebsd openbsd netbsd rcodesign bootlin-sparc64 macos
 #
 # Not fetched, bring your own: the macOS SDK's *source* ($MACOS_SDK, Apple-licensed) and the host
 # packages check-v3.sh lists (llvm-strip, qemu-user, the KVM header packages).
@@ -98,12 +98,12 @@ p_openssl() {
         && log_status openssl "OK ($OSSLVER)" || { log_status openssl "FAILED"; return 1; }
 }
 
-# ---- BSD sysroots, one per freebsd/openbsd row ------------------------------------------------
+# ---- BSD sysroots, one per freebsd/openbsd/netbsd row ------------------------------------------------
 # A sysroot is lib/ (the .so.N the linker follows), usr/lib (crt objects, .so links, .a) and usr/include.
 #
-# FreeBSD: pkgbase. pkg.freebsd.org publishes the base system as packages per release, so the four the
-# link needs (FreeBSD-clibs, -clibs-dev, -runtime for libutil.so.9, -runtime-dev for libutil.so and its
-# header) are fetched directly, about 24 MB, and only their lib/, usr/lib and usr/include members are
+# FreeBSD: pkgbase. pkg.freebsd.org publishes the base system as packages per release, so the five the
+# build needs (FreeBSD-clibs, -clibs-dev, -runtime for libutil.so.9, -runtime-dev for libutil.so and its
+# header, -libbsm-dev for the bsm/audit.h that sys/ucred.h includes) are fetched directly, about 24 MB, and only their lib/, usr/lib and usr/include members are
 # extracted. The index packagesite.yaml is RSA-signed over its sha256 hex, the key is pinned by
 # FREEBSD_PKG_FINGERPRINT, and each package's "sum" is 2$ + blake2b-512 in pkg's little-endian zbase32.
 # Measured 2026-09-13: the agent linked against this sysroot is the same size with the same FBSD_1.x
@@ -114,6 +114,9 @@ p_openssl() {
 # only the three paths, so nothing is stored twice and the SHA256 manifest is still checked, after the
 # fact, with the directory removed on mismatch. That still transfers the whole ~70 MB comp and ~330 MB
 # base set, which is why the mirror stays first.
+#
+# NetBSD: the same approach as OpenBSD, with base.tar.xz (~50 MB, lib/ and the unversioned usr/lib .so links)
+# and comp.tar.xz (~73 MB, usr/include, crt objects, .a). Its manifest is SHA512 only, there is no SHA256 file.
 sysroot_from_mirror() {   # <name> <dir> <url>
     local dest="$BR_DOWNLOADS/$(basename "$3")"
     curl -sSfL -o /dev/null --head "$3" 2>/dev/null || return 1
@@ -137,7 +140,9 @@ want = sys.argv[2]
 sys.exit(0 if want.startswith("2$") and zb32_le(hashlib.blake2b(open(sys.argv[1], "rb").read()).digest()) == want[2:] else 1)
 EOF
 }
-FREEBSD_PKGBASE_SET="FreeBSD-clibs FreeBSD-clibs-dev FreeBSD-runtime FreeBSD-runtime-dev"
+# FreeBSD-libbsm-dev only became necessary once ZIG_LIBC made zig use this sysroot's headers: its own bundled copy had
+# bsm/, and without it 'make ARCHID=30' stopped at sys/ucred.h:42 with "fatal error: 'bsm/audit.h' file not found".
+FREEBSD_PKGBASE_SET="FreeBSD-clibs FreeBSD-clibs-dev FreeBSD-runtime FreeBSD-runtime-dev FreeBSD-libbsm-dev"
 freebsd_pkgbase() {   # <name> <release> <dir>
     local name="$1" rel="$2" dir="$3" repo="$FREEBSD_PKG_REPO/FreeBSD:${2%%.*}:amd64/base_release_${2#*.}"
     local t; t=$(mktemp -d); trap 'rm -rf "$t"' RETURN
@@ -168,22 +173,24 @@ EOF
         # Members are stored as /usr/lib/..., so the patterns are absolute; a package without one of the paths is normal.
         tar -xf "$f" -C "$dir" $TAR_WILD '/lib/*' '/usr/lib/*' '/usr/include/*' 2>/dev/null
     done < "$t/want"
-    [ -f "$dir/usr/lib/libc.so" ] && [ -f "$dir/usr/include/stdio.h" ] && [ -f "$dir/usr/lib/libutil.so" ] \
+    [ -f "$dir/usr/lib/libc.so" ] && [ -f "$dir/usr/include/stdio.h" ] && [ -f "$dir/usr/lib/libutil.so" ] && [ -f "$dir/usr/include/bsm/audit.h" ] \
         && log_status "$name" "OK (pkgbase, $(echo $FREEBSD_PKGBASE_SET | wc -w) packages, signed index)" \
-        || { log_status "$name" "pkgbase: extracted, but libc.so, stdio.h or libutil.so is missing"; return 1; }
+        || { log_status "$name" "pkgbase: extracted, but libc.so, stdio.h, libutil.so or bsm/audit.h is missing"; return 1; }
 }
 
-# Streams one upstream set through tar, keeping only the sysroot paths, and checks its sha256 afterwards.
-stream_set() {   # <name> <url> <sha256> <dir>
-    local t z; t=$(mktemp); rm -f "$t"
+# Streams one upstream set through tar, keeping only the sysroot paths, and checks its hash afterwards.
+# The hash is sha512 when it is 128 hex digits long, as in NetBSD's manifest, and sha256 otherwise.
+stream_set() {   # <name> <url> <sha256 or sha512> <dir>
+    local t z h=v3_sha256_stream; t=$(mktemp); rm -f "$t"
+    [ ${#3} -eq 128 ] && h=v3_sha512_stream
     # tar cannot sniff the compression of a stream, so it is told from the name; the member paths are
     # matched unanchored because FreeBSD stores them as ./usr/..., OpenBSD as ./usr/... and the mirror as usr/...
     case "$2" in *.txz|*.xz) z=J ;; *) z=z ;; esac
-    curl -sSL --fail --retry 3 "$2" | tee >(v3_sha256_stream > "$t") \
+    curl -sSL --fail --retry 3 "$2" | tee >($h > "$t") \
         | tar x${z}f - -C "$4" $TAR_WILD 'usr/include/*' 'usr/lib/*' 'lib/*' 2>/dev/null
     local i=0; while [ ! -s "$t" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
     local got; got=$(cat "$t" 2>/dev/null); rm -f "$t"
-    [ "$got" = "$3" ] || { log_status "$1" "FAILED (streamed set $(basename "$2") has sha256 $got, manifest says $3)"; return 1; }
+    [ "$got" = "$3" ] || { log_status "$1" "FAILED (streamed set $(basename "$2") has hash $got, manifest says $3)"; return 1; }
 }
 # OpenBSD ships no unversioned libNAME.so links and ld.lld does not do OpenBSD's version search, so
 # without these it silently links the static .a for every -l and the binary has no PT_DYNAMIC.
@@ -196,9 +203,10 @@ openbsd_so_links() {
     done
     [ "$n" -gt 0 ] && echo "  added $n unversioned .so links for ld.lld"
 }
-p_sysroot() {   # <freebsd|openbsd> <release>
+p_sysroot() {   # <freebsd|openbsd|netbsd> <release>
     local os="$1" rel="$2" dir="$BR_SYSROOTS/$1-$2" name="$1-$2"
-    if [ -f "$dir/usr/lib/libc.so" ] && [ -d "$dir/usr/include" ]; then [ "$os" = openbsd ] && openbsd_so_links "$dir"; log_status "$name" "already present"; return 0; fi
+    # A FreeBSD sysroot fetched before FreeBSD-libbsm-dev was in the set lacks bsm/audit.h, so it is fetched again rather than reported present.
+    if [ -f "$dir/usr/lib/libc.so" ] && [ -d "$dir/usr/include" ] && { [ "$os" != freebsd ] || [ -f "$dir/usr/include/bsm/audit.h" ]; }; then [ "$os" = openbsd ] && openbsd_so_links "$dir"; log_status "$name" "already present"; return 0; fi
     rm -rf "$dir"; mkdir -p "$dir"
     if [ "$os" = freebsd ]; then
         freebsd_pkgbase "$name" "$rel" "$dir" && return 0
@@ -208,6 +216,20 @@ p_sysroot() {   # <freebsd|openbsd> <release>
         [ -n "$sha" ] || { log_status "$name" "FAILED (MANIFEST)"; return 1; }
         stream_set "$name" "$base/base.txz" "$sha" "$dir" || { rm -rf "$dir"; return 1; }
         log_status "$name" "OK (streamed base.txz)"
+    elif [ "$os" = netbsd ]; then
+        sysroot_from_mirror "$name" "$dir" "$MESHAGENT_TOOLCHAINS_RAW/SR/$os-$rel-sysroot.tar.xz" && return 0
+        log_status "$name" "not on the mirror - streaming the sets from cdn.netbsd.org"
+        # NetBSD's own unversioned .so links are relative (../../lib/libc.so.12.220.1), so no link fixup is needed.
+        local base="https://cdn.netbsd.org/pub/NetBSD/NetBSD-$rel/amd64/binary/sets" m s sha
+        m=$(curl -sSL --fail "$base/SHA512") || { log_status "$name" "FAILED (SHA512 manifest)"; return 1; }
+        for s in base comp; do
+            sha=$(echo "$m" | awk -v f="$s.tar.xz" '$0 ~ "\\(" f "\\)"{print $4}')
+            [ -n "$sha" ] || { log_status "$name" "FAILED (no $s.tar.xz in the manifest)"; return 1; }
+            stream_set "$name" "$base/$s.tar.xz" "$sha" "$dir" || { rm -rf "$dir"; return 1; }
+        done
+        [ -f "$dir/usr/lib/libc.so" ] && [ -f "$dir/usr/include/stdio.h" ] \
+            && log_status "$name" "OK (streamed base and comp sets)" \
+            || { log_status "$name" "FAILED (streamed, but libc.so or stdio.h is missing)"; rm -rf "$dir"; return 1; }
     else
         sysroot_from_mirror "$name" "$dir" "$MESHAGENT_TOOLCHAINS_RAW/SR/$os-$rel-sysroot.tar.xz" && { openbsd_so_links "$dir"; return 0; }
         log_status "$name" "not on the mirror - streaming the sets from cdn.openbsd.org"
@@ -222,7 +244,7 @@ p_sysroot() {   # <freebsd|openbsd> <release>
         openbsd_so_links "$dir"; log_status "$name" "OK (streamed base and comp sets)"
     fi
 }
-p_bsd() {   # <freebsd|openbsd>: every release the table's rows of that os name
+p_bsd() {   # <freebsd|openbsd|netbsd>: every release the table's rows of that os name
     local id rc=0 rels
     rels=$(for id in $(tgt_ids); do tgt_load "$id" && [ "$T_OS" = "$1" ] && echo "$T_OSVER"; done | sort -u)
     [ -n "$rels" ] || { log_status "$1" "no $1 row in the table"; return 0; }
@@ -330,7 +352,7 @@ list_status() {
 
 # macos is deliberately not in ALL: unlike everything else here it depends on a file only a human
 # can supply (an Apple-licensed Xcode .xip), so `all` would fail on every host that doesn't have one.
-ALL="zig openssl freebsd openbsd rcodesign bootlin-sparc64"
+ALL="zig openssl freebsd openbsd netbsd rcodesign bootlin-sparc64"
 KNOWN="$ALL macos"
 case "${1:-}" in
     list) list_status; exit 0 ;;
@@ -342,7 +364,7 @@ rc=0
 for c in "$@"; do
     echo "=== $c ==="
     case "$c" in
-        zig) p_zig ;; openssl) p_openssl ;; freebsd|openbsd) p_bsd "$c" ;; rcodesign) p_rcodesign ;; bootlin-sparc64) p_bootlin_sparc64 ;; macos) p_macos ;;
+        zig) p_zig ;; openssl) p_openssl ;; freebsd|openbsd|netbsd) p_bsd "$c" ;; rcodesign) p_rcodesign ;; bootlin-sparc64) p_bootlin_sparc64 ;; macos) p_macos ;;
         *) echo "unknown component: $c (one of: $KNOWN)" >&2; false ;;
     esac || rc=1
 done

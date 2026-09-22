@@ -10,14 +10,17 @@ actually committed. This file explains the layout and the gates.
 
 ```
 openssl/
-  VERSION                         the one pin, "1.1.1w". build-env.sh, the makefile, env.ps1
+  VERSION                         the one pin, "1.1.1w". env-v3.sh, env.sh, env.ps1
                                   and MeshAgent.Common.props all read it, nothing restates it
   build/                          this directory
     README.md                     you are here
+    env.sh                        this directory's environment, sourced by every script here and
+                                  by CI. Takes BUILDROOT, the zig release, openssl/VERSION and the
+                                  BSD releases from buildscripts/env-v3.sh, and adds the rest
     targets.sh                    the target table: Configure target, compiler, flags, libc, CI
     build.sh                      builds one or more targets and installs their prefixes
     probe.sh                      the gates, shared by build.sh (before install) and verify
-    verify                        read-only audit of every committed prefix, CI runs it
+    verify.sh                     read-only audit of every committed prefix, CI runs it
     consistency.sh                the anti-drift gate
     archive-info.py               ar walker: format, wordsize, machine, member count, no binutils
     flags/1.1.1.txt               shared Configure flags for the 1.1.1 series (flags/3.txt later)
@@ -37,25 +40,27 @@ openssl/
                                   deleteall, state.txt and the archive dirs nothing links any more
                                   (arm2, armhf2, poky, poky64, mips, pogo, arm64, openwrt_x86_64,
                                   riscv64). Nothing reads them, verify ignores them
-build-env.sh                      repo root, sourced by every script here and by CI
-fetch-toolchains.sh               repo root, provisions $BUILDROOT (see "Provisioning")
+buildscripts/                     the agent side: env-v3.sh (the shared pins), targets-v3.conf
+                                  (one row per ARCHID), target-v3.sh (derives a row), and
+                                  fetch-deps-v3.sh, which provisions $BUILDROOT
 ```
 
-The consumer side is the makefile: every `ARCH_<id>` block carries `OSSLTARGET = <name>`,
-`OSSLVER` defaults to `openssl/VERSION`, an `ARCH_` block may set `OSSLVER = 3.x.y` to pin that one
-ARCHID to another installed series (a staged migration), and `make ARCHID=n OSSLVER=3.x.y` beats
-both. The prefix is `openssl/$(OSSLVER)/$(OSSLTARGET)`, `make ARCHID=n print-osslver` shows the result.
-Include order is `-I$(OSSLPREFIX)/include -Iopenssl/$(OSSLVER)/include`, so the per-target
-`opensslconf.h` is found before the shared headers, and the link line is `-L$(OSSLPREFIX)/lib`.
-`make ARCHID=n print-ossltarget` and `print-ossldir` show the resolution. On Windows
+The consumer side is `buildscripts/targets-v3.conf`, one row per ARCHID. No row names an OpenSSL
+target: `target-v3.sh` derives `T_OSSL` from the row's `arch`, `abi`, `cpu` and `libc`, because
+those are what decide link compatibility, and the prefix is `openssl/$OSSLVER/$T_OSSL`. There is
+one OpenSSL series for the whole fleet, so `openssl/VERSION` is the only version input.
+`buildscripts/target-v3.sh field <archid> OSSL` and `... OSSLDIR` show the resolution, and
+`openssl/build/build.sh list` shows it for every ARCHID at once. Include order is
+`-I$(T_OSSLDIR)/include -Iopenssl/$(T_OSSLVER)/include`, so the per-target `opensslconf.h` is found
+before the shared headers, and the link line is `-L$(T_OSSLDIR)/lib`. On Windows
 `MeshAgent.Common.props` reads `openssl\VERSION` and derives `MeshOpenSSLTarget` as
 `windows-<x86|x64|arm64>[-debug]` from `$(Platform)` and `$(MeshDebug)`.
 
 ## Quick start
 
 ```sh
-./fetch-toolchains.sh                  # fresh machine: download, verify and extract everything fetchable
-. build-env.sh && br_check             # every toolchain, sysroot and tarball present?
+buildscripts/fetch-deps-v3.sh all      # fresh machine: download, verify and extract everything fetchable
+buildscripts/fetch-deps-v3.sh list     # every toolchain, sysroot and tarball present?
 openssl/build/build.sh list            # one row per ARCHID, with a STAMP column saying what a
                                        # build would do now: current, stale, unstamped or absent
 openssl/build/build.sh list-targets    # every target, its libc, toolchain readiness, ARCHIDs, prefix
@@ -66,8 +71,8 @@ openssl/build/verify.sh                # audit every committed prefix of every i
 openssl/build/consistency.sh           # anti-drift gate
 ```
 
-`BUILDROOT=/somewhere/else . build-env.sh` moves the multi-GB toolchain tree. `build.sh` builds
-the listed targets one after another, gives each OpenSSL `make` every core (`MAKE_JOBS` to use
+`BUILDROOT=/somewhere/else` moves the multi-GB toolchain tree, for every script on both sides.
+`build.sh` builds the listed targets one after another, gives each OpenSSL `make` every core (`MAKE_JOBS` to use
 fewer), streams output and keeps a per-target log and one-line verdict under `$BR_WORK`.
 Windows targets are refused by `build.sh`, `windows/build.ps1` builds them (see below).
 
@@ -79,40 +84,19 @@ OpenSSL Configure target, `T_LIBC` the only list of which targets are not glibc,
 family (`linux`, `macos`, `windows`). The Windows rows carry only name, Configure target and
 libc, their MSVC details live in `build.ps1`'s `$Targets`.
 
-| Target | T_CONF | Toolchain | libc | ARCHIDs | asm | -Os |
-|---|---|---|---|---|---|---|
-| `linux-x86_64-glibc` | linux-x86_64 | Bootlin x86-64 glibc 2.24 (2017.05), generic march (1) | glibc | 6, 20 | yes | no |
-| `linux-i686-glibc` | linux-x86 | Bootlin x86-i686 glibc 2.24 (2017.05) | glibc | 5, 19 | yes | no |
-| `linux-x86_64-musl` | linux-x86_64 | apt `musl-gcc` | musl | 33, 36 | yes | no |
-| `linux-aarch64-glibc` | linux-aarch64 | Bootlin aarch64 glibc 2.31 | glibc | 26, 32 | yes | yes |
-| `linux-aarch64-musl` | linux-aarch64 | musl.cc aarch64 | musl | 41 | yes | yes |
-| `linux-armv6hf-glibc` | linux-armv4 | apt `arm-linux-gnueabihf-gcc`, armv6 VFP hardfloat (2) | glibc | 25 | no | yes |
-| `linux-armv7hf-glibc` | linux-generic32 | Bootlin armv7-eabihf glibc 2.31 | glibc | 24 | none | yes |
-| `linux-armv7hf-musl` | linux-armv4 | musl.cc armhf, armv7-a VFP hardfloat (2) | musl | 35 | no | yes |
-| `linux-armv5sf-glibc` | linux-generic32 | Bootlin armv5-eabi glibc 2.31 (softfloat) | glibc | 9 | none | yes |
-| `linux-mips32r1el-uclibc` | linux-mips32 | Bootlin mips32el uClibc | uclibc | 7 | yes | yes |
-| `linux-mips32r2el-musl` | linux-mips32 | OpenWrt SDK mipsel_24kc | musl | 40 | yes | yes |
-| `linux-mips32r1el-musl` | linux-mips32 | zig `mipsel-linux-musleabi -mcpu=mips32` (MIPS32r1) | musl | 7 | yes | yes |
-| `linux-mips32r2eb-musl` | linux-mips32 | OpenWrt SDK mips_24kc | musl | 28 | yes | yes |
-| `linux-riscv64-musl` | linux64-riscv64 | musl.cc riscv64 (rv64gc) | musl | 45, 46 | none | yes |
-| `linux-riscv32-musl` | linux-generic32 | musl.cc riscv32 | musl | 47 | none | yes |
-| `freebsd-x86_64` | BSD-x86_64 | clang + FreeBSD sysroot | bsd | 30 | yes | no |
-| `openbsd-x86_64` | BSD-x86_64 | clang + OpenBSD sysroot | bsd | 37 | yes | no |
-| `macos-arm64` | darwin64-arm64-cc | Xcode clang on a Mac, osxcross on Linux | macos | 29 | yes | no |
-| `macos-x86_64` | darwin64-x86_64-cc | same | macos | 16 | yes | no |
-| `windows-x86[-debug]` | VC-WIN32 | MSVC, NASM | msvc | props | yes | n/a |
-| `windows-x64[-debug]` | VC-WIN64A | MSVC, NASM | msvc | props | yes | n/a |
-| `windows-arm64[-debug]` | VC-WIN64-ARM | MSVC x64_arm64 cross | msvc | props | no | n/a |
+`build.sh list-targets` prints the table live - every target with its libc, whether this host can
+compile it, the ARCHIDs that link it, asm on or off, whether it goes through zig, its `T_EXTRA`
+flags and whether the prefix exists. It is not reproduced here, because a copy of it in this file
+went stale the moment the fleet moved to zig and nothing caught it. `build.sh list` is the same
+information per ARCHID. Read the comment on a target in `targets.sh` before touching it, most
+encode a debugged reason.
 
-(1) `-march=x86-64 -mtune=generic`, because Bootlin's only x86-64 toolchain defaults to core-i7.
-(2) `-march=armv6` or `-march=armv7-a` with `-marm -mfpu=vfp -mfloat-abi=hard`: armv6 implies no
-FPU and thumb has no hard-float ABI. Every `-m` flag of `T_CC` is checked against the archive.
-
-"none" in the asm column means the Configure target has no asm modules whatever the flag says
+Every target but `linux-sparc64-glibc` is compiled by zig's bundled clang, named by the target
+triple that fixes its ABI, libc family and glibc floor. sparc64 stays on a pinned Bootlin gcc
+because LLVM's SPARC assembler still lacks the `srln` pseudo-op the vendored asm uses. "none" in
+the asm column means the Configure target has no asm modules whatever the flag says
 (`linux-generic32`, and 1.1.1 has no RISC-V asm). Every 64-bit target also gets
-`enable-ec_nistp_64_gcc_128`. `build.sh list-targets` prints the same table live, with the ARCHIDs asked
-from the makefile and whether the prefix exists. Read the comment on a target in `targets.sh`
-before touching it, most encode a debugged reason.
+`enable-ec_nistp_64_gcc_128`.
 
 Flag reasoning that applies across the table:
 
@@ -141,7 +125,7 @@ absent. The staged prefix is then gated (next section) and only on a pass copied
 `openssl/<version>/<target>/`, replacing what was there.
 
 `BR_FETCH=1 build.sh <target>` first provisions the toolchain from the target's `T_FETCH` tokens
-(`apt:<package>` or a `fetch-toolchains.sh` component). CI sets it, a local run never installs
+(`apt:<package>` or a `fetch-deps-v3.sh` component). CI sets it, a local run never installs
 packages unasked. `T_MAKE` is `build_libs` for every target because the repo ships only the two
 archives and the 3.x apps and fuzz link needs 64-bit atomics the 32-bit targets lack.
 
@@ -201,7 +185,7 @@ The gates, in the order `probe.sh` applies them:
 10. `opensslconf.h`'s wordsize (`THIRTY_TWO_BIT` or `SIXTY_FOUR_BIT[_LONG]`) matches the objects.
 11. `lib/pkgconfig/libcrypto.pc` exists and its `Version:` equals the version (not for msvc).
 12. `GLIBC_ONLY_RE` references are zero for musl and uClibc, `UCONTEXT_RE` references are zero
-    for musl (both regexes in `build-env.sh`, see the riscv64 incident below).
+    for musl (both regexes in `env.sh`, see the riscv64 incident below).
 
 The member count is reported in the `ARCHIVE` column only. It used to be a gate (`T_OBJS`), which
 folded version, Configure target, asm and options into one integer per target and could not
@@ -209,9 +193,9 @@ survive a second OpenSSL version. Everything it proved is now checked directly. 
 the macOS archives count 564 and 576 members here, the old 565 and 577 were GNU `ar` miscounting
 the Mach-O `__.SYMDEF` pseudo-member.
 
-`consistency.sh` is the other gate, read-only and about drift rather than archives. Its eight
+`consistency.sh` is the other gate, read-only and about drift rather than archives. Its nine
 The checks that touch this layout: every prefix directory is a
-target, the pinned version is installed, every non-obsolete ARCHID's `OSSLTARGET` is a known and
+target, the pinned version is installed, every non-obsolete ARCHID's OpenSSL target is a known and
 installed target, `build.ps1`'s `$Targets` names equal `targets.sh --names windows`, the shared
 `opensslv.h` is the pinned release, there is no shared `opensslconf.h`, and every prefix has its
 own.
@@ -221,12 +205,12 @@ own.
 The version selects the prefix directory, so a new version is built next to the pinned one and
 nothing consumes it until asked.
 
-1. Add `flags/<series>.txt` if the series has none (`build-env.sh` picks the most specific of
+1. Add `flags/<series>.txt` if the series has none (`env.sh` picks the most specific of
    `<version>`, `<version without patch letter>`, `<major.minor>`, `<major>`). 3.x renames or
    adds options (`no-module`, `no-legacy`, `no-deprecated`), so it needs its own file, and every
    new `no-<x>` should get a `WITNESS` entry in `probe.sh`.
 2. `OPENSSL_VERSION=3.x.y openssl/build/build.sh <target>` fetches nothing by itself, so run
-   `OPENSSL_VERSION=3.x.y ./fetch-toolchains.sh openssl` first (sha256 and release tag are
+   `OSSLVER=3.x.y buildscripts/fetch-deps-v3.sh openssl` first (sha256 and release tag are
    derived from the version). The build creates `openssl/3.x.y/<target>/` and, on the first
    target, `openssl/3.x.y/include/openssl/`.
 3. `make ARCHID=n OSSLVER=3.x.y` links that prefix, or set `OSSLVER = 3.x.y` in that ARCHID's
@@ -246,19 +230,20 @@ RC2-40, `SSL_CTX_set_options` misuse, deprecated `ENGINE` headers) is separate f
 1. Add a case to `br_target` in `targets.sh` with `T_CONF`, `T_CC`, `T_FLAGS` edits, `T_EXTRA`,
    `T_LIBC`, `T_FETCH` and, if not linux, `T_CI`, plus a comment saying why the recipe is what it
    is. Add the name to `BR_ALL_TARGETS`. The name must follow `<os>-<arch>-<libc>` (check 1).
-2. Put `OSSLTARGET = <name>` in the `ARCH_<id>` block of every ARCHID that links it.
+2. Make sure `target-v3.sh` derives that name for the rows that should link it: `T_OSSL` comes
+   from the row's `arch`, `abi`, `cpu` and `libc`, so a genuinely new shape needs a case there.
 3. `openssl/build/build.sh <name>`, then `openssl/build/verify.sh <name>` and
    `openssl/build/consistency.sh`. CI picks the target up from `T_CI` with no YAML edit.
 4. Windows: add the row to `build.ps1`'s `$Targets` as well, check 5 keeps the two tables equal.
 
 ## Provisioning `$BUILDROOT` on a fresh machine
 
-`./fetch-toolchains.sh` (repo root) automates everything with a public URL: the OpenSSL tarball,
+`buildscripts/fetch-deps-v3.sh` automates everything with a public URL: the OpenSSL tarball,
 the OpenWrt SDKs, the Bootlin toolchains (glibc and uClibc, checksum-verified), the musl.cc
 prebuilt cross toolchains (aarch64, armhf, x86_64, riscv64, riscv32, no published checksum, gated
 on a smoke compile), the T-Head/Xuantie riscv64 vendor toolchain (mirrored, see below), the Arm
 GNU toolchain, and the FreeBSD/OpenBSD sysroots. Safe to re-run, present components are skipped.
-`fetch-toolchains.sh list` reports status without fetching. It does not install the apt
+`fetch-deps-v3.sh list` reports status without fetching. It does not install the apt
 prerequisites below. `osxcross` clones and builds osxcross, but the macOS SDK is Apple-licensed
 and must be supplied locally. It lives at the repo root because it
 also wires the toolchains the agent's own cross-compile needs (ARCHID 28, 36, 40) into
@@ -299,8 +284,8 @@ $BUILDROOT/
   work/                            scratch build trees and stages per target, safe to delete
 ```
 
-Version-less names are symlinks `fetch-toolchains.sh` creates, so a toolchain bump is one
-`build-env.sh` edit. The musl.cc entries replaced an older dd-wrt toolchain set, any note still
+Version-less names are symlinks `fetch-deps-v3.sh` creates, so a toolchain bump is one
+`env-v3.sh` edit. The musl.cc entries replaced an older dd-wrt toolchain set, any note still
 saying "dd-wrt" is stale.
 
 ### Sources
@@ -312,7 +297,7 @@ saying "dd-wrt" is stale.
 - **T-Head/Xuantie riscv64 vendor toolchain**: no public upstream URL (the XuanTie repo ships
   source only, prebuilts sit behind their account-gated portal). Built from source once
   (2026-08-24, `xuantie-gnu-toolchain` V3.0.1, `make musl`) and mirrored at
-  `PTR-inc/meshagent-toolchains/TC`, fetched via `./fetch-toolchains.sh riscv64-xthead`. A rebuild
+  `PTR-inc/meshagent-toolchains/TC`, fetched from the mirror. A rebuild
   from source needs about 20 apt packages, a 6.65 GB submodule pull and 45 to 90 minutes. No
   OpenSSL target uses it, only the ARCHID 45 agent build.
 - **Arm GNU Toolchain**: developer.arm.com, currently used by no target.
@@ -425,7 +410,8 @@ only what is missing, and in a non-interactive session prints the command and st
 clang on Linux, with `$OSXCROSS_BIN` put on `PATH` because clang finds `<triple>-ld` only there.
 No `-target` is passed, the `darwin64-*-cc` Configure targets add `-arch` themselves and an
 explicit one breaks osxcross's linker selection. The deployment floor comes from the makefile's
-`MACOSARCH` via `make print-macosarch`, so the archive's minos never exceeds the agent's.
+`osver=` on the two macOS rows of `targets-v3.conf`, read through `target-v3.sh`, so the
+archive's minos never exceeds the agent's.
 `T_AR`, `T_RANLIB` and `T_NM` are the prefixed tools on Linux because host GNU binutils do not
 reliably handle Mach-O archives (the gates no longer depend on them). CI builds macOS on macOS
 runners, osxcross is the developer-machine path, and the SDK it needs is never on the public

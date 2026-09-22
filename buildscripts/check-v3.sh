@@ -20,7 +20,7 @@ for id in $ids; do
     [ -n "$T_NAME" ] && [ -n "$T_OS" ] && [ -n "$T_ARCH" ] || fail "ARCHID $id: name, os and arch are required"
     case " $seen_names " in *" $T_NAME "*) fail "ARCHID $id: name $T_NAME is used twice" ;; esac; seen_names="$seen_names $T_NAME"
     case "$T_OS" in linux) [ "$T_LIBC" = glibc ] || [ "$T_LIBC" = musl ] || fail "ARCHID $id: linux needs libc=glibc or musl" ;;
-                    freebsd|openbsd) [ -n "$T_OSVER" ] || fail "ARCHID $id: $T_OS needs osver=" ;;
+                    freebsd|openbsd|netbsd) [ -n "$T_OSVER" ] || fail "ARCHID $id: $T_OS needs osver=" ;;
                     macos) [ -n "$T_OSVER" ] || fail "ARCHID $id: macos needs osver= (deployment floor)" ;;
                     *) fail "ARCHID $id: unknown os $T_OS" ;; esac
     [ "$T_LIBC" = glibc ] && [ -z "$T_LIBCVER" ] && fail "ARCHID $id: glibc rows pin their floor with libcver="
@@ -68,7 +68,7 @@ hits=$(grep -rnE "zig-$(echo "$ZIG_VERSION" | sed 's/\./\\./g')|\bzig $(echo "$Z
 $hits"
 for id in $(tgt_ids); do
     tgt_load "$id" || continue
-    case "$T_OS" in freebsd|openbsd)
+    case "$T_OS" in freebsd|openbsd|netbsd)
         hits=$(grep -rnE "$T_OS-$(echo "$T_OSVER" | sed 's/\./\\./g')" makefile.v3 buildscripts/*.sh 2>/dev/null || true)
         [ -z "$hits" ] || fail "$T_OS $T_OSVER is pinned in the table but also written in:
 $hits" ;;

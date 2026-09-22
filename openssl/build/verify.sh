@@ -4,7 +4,7 @@
 # comes from probe.sh, the same code build.sh runs before it stages anything.
 
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-. "$HERE/../../buildscripts.v2/build-env.sh" >/dev/null || exit 1
+. "$HERE/env.sh" >/dev/null || exit 1
 . "$BR_SCRIPTS/targets.sh" || exit 1
 . "$BR_SCRIPTS/probe.sh" || exit 1
 cd "$REPO" || exit 1
@@ -24,6 +24,13 @@ check_stamp() {   # $1 target, $2 prefix, $3 version directory. br_target "$1" m
     # $OPENSSL_VERSION than this environment pins, so recomputing here would compare two series.
     if [ "$3" != "$OPENSSL_VERSION" ]; then
         echo "  note: $t stamp not checked, openssl/$3 is not the pinned series ($OPENSSL_VERSION)"
+        return 0
+    fi
+    # windows/build.ps1 writes its own "key=value" stamp with the MSVC toolset and SDK in it, not
+    # the "key: value" fields stamp_diff recomputes, so every field would read as absent here and
+    # report a drift that is really just the other format. Only Windows can judge a Windows prefix.
+    if [ "$T_CI" = windows ]; then
+        echo "  note: $t stamp not checked, windows/build.ps1 writes it in its own format"
         return 0
     fi
     if ! diffs=$(stamp_diff "$t" "$2"); then

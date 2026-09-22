@@ -41,15 +41,18 @@
 #                         phases 2, 5 and 6. Off by default, since a non-sparse scratch volume makes
 #                         it expensive. Cannot reach phase 3, which delivers the run via -b64exec:
 #                         argv is empty there, so the testmodule has no way to see the flag.
-#   -e, --exclude LIST    skip testmodules whose filename contains any of these comma-separated
-#                         substrings, forwarded to phases 2, 5 and 6 the same way. For example
+#   -e, --exclude LIST    skip testmodules whose filename matches any of these comma-separated
+#                         entries, forwarded to phases 2, 5 and 6 the same way. For example
 #                         --exclude=06- skips 06-http.js, 06-tls.js and 06-websocket.js together
 #                         (the known pre-existing crash - see ISSUES.md). Cannot reach phase 3,
 #                         for the same reason --fs-test cannot.
-#   -i, --include LIST    the inverse of --exclude: run only testmodules whose filename contains
-#                         at least one of these comma-separated substrings. Combines with --exclude
+#   -i, --include LIST    the inverse of --exclude: run only testmodules whose filename matches
+#                         at least one of these comma-separated entries. Combines with --exclude
 #                         (a file needs to pass both) rather than replacing it, and shares the same
-#                         phase-3 limitation.
+#                         phase-3 limitation. For both options an entry with * or ? is a wildcard
+#                         pattern for the whole filename (quote it: -i '09-*'), any other entry is a
+#                         substring, and a path is reduced to its filename. A selection that leaves
+#                         no testmodule fails the run instead of skipping everything.
 #       --no-connect      skip the .msh connection test
 #       --msh PATH        .msh to connect with. The agent only ever reads <binary>.msh next to
 #                         itself, so PATH is copied there, overwriting whatever was beside the binary.
@@ -529,6 +532,8 @@ say "runner      : ${QEMU:-native}"
 say "valgrind    : $( [ "$RUN_VALGRIND" = "1" ] && valgrind --version || echo "disabled (${VG_SKIP_REASON:-requested})" )"
 say "asan        : $( [ "$RUN_ASAN" = "1" ] && echo enabled || echo "disabled (requested)" )"
 say "logfile     : $LOGFILE"
+if [ -n "$INCLUDE" ]; then say "include     : $INCLUDE"; fi
+if [ -n "$EXCLUDE" ]; then say "exclude     : $EXCLUDE"; fi
 
 # --- phase 1: -info -------------------------------------------------------------------------
 head2 "[1/6] agent -info"
