@@ -1,0 +1,69 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- Legacy: use MeshConsole-2022.vcxproj unless the machine has no Visual Studio newer than 2019.
+     Same shared sheets, only the v142 toolset differs, and /p:MeshToolset=v142 on the 2022
+     solution does the same thing without a second project file. -->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- First, because the Globals group below reads MeshWindowsSdkVersion from it. -->
+  <Import Project="..\MeshAgent.Sdk.props" />
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{E377F156-BAED-4086-B534-3CC43164607A}</ProjectGuid>
+    <RootNamespace>MeshConsole</RootNamespace>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectName>MeshConsole-2019</ProjectName>
+    <WindowsTargetPlatformVersion>$(MeshWindowsSdkVersion)</WindowsTargetPlatformVersion>
+    <!-- What this project tells ..\MeshAgent.Common.props. Everything else is shared with the other agent. -->
+    <MeshTargetBase>MeshConsole</MeshTargetBase>
+    <MeshToolset>v142</MeshToolset>
+    <MeshAgentIdWin32>1</MeshAgentIdWin32>
+    <MeshAgentIdx64>2</MeshAgentIdx64>
+    <MeshProjectDefines></MeshProjectDefines>
+    <MeshProjectLibs></MeshProjectLibs>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <Import Project="..\MeshAgent.Configuration.props" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <Import Project="..\MeshAgent.Common.props" />
+  <ItemDefinitionGroup>
+    <Manifest>
+      <AdditionalManifestFiles>$(ProjectDir)longpath.manifest %(AdditionalManifestFiles)</AdditionalManifestFiles>
+    </Manifest>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="main.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="resource.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="MeshConsole.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="MeshService.ico" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

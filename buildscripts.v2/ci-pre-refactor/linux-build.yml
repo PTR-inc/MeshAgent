@@ -1,0 +1,72 @@
+name: Linux Builder
+run-name: Build Linux versions of MeshAgent
+# Called by build.yml (manual, one platform or all) or run alone from the Actions tab with
+# workflow_dispatch. What this platform is built from is listed in .github/build-inputs.txt.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+# The ARCHID list comes from `make print-archids` so that a new ARCH_ block is
+# picked up automatically and a removed one drops out. Toolchains come from each
+# block's FETCH and APTPKG fields via `make print-toolchain`.
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      archids: ${{ steps.r.outputs.archids }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - id: r
+        run: |
+          set -euo pipefail
+          ids=$(make -s print-archids CLASS=generic; make -s print-archids CLASS=openwrt; make -s print-archids CLASS=vendor)
+          json=$(printf '%s\n' $ids | awk 'NR>1{printf ","}{printf "\"%s\"", $0}')
+          echo "archids=[$json]" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    env:
+      # ccache 4 defaults differ per OS, so the directory is named here. The runner context is
+      # not allowed in a job env, so it lives under the workspace, which checkout cleans first.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 300M
+    strategy:
+      fail-fast: false
+      matrix:
+        archid: ${{ fromJSON(needs.resolve.outputs.archids) }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install host build prerequisites
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get -qq update >/dev/null
+          # KVM=1 targets need only the X11 headers, because the real calls are
+          # dlopen()'d at runtime. The makefile's KVMINC adds them with -idirafter.
+          # Same for libdrm/EGL/GLESv2/wayland-client, needed by the Wayland/DRM KVM backend -
+          # both the libglvnd (libegl-dev/libgles-dev) and mesa (libegl1-mesa-dev/libgles2-mesa-dev)
+          # package names are listed since which one actually ships egl.pc/glesv2.pc has moved
+          # between Debian/Ubuntu releases (see KVMDESKTOPPKG in the makefile). Installing them here
+          # up front means every matrix job's makefile's ensure_kvm_desktop_libs check passes without
+          # each one doing its own apt-get run.
+          sudo apt-get -qq -y install build-essential \
+            libx11-dev libxtst-dev libxext-dev libxrandr-dev libjpeg62-dev \
+            libdrm-dev libegl-dev libgles-dev libegl1-mesa-dev libgles2-mesa-dev libwayland-dev \
+            linux-libc-dev:i386 libc6-dev-i386 libjpeg62-dev:i386 ccache >/dev/null
+      # YES=1 lets the makefile's ensure_toolchain provision the compiler from the
+      # block's own FETCH component or APTPKG, so no toolchain names live here.
+      - name: Restore the ccache for ARCHID ${{ matrix.archid }}
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-linux-${{ matrix.archid }}-${{ github.sha }}
+          restore-keys: ccache-linux-${{ matrix.archid }}-
+      - name: Build ARCHID ${{ matrix.archid }}
+        run: make -s -j4 linux ARCHID=${{ matrix.archid }} YES=1 CCACHE=1 V=@
+      - name: ccache statistics
+        run: ccache -s | grep -E 'Hits|Misses'
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: meshagent-linux-${{ matrix.archid }}
+          path: ${{ github.workspace }}/build/*/meshagent_*

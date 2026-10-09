@@ -1,0 +1,6 @@
+version=1.1.1w
+toolset=14.44.35207
+sdk=10.0.26100.0
+vcconf=VC-WIN32
+configure=VC-WIN32  no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic no-hw no-dso no-shared  no-rc5 no-idea no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast no-md2 no-mdc2 no-engine no-async no-ocsp no-cms
+makefile-patch=s{/MD\b}{/MT}g; s{/Zi /Fdossl_static\.pdb }{}g; s{ASFLAGS=-g}{ASFLAGS=}g

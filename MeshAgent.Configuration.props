@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Shared by all agent projects. Imported before Microsoft.Cpp.props because the toolset reads
+  these while loading. The rest of the shared settings are in MeshAgent.Common.props.
+-->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Configuration">
+    <MeshDebug Condition="$(Configuration.StartsWith('Debug'))">true</MeshDebug>
+    <MeshDebug Condition="'$(MeshDebug)'==''">false</MeshDebug>
+    <!-- EnableASAN is the C++ toolset's own property. A separate configuration keeps the sanitized
+         objects and binary out of the normal build's directories. -->
+    <EnableASAN Condition="$(Configuration.EndsWith('_ASAN'))">true</EnableASAN>
+    <!-- msbuild /p:MeshWebLog=true compiles in the web logging interface, the makefile's WEBLOG=1.
+         Off by default, as on the other platforms, since it is an extra listener in a release agent. -->
+    <MeshWebLog Condition="'$(MeshWebLog)'==''">false</MeshWebLog>
+    <ConfigurationType>Application</ConfigurationType>
+    <!-- msbuild /p:MeshToolset=v145 picks VS 2026, /p:MeshToolset=v142 the VS 2019 toolset.
+         v143 is the default because it is the newest toolset both hosted runner images carry, so CI
+         builds what ships. ARM64 AddressSanitizer needs v145, which no image has yet. -->
+    <MeshDefaultToolset>v143</MeshDefaultToolset>
+    <MeshToolset Condition="'$(MeshToolset)'==''">$(MeshDefaultToolset)</MeshToolset>
+    <!-- Any other toolset gets its own output directory, or its objects and binary silently
+         overwrite the default toolset's. MeshAgent-2019.sln builds with v142. -->
+    <MeshToolsetSuffix Condition="'$(MeshToolset)'!='$(MeshDefaultToolset)'">-$(MeshToolset)</MeshToolsetSuffix>
+    <PlatformToolset>$(MeshToolset)</PlatformToolset>
+    <!-- The one home of the MSVC toolset version the default toolset builds with. OpenSSL's
+         windows/env.ps1 and toolset-check.ps1 read it from this file, so archives and agent
+         come from the same compiler on every machine, whatever newer toolset is installed. -->
+    <MeshVcToolsVersion>14.44.35207</MeshVcToolsVersion>
+    <!-- VCToolsVersion needs the full folder name. GetDirectories returns them ';'-joined and
+         GetFileName keeps the text after the last separator, so the last match wins. -->
+    <!-- A full three-part pin names the folder outright. A two-part one still works: the glob
+         below picks the newest patch level of it. -->
+    <_MeshVcToolsExact Condition="'$(MeshToolset)'=='$(MeshDefaultToolset)' And '$(VCInstallDir)'!='' And Exists('$(VCInstallDir)Tools\MSVC\$(MeshVcToolsVersion)')">$(MeshVcToolsVersion)</_MeshVcToolsExact>
+    <_MeshVcToolsDirs Condition="'$(_MeshVcToolsExact)'=='' And '$(MeshToolset)'=='$(MeshDefaultToolset)' And '$(VCInstallDir)'!='' And Exists('$(VCInstallDir)Tools\MSVC')">$([System.IO.Directory]::GetDirectories('$(VCInstallDir)Tools\MSVC', '$(MeshVcToolsVersion).*'))</_MeshVcToolsDirs>
+    <VCToolsVersion Condition="'$(_MeshVcToolsExact)'!=''">$(_MeshVcToolsExact)</VCToolsVersion>
+    <VCToolsVersion Condition="'$(_MeshVcToolsExact)'=='' And '$(_MeshVcToolsDirs)'!=''">$([System.IO.Path]::GetFileName('$(_MeshVcToolsDirs)'))</VCToolsVersion>
+    <!-- An x64 host otherwise drives the 32-bit toolchain for Win32, which is slower and used to
+         run out of address space back when link-time code generation was on. -->
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+    <CharacterSet>MultiByte</CharacterSet>
+    <UseDebugLibraries>$(MeshDebug)</UseDebugLibraries>
+    <!-- Link-time code generation is off because MSVC x86 ltcg (v143 and v145) miscompiled the ILibMemory_Init_Size macro into STATUS_HEAP_CORRUPTION at every agent start, and it measured only 0.77 % of MeshService.exe on this source since OpenSSL and zlib are prebuilt without /GL. See ISSUES.md. -->
+    <WholeProgramOptimization>false</WholeProgramOptimization>
+  </PropertyGroup>
+</Project>
