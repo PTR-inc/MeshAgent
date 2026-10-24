@@ -299,7 +299,7 @@ ignoreProxyFile:			If set, will cause the agent to ignore any proxy settings
 logUpdate:					If set, will cause the agent to log self-update status
 logRotate:					If set to N>0, rotates the log file at maxLogSize, keeping N older copies (meshagent.log.1..N)
 logTruncate:				If set, clears and continues the log at maxLogSize instead of stopping. Ignored if logRotate is set
-jsDebugPort:				Specify a JS Debugger Port
+jsDebugPort:				Specify a JS Debugger Port (only taken in a debug build or with -allowDiskModules on the command line)
 maxLogSize:					Maximum size in bytes of the log file (default 524288). When reached, logging stops unless logRotate/logTruncate is set.
 nocertstore:				If set on Windows, will force the Agent to use OpenSSL instead of WinCrypto for cert generation/storage.
 readonly:					If set, forces the agent to open the database in readonly mode

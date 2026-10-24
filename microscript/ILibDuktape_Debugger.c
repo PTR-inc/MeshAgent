@@ -742,8 +742,10 @@ duk_ret_t ILibDuktape_Debugger_JSAttach(duk_context *ctx)
 	duk_new(ctx, 1);													// [promise]
 	return(1);
 }
+// A release build only gets attachDebugger() with -allowDiskModules. A debug build reports mode 3 and always gets it
 void ILibDuktape_Debugger_Init(duk_context *ctx, unsigned short debugPort)
 {
+	if (ILibDuktape_ModSearch_getJSModuleDiskMode() < 2) { return; }
 	duk_push_global_object(ctx);
 	ILibDuktape_CreateInstanceMethod(ctx, "attachDebugger", ILibDuktape_Debugger_JSAttach, DUK_VARARGS);
 	duk_pop(ctx);

@@ -63,13 +63,11 @@ limitations under the License.
 #define ILibDuktape_ChainViewer_PromiseList		"\xFF_ChainViewer_PromiseList"
 #define CP_ISO8859_1							28591
 
-#define ILibDuktape_AltRequireTable				"\xFF_AltRequireTable"
 #define ILibDuktape_AddCompressedModule(ctx, name, b64str) duk_push_global_object(ctx);duk_get_prop_string(ctx, -1, "addCompressedModule");duk_swap_top(ctx, -2);duk_push_string(ctx, name);duk_push_global_object(ctx);duk_get_prop_string(ctx, -1, "Buffer"); duk_remove(ctx, -2);duk_get_prop_string(ctx, -1, "from");duk_swap_top(ctx, -2);duk_push_string(ctx, b64str);duk_push_string(ctx, "base64");duk_pcall_method(ctx, 2);duk_pcall_method(ctx, 2);duk_pop(ctx);
 #define ILibDuktape_AddCompressedModuleEx(ctx, name, b64str, stamp) duk_push_global_object(ctx);duk_get_prop_string(ctx, -1, "addCompressedModule");duk_swap_top(ctx, -2);duk_push_string(ctx, name);duk_push_global_object(ctx);duk_get_prop_string(ctx, -1, "Buffer"); duk_remove(ctx, -2);duk_get_prop_string(ctx, -1, "from");duk_swap_top(ctx, -2);duk_push_string(ctx, b64str);duk_push_string(ctx, "base64");duk_pcall_method(ctx, 2);duk_push_string(ctx,stamp);duk_pcall_method(ctx, 3);duk_pop(ctx);
 
 extern void* _duk_get_first_object(void *ctx);
 extern void* _duk_get_next_object(void *ctx, void *heapptr);
-extern duk_ret_t ModSearchTable_Get(duk_context *ctx, duk_idx_t table, char *key, char *id);
 
 
 typedef enum ILibDuktape_Console_DestinationFlags
@@ -1340,45 +1338,48 @@ duk_ret_t ILibDuktape_Polyfills_getJSModuleDate(duk_context *ctx)
 	duk_push_uint(ctx, ILibDuktape_ModSearch_GetJSModuleDate(ctx, (char*)duk_require_string(ctx, 0)));
 	return(1);
 }
+
+// Describes the copy that require() would load at this moment, as { source, version, date }, the same shape getJSModulesLoaded() gives per entry.
+// The source is "native", "disk", "internal" or "server". The version is 0 for a copy without a version line or a native one, the date is 0 for a copy without one.
+// Null when there is no module with that name. A copy that only the .db holds (the last fallback of require()) is not looked at, getJSModulesLoaded() lists it as "db" once it was loaded.
+duk_ret_t ILibDuktape_Polyfills_getJSModuleInfo(duk_context *ctx)
+{
+	ILibDuktape_ModSearch_PushInfo(ctx, (char*)duk_require_string(ctx, 0));
+	return(1);
+}
+
+duk_ret_t ILibDuktape_Polyfills_getJSModuleDiskMode(duk_context *ctx)
+{
+	duk_push_int(ctx, ILibDuktape_ModSearch_getJSModuleDiskMode());
+	return(1);
+}
+
+// Gives the modules that were loaded so far, as { name: { source, version, date } }. The source is "native", "disk", "internal", "server" or "db"
+duk_ret_t ILibDuktape_Polyfills_getJSModulesLoaded(duk_context *ctx)
+{
+	ILibDuktape_ModSearch_PushLoaded(ctx);
+	return(1);
+}
+
+// JS: addModule(modulename, modulesourcetext, [mtime])
+// The "@module-version" number in the sourcetext decides, and an identical copy is never added again.
+// If the same version(>0) and other text: the copy added after the built-in set wins
+// If both no version(0): the date given as mtime decides
+// If no version, no dates: always replace
+// Returns whether this copy is the one now in use.
 duk_ret_t ILibDuktape_Polyfills_addModule(duk_context *ctx)
 {
 	int narg = duk_get_top(ctx);
 	duk_size_t moduleLen;
-	duk_size_t moduleNameLen;
 	char *module = (char*)Duktape_GetBuffer(ctx, 1, &moduleLen);
-	char *moduleName = (char*)Duktape_GetBuffer(ctx, 0, &moduleNameLen);
+	char *moduleName = (char*)duk_require_string(ctx, 0);
+	if (module == NULL) { return(ILibDuktape_Error(ctx, "addModule(): no source for %s", moduleName)); }
 	char *mtime = narg > 2 ? (char*)duk_require_string(ctx, 2) : NULL;
-	int add = 0;
 
-	ILibDuktape_Polyfills_getJSModuleDate(ctx);								// [existing]
-	uint32_t update = 0;
-	uint32_t existing = duk_get_uint(ctx, -1);
-	duk_pop(ctx);															// ...
-
-	if (mtime != NULL)
-	{
-		// Check the timestamps
-		duk_push_sprintf(ctx, "(new Date('%s')).getTime()/1000", mtime);	// [str]
-		duk_eval(ctx);														// [new]
-		update = duk_get_uint(ctx, -1);
-		duk_pop(ctx);														// ...
-	}
-	if ((update > existing) || (update == existing && update == 0)) { add = 1; }
-
-	if (add != 0)
-	{
-		if (ILibDuktape_ModSearch_IsRequired(ctx, moduleName, (int)moduleNameLen) != 0)
-		{
-			// Module is already cached, so we need to do some magic
-			duk_push_sprintf(ctx, "if(global._legacyrequire==null) {global._legacyrequire = global.require; global.require = global._altrequire;}");
-			duk_eval_noresult(ctx);
-		}
-		if (ILibDuktape_ModSearch_AddModuleEx(ctx, moduleName, module, (int)moduleLen, mtime) != 0)
-		{
-			return(ILibDuktape_Error(ctx, "Cannot add module: %s", moduleName));
-		}
-	}
-	return(0);
+	int inUse = ILibDuktape_ModSearch_AddModuleChecked(ctx, moduleName, module, moduleLen, mtime);
+	if (inUse < 0) { return(ILibDuktape_Error(ctx, "Cannot add module: %s", moduleName)); }
+	duk_push_boolean(ctx, inUse);
+	return(1);
 }
 duk_ret_t ILibDuktape_Polyfills_addCompressedModule_dataSink(duk_context *ctx)
 {
@@ -1406,6 +1407,7 @@ duk_ret_t ILibDuktape_Polyfills_addCompressedModule_dataSink(duk_context *ctx)
 duk_ret_t ILibDuktape_Polyfills_addCompressedModule(duk_context *ctx)
 {
 	int narg = duk_get_top(ctx);
+	int inUse = 0;
 	duk_eval_string(ctx, "require('compressed-stream').createDecompressor();");
 	duk_dup(ctx, 0); duk_put_prop_string(ctx, -2, ILibDuktape_EventEmitter_FinalizerDebugMessage);
 	void *decoder = duk_get_heapptr(ctx, -1);
@@ -1428,14 +1430,15 @@ duk_ret_t ILibDuktape_Polyfills_addCompressedModule(duk_context *ctx)
 		duk_dup(ctx, 0);							// [stream][decodedString][addModule][this][name]
 		duk_dup(ctx, -4);							// [stream][decodedString][addModule][this][name][string]
 		if (narg > 2) { duk_dup(ctx, 2); }
-		duk_pcall_method(ctx, narg);
+		inUse = (duk_pcall_method(ctx, narg) == 0 && duk_to_boolean(ctx, -1)) ? 1 : 0;	// addModule() says whether this copy is the one in use
 	}
 
 	duk_push_heapptr(ctx, decoder);							// [stream]
 	duk_prepare_method_call(ctx, -1, "removeAllListeners");	// [stream][remove][this]
 	duk_pcall_method(ctx, 0);
 
-	return(0);
+	duk_push_boolean(ctx, inUse);
+	return(1);
 }
 duk_ret_t ILibDuktape_Polyfills_addModuleObject(duk_context *ctx)
 {
@@ -2576,6 +2579,8 @@ void ILibDuktape_Polyfills_JS_Init(duk_context *ctx)
 	duk_peval_string_noresult(ctx, "Object.defineProperty(process, 'arch', {get: function() {return( require('os').arch());}});");
 	duk_peval_string_noresult(ctx, "addCompressedModule('code-utils', Buffer.from('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', 'base64'), '2022-12-14T18:05:36.000+00:00');");
 
+	// Signal modules added from here on did not come with the agent binary
+	ILibDuktape_ModSearch_BuiltinModulesDone(ctx);
 }
 
 void ILibDuktape_ChainViewer_PostSelect(void* object, int slct, fd_set *readset, fd_set *writeset, fd_set *errorset)
@@ -3420,63 +3425,6 @@ duk_ret_t ILibDuktape_Polyfills_hide(duk_context *ctx)
 	}
 	return(1);
 }
-duk_ret_t ILibDuktape_Polyfills_altrequire(duk_context *ctx)
-{
-	duk_size_t idLen;
-	char *id = (char*)duk_get_lstring(ctx, 0, &idLen);
-
-	duk_push_heap_stash(ctx);										// [stash]
-	if (!duk_has_prop_string(ctx, -1, ILibDuktape_AltRequireTable))
-	{
-		duk_push_object(ctx); 
-		duk_put_prop_string(ctx, -2, ILibDuktape_AltRequireTable);
-	}
-	duk_get_prop_string(ctx, -1, ILibDuktape_AltRequireTable);		// [stash][table]
-
-	if (ILibDuktape_ModSearch_IsRequired(ctx, id, idLen) == 0)
-	{
-		// Module was not 'require'ed yet
-		duk_push_sprintf(ctx, "global._legacyrequire('%s');", id);	// [stash][table][str]
-		duk_eval(ctx);												// [stash][table][value]
-		duk_dup(ctx, -1);											// [stash][table][value][value]
-		duk_put_prop_string(ctx, -3, id);							// [stash][table][value]
-	}
-	else
-	{
-		// Module was already required, so we need to do some additional checks
-		if (duk_has_prop_string(ctx, -1, id)) // Check to see if there is a new instance we can use
-		{
-			duk_get_prop_string(ctx, -1, id);							// [stash][table][value]
-		}
-		else
-		{
-			// There is not an instance here, so we need to instantiate a new alt instance
-			duk_push_sprintf(ctx, "getJSModule('%s');", id);			// [stash][table][str]
-			if (duk_peval(ctx) != 0)									// [stash][table][js]
-			{
-				// This was a native module, so just return it directly
-				duk_push_sprintf(ctx, "global._legacyrequire('%s');", id);	
-				duk_eval(ctx);												
-				return(1);
-			}
-			duk_eval_string(ctx, "global._legacyrequire('uuid/v4')();");				// [stash][table][js][uuid]
-			duk_push_sprintf(ctx, "%s_%s", id, duk_get_string(ctx, -1));// [stash][table][js][uuid][newkey]
-
-			duk_push_global_object(ctx);				// [stash][table][js][uuid][newkey][g]
-			duk_get_prop_string(ctx, -1, "addModule");	// [stash][table][js][uuid][newkey][g][addmodule]
-			duk_remove(ctx, -2);						// [stash][table][js][uuid][newkey][addmodule]
-			duk_dup(ctx, -2);							// [stash][table][js][uuid][newkey][addmodule][key]
-			duk_dup(ctx, -5);							// [stash][table][js][uuid][newkey][addmodule][key][module]
-			duk_call(ctx, 2);							// [stash][table][js][uuid][newkey][ret]
-			duk_pop(ctx);								// [stash][table][js][uuid][newkey]
-			duk_push_sprintf(ctx, "global._legacyrequire('%s');", duk_get_string(ctx, -1));
-			duk_eval(ctx);								// [stash][table][js][uuid][newkey][newval]
-			duk_dup(ctx, -1);							// [stash][table][js][uuid][newkey][newval][newval]
-			duk_put_prop_string(ctx, -6, id);			// [stash][table][js][uuid][newkey][newval]
-		}
-	}
-	return(1);
-}
 duk_ret_t ILibDuktape_Polyfills_resolve(duk_context *ctx)
 {
 	char tmp[512];
@@ -3502,25 +3450,10 @@ duk_ret_t ILibDuktape_Polyfills_resolve(duk_context *ctx)
 	ILibDuktape_CreateReadonlyProperty_SetEnumerable(ctx, "_integers", 0);			// [ret]
 	return(1);
 }
+// JS: getModules([includeNative]), the names of the JavaScript modules, plus the native bindings when includeNative is true
 duk_ret_t ILibDuktape_Polyfills_getModules(duk_context *ctx)
 {
-	char *id;
-	duk_idx_t top;
-	duk_push_heap_stash(ctx);											// [stash]
-	duk_get_prop_string(ctx, -1, "ModSearchTable");						// [stash][table]
-	duk_enum(ctx, -1, DUK_ENUM_OWN_PROPERTIES_ONLY);					// [stash][table][enum]
-	duk_push_array(ctx);												// [stash][table][enum][array]
-	top = duk_get_top(ctx);
-	while (duk_next(ctx, -2, 0))										// [stash][table][enum][array][key]
-	{
-		id = (char*)duk_to_string(ctx, -1);
-		if (ModSearchTable_Get(ctx, -4, "\xFF_Modules_File", id) > 0)	// [stash][table][enum][array][key][value]
-		{	
-			duk_pop(ctx);												// [stash][table][enum][array][key]
-			duk_array_push(ctx, -2);									// [stash][table][enum][array]
-		}
-		duk_set_top(ctx, top);
-	}
+	ILibDuktape_ModSearch_PushModuleNames(ctx, duk_to_boolean(ctx, 0) ? 1 : 0);
 	return(1);
 }
 void ILibDuktape_Polyfills_Init(duk_context *ctx)
@@ -3561,23 +3494,29 @@ void ILibDuktape_Polyfills_Init(duk_context *ctx)
 	ILibDuktape_CreateInstanceMethod(ctx, "addModuleObject", ILibDuktape_Polyfills_addModuleObject, 2);
 	ILibDuktape_CreateInstanceMethod(ctx, "addModule", ILibDuktape_Polyfills_addModule, DUK_VARARGS);
 	ILibDuktape_CreateInstanceMethod(ctx, "addCompressedModule", ILibDuktape_Polyfills_addCompressedModule, DUK_VARARGS);
-	ILibDuktape_CreateInstanceMethod(ctx, "getModules", ILibDuktape_Polyfills_getModules, 0);
+	ILibDuktape_CreateInstanceMethod(ctx, "getModules", ILibDuktape_Polyfills_getModules, 1);
 	ILibDuktape_CreateInstanceMethod(ctx, "getJSModule", ILibDuktape_Polyfills_getJSModule, 1);
 	ILibDuktape_CreateInstanceMethod(ctx, "getJSModuleDate", ILibDuktape_Polyfills_getJSModuleDate, 1);
-	ILibDuktape_CreateInstanceMethod(ctx, "_debugHang", ILibDuktape_Polyfills_debugHang, DUK_VARARGS);
-	ILibDuktape_CreateInstanceMethod(ctx, "_debugCrash", ILibDuktape_Polyfills_debugCrash, 0);
+	ILibDuktape_CreateInstanceMethod(ctx, "getJSModuleInfo", ILibDuktape_Polyfills_getJSModuleInfo, 1);
+	ILibDuktape_CreateInstanceMethod(ctx, "getJSModuleDiskMode", ILibDuktape_Polyfills_getJSModuleDiskMode, 0);
+	ILibDuktape_CreateInstanceMethod(ctx, "getJSModulesLoaded", ILibDuktape_Polyfills_getJSModulesLoaded, 0);
+	if (ILibDuktape_ModSearch_getJSModuleDiskMode() >= 2)
+	{
+		// Test helpers, only in a debug build or with -allowDiskModules, like attachDebugger()
+		ILibDuktape_CreateInstanceMethod(ctx, "_debugHang", ILibDuktape_Polyfills_debugHang, DUK_VARARGS);
+		ILibDuktape_CreateInstanceMethod(ctx, "_debugCrash", ILibDuktape_Polyfills_debugCrash, 0);
+		ILibDuktape_CreateInstanceMethod(ctx, "_debug", ILibDuktape_Polyfills_debug, 0);
+		ILibDuktape_CreateInstanceMethod(ctx, "_rootObject", ILibDuktape_Polyfills_rootObject, 0);
+		ILibDuktape_CreateInstanceMethod(ctx, "_nextObject", ILibDuktape_Polyfills_nextObject, 1);
+		ILibDuktape_CreateInstanceMethod(ctx, "_countObjects", ILibDuktape_Polyfills_countObject, 0);
+	}
 	ILibDuktape_CreateInstanceMethod(ctx, "_debugGC", ILibDuktape_Polyfills_debugGC, 0);
-	ILibDuktape_CreateInstanceMethod(ctx, "_debug", ILibDuktape_Polyfills_debug, 0);
 	ILibDuktape_CreateInstanceMethod(ctx, "getSHA384FileHash", ILibDuktape_Polyfills_filehash, 1);
 	ILibDuktape_CreateInstanceMethod(ctx, "_ipv4From", ILibDuktape_Polyfills_ipv4From, 1);
 	ILibDuktape_CreateInstanceMethod(ctx, "_isBuffer", ILibDuktape_Polyfills_isBuffer, 1);
 	ILibDuktape_CreateInstanceMethod(ctx, "_MSH", ILibDuktape_Polyfills_MSH, 0);
 	ILibDuktape_CreateInstanceMethod(ctx, "WeakReference", ILibDuktape_Polyfills_WeakReference, 1);
-	ILibDuktape_CreateInstanceMethod(ctx, "_rootObject", ILibDuktape_Polyfills_rootObject, 0);
-	ILibDuktape_CreateInstanceMethod(ctx, "_nextObject", ILibDuktape_Polyfills_nextObject, 1);
-	ILibDuktape_CreateInstanceMethod(ctx, "_countObjects", ILibDuktape_Polyfills_countObject, 0);
 	ILibDuktape_CreateInstanceMethod(ctx, "_hide", ILibDuktape_Polyfills_hide, DUK_VARARGS);
-	ILibDuktape_CreateInstanceMethod(ctx, "_altrequire", ILibDuktape_Polyfills_altrequire, DUK_VARARGS);
 	ILibDuktape_CreateInstanceMethod(ctx, "resolve", ILibDuktape_Polyfills_resolve, 1);
 
 #if defined(ILIBMEMTRACK) && !defined(ILIBCHAIN_GLOBAL_LOCK)

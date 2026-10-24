@@ -121,6 +121,7 @@ int ILibDuktape_HECI_Debug = 0;
 #endif
 
 extern int ILibDuktape_ModSearch_ShowNames;
+extern int ILibDuktape_ModSearch_ModuleDiskMode;
 char* MeshAgentHost_BatteryInfo_STRINGS[] = { "UNKNOWN", "HIGH_CHARGE", "LOW_CHARGE", "NO_BATTERY", "CRITICAL_CHARGE", "", "", "", "CHARGING" };
 JS_ENGINE_CONTEXT MeshAgent_JavaCore_ContextGuid = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
 extern int ILibInflate(char *buffer, size_t bufferLen, char *decompressed, size_t *decompressedLen, uint32_t crc);
@@ -2600,6 +2601,59 @@ char* ScriptEngine_Restart(MeshAgentHostContainer *agent, char *contextGUID, cha
 	}
 }
 
+// Puts the attachDebugger() call in front of a core, so the core runs under the JavaScript debugger on jsDebugPort. The caller frees the result.
+// wait = 1 holds the core until a debugger connects, wait = 0 attaches without blocking
+char* MeshAgent_CoreWithDebugger(MeshAgentHostContainer *agent, char *core, int coreLen, int wait, int *outLen)
+{
+	char line[255];
+	int lineLen = sprintf_s(line, sizeof(line), "attachDebugger({ webport: %d, wait: %d }).then(function (prt) { console.log('Point Browser for Debug to port: ' + prt); });\n", agent->jsDebugPort, wait);
+	char *ret = (char*)ILibMemory_Allocate(lineLen + coreLen, 0, NULL, NULL);
+	memcpy_s(ret, lineLen + coreLen, line, lineLen);
+	memcpy_s(ret + lineLen, coreLen, core, coreLen);
+	*outLen = lineLen + coreLen;
+	return(ret);
+}
+
+// Starts the core cached in the .db in a fresh heap, the way a pushed core starts: at CoreOk, after the 60 s timer without a server, and at the noUpdateCoreModule and local debug mode starts.
+// The core runs first in that heap, so every module it brings along is the copy that gets loaded and nothing loaded earlier stays in use.
+// Not for use inside a Duktape call, because ScriptEngine_Restart() destroys the current heap. A timer callback posts MeshAgent_LaunchCachedCore_Sink() instead.
+void MeshAgent_LaunchCachedCore(MeshAgentHostContainer *agent)
+{
+	int CoreModuleLen = ILibSimpleDataStore_Get(agent->masterDb, "CoreModule", NULL, 0);
+	char *CoreModule, *js, *coreException;
+	int jsLen;
+
+	if (CoreModuleLen <= 4) { printf(" meshcore not found...\n"); return; }
+	printf(" Launching meshcore...\n");
+	CoreModule = (char*)ILibMemory_Allocate(CoreModuleLen, 0, NULL, NULL);
+	ILibSimpleDataStore_Get(agent->masterDb, "CoreModule", CoreModule, CoreModuleLen);
+	js = CoreModule + 4;
+	jsLen = CoreModuleLen - 4;
+
+	if (agent->jsDebugPort != 0)
+	{
+		js = MeshAgent_CoreWithDebugger(agent, CoreModule + 4, CoreModuleLen - 4, 1, &jsLen);
+		printf(" jsDebugPort %d: the core waits for the JavaScript debugger before it runs...\n", agent->jsDebugPort);
+		ILIBLOGMESSAGEX("jsDebugPort %d: the core waits for the JavaScript debugger before it runs", agent->jsDebugPort);
+	}
+
+	if ((coreException = ScriptEngine_Restart(agent, MeshAgent_JavaCore_ContextGuid, js, jsLen)) != NULL)
+	{
+		ILibRemoteLogging_printf(ILibChainGetLogger(agent->chain), ILibRemoteLogging_Modules_Microstack_Generic | ILibRemoteLogging_Modules_ConsolePrint,
+			ILibRemoteLogging_Flags_VerbosityLevel_1, "MeshCore: Error: %s", coreException);
+	}
+	if (js != CoreModule + 4) { free(js); }
+	free(CoreModule);
+}
+
+// The 60 s offline timer fires inside a Duktape call on the heap the launch destroys, so it posts this to the chain and the launch runs after the callback returned.
+// Duktape_RunOnEventLoop() calls it only while that heap is still the live one. A core push in between rebuilt the heap, and then nothing runs.
+void MeshAgent_LaunchCachedCore_Sink(void *chain, void *user)
+{
+	MeshAgent_LaunchCachedCore((MeshAgentHostContainer*)user);
+	UNREFERENCED_PARAMETER(chain);
+}
+
 void MeshAgent_Slave_HeapWasDestroyed(duk_context *ctx, void *user)
 {
 	MeshAgentHostContainer *agent = (MeshAgentHostContainer*)user;
@@ -3436,41 +3490,7 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 				duk_push_heapptr(agent->meshCoreCtx, agent->coreTimeout);	// [clearTimeout][this][timeout]
 				duk_pcall_method(agent->meshCoreCtx, 1); duk_pop(agent->meshCoreCtx);
 				agent->coreTimeout = NULL;
-
-				int CoreModuleLen = ILibSimpleDataStore_Get(agent->masterDb, "CoreModule", NULL, 0);
-				if (CoreModuleLen <= 4)
-				{
-					printf(" meshcore not found...\n");
-				}
-				else
-				{
-					printf(" Launching meshcore...\n");
-					char *CoreModule;
-
-					if (agent->jsDebugPort != 0)
-					{
-						char tmp[255];
-						int tmpLen = sprintf_s(tmp, sizeof(tmp), "attachDebugger({ webport: %d, wait: 1 }).then(function (prt) { console.log('Point Browser for Debug to port: ' + prt); });\n", agent->jsDebugPort);
-						CoreModule = (char*)ILibMemory_Allocate(CoreModuleLen + tmpLen, 0, NULL, NULL);
-						ILibSimpleDataStore_Get(agent->masterDb, "CoreModule", CoreModule + tmpLen - 4, CoreModuleLen + tmpLen);
-						memcpy_s(CoreModule + 4, CoreModuleLen - 4, tmp, tmpLen);
-						CoreModuleLen += (tmpLen-4);
-					}
-					else
-					{
-						CoreModule = (char*)ILibMemory_Allocate(CoreModuleLen, 0, NULL, NULL);
-						ILibSimpleDataStore_Get(agent->masterDb, "CoreModule", CoreModule, CoreModuleLen);
-					}
-
-					if (ILibDuktape_ScriptContainer_CompileJavaScriptEx(agent->meshCoreCtx, CoreModule + 4, CoreModuleLen - 4, "CoreModule.js", 13) != 0 ||
-						ILibDuktape_ScriptContainer_ExecuteByteCode(agent->meshCoreCtx) != 0)
-					{
-						ILibRemoteLogging_printf(ILibChainGetLogger(agent->chain), ILibRemoteLogging_Modules_Microstack_Generic | ILibRemoteLogging_Modules_ConsolePrint,
-							ILibRemoteLogging_Flags_VerbosityLevel_1, "Error Executing MeshCore: %s", duk_safe_to_string(agent->meshCoreCtx, -1));
-						duk_pop(agent->meshCoreCtx);
-					}
-					free(CoreModule);
-				}
+				MeshAgent_LaunchCachedCore(agent);
 			}
 			else
 			{
@@ -4851,8 +4871,6 @@ void MeshAgent_AgentMost_dbRetryCallback(void *object)
 void MeshAgent_AgentMode_Core_ServerTimeout(duk_context *ctx, void ** args, int argsLen)
 {
 	MeshAgentHostContainer *agentHost = (MeshAgentHostContainer*)args[0];
-	int CoreModuleLen = ILibSimpleDataStore_Get(agentHost->masterDb, "CoreModule", NULL, 0);
-	char *CoreModule;
 
 	duk_push_this(ctx);			// [timeout]
 	duk_push_heap_stash(ctx);	// [timeout][stash]
@@ -4860,24 +4878,7 @@ void MeshAgent_AgentMode_Core_ServerTimeout(duk_context *ctx, void ** args, int 
 	agentHost->coreTimeout = NULL;
 
 	printf("Timeout waiting for Server, launching cached meshcore...\n");
-	if (CoreModuleLen <= 4)
-	{
-		printf("   No meshcore found in db...\n");
-	}
-	else
-	{
-		CoreModule = (char*)ILibMemory_Allocate(CoreModuleLen, 0, NULL, NULL);
-		ILibSimpleDataStore_Get(agentHost->masterDb, "CoreModule", CoreModule, CoreModuleLen);
-
-		if (ILibDuktape_ScriptContainer_CompileJavaScriptEx(agentHost->meshCoreCtx, CoreModule + 4, CoreModuleLen - 4, "CoreModule.js", 13) != 0 ||
-			ILibDuktape_ScriptContainer_ExecuteByteCode(agentHost->meshCoreCtx) != 0)
-		{
-			ILibRemoteLogging_printf(ILibChainGetLogger(agentHost->chain), ILibRemoteLogging_Modules_Microstack_Generic | ILibRemoteLogging_Modules_ConsolePrint,
-				ILibRemoteLogging_Flags_VerbosityLevel_1, "Error Executing MeshCore: %s", duk_safe_to_string(agentHost->meshCoreCtx, -1));
-			duk_pop(agentHost->meshCoreCtx);
-		}
-		free(CoreModule);
-	}
+	Duktape_RunOnEventLoopEx(agentHost->chain, duk_ctx_nonce(ctx), ctx, MeshAgent_LaunchCachedCore_Sink, agentHost, 0);
 }
 
 void MeshAgent_AgentInstallerCTX_Finalizer(duk_context *ctx, void *user)
@@ -4919,6 +4920,7 @@ void MeshAgent_Agent_SemaphoreTrack_Sink(char *source, void *user, int init)
 int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **param, int parseCommands)
 {
 	int resetNodeId = 0;
+	int fullParamLen = paramLen;	// paramLen drops the --key=value arguments below while they stay in param[], the exit message prints them all
 #ifdef WIN32
 	int pLen;
 	SetEnvironmentVariableA((LPCSTR)"=c:", (LPCTSTR)"__DUMMY__"); // This is requried to work around a Win32 bug in construct_environment_block()
@@ -5597,17 +5599,21 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 		}
 
 		// Check if there is a CoreModule in the db
-		char *CoreModule;
 		int CoreModuleLen = agentHost->localScript == 0 ? ILibSimpleDataStore_Get(agentHost->masterDb, "CoreModule", NULL, 0) : 0;
-		if (ILibSimpleDataStore_Get(agentHost->masterDb, "jsDebugPort", NULL, 0) != 0)
+		int coreLaunched = 0;	// noUpdateCoreModule starts the core below, the local debug mode start further down must not do it again
+		// The debugger evaluates any code as the agent user, so a release build only honours the setting with -allowDiskModules, which is a command line switch and not a .db value.
+		// A debug build reports mode 3 and always takes it.
+		char debugPort[16];
+		int debugPortLen = ILibSimpleDataStore_Get(agentHost->masterDb, "jsDebugPort", debugPort, (int)sizeof(debugPort));
+		if (debugPortLen > 0 && ILibDuktape_ModSearch_getJSModuleDiskMode() < 2)
 		{
-			char tmp[16];
-			int tmpLen = ILibSimpleDataStore_Get(agentHost->masterDb, "jsDebugPort", tmp, 16);
-			if (tmpLen > 0 && tmpLen < 16)
-			{
-				tmp[tmpLen] = 0;
-				agentHost->jsDebugPort = ILib_atoi2_int32(tmp, sizeof(tmp));
-			}
+			printf("jsDebugPort ignored: only available in a debug build or with -allowDiskModules\r\n");
+			ILIBLOGMESSAGEX("jsDebugPort ignored: only available in a debug build or with -allowDiskModules");
+		}
+		else if (debugPortLen > 0 && debugPortLen < (int)sizeof(debugPort))
+		{
+			debugPort[debugPortLen] = 0;
+			agentHost->jsDebugPort = ILib_atoi2_int32(debugPort, sizeof(debugPort));
 		}
 		agentHost->agentMode = 1;
 		ILibDuktape_ModSearch_ShowNames = ILibSimpleDataStore_Get(agentHost->masterDb, "showModuleNames", NULL, 0);
@@ -5644,18 +5650,8 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 					agentHost->localScript = 1; printf("** CoreModule: Update Disabled**\n"); 
 
 					// If updates are disabled, then we should launch the core now
-					CoreModule = (char*)ILibMemory_Allocate(CoreModuleLen, 0, NULL, NULL);
-					ILibSimpleDataStore_Get(agentHost->masterDb, "CoreModule", CoreModule, CoreModuleLen);
-
-					if (ILibDuktape_ScriptContainer_CompileJavaScriptEx(agentHost->meshCoreCtx, CoreModule + 4, CoreModuleLen - 4, "CoreModule.js", 13) != 0 ||
-						ILibDuktape_ScriptContainer_ExecuteByteCode(agentHost->meshCoreCtx) != 0)
-					{
-						ILibRemoteLogging_printf(ILibChainGetLogger(agentHost->chain), ILibRemoteLogging_Modules_Microstack_Generic | ILibRemoteLogging_Modules_ConsolePrint,
-							ILibRemoteLogging_Flags_VerbosityLevel_1, "Error Executing MeshCore: %s", duk_safe_to_string(agentHost->meshCoreCtx, -1));
-						duk_pop(agentHost->meshCoreCtx);
-					}
-
-					free(CoreModule);
+					MeshAgent_LaunchCachedCore(agentHost);
+					coreLaunched = 1;
 				}
 				else
 				{
@@ -5692,22 +5688,8 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 		if (agentHost->localdebugmode == 0) { MeshServer_Connect(agentHost); }
 		else
 		{
-			CoreModuleLen = ILibSimpleDataStore_Get(agentHost->masterDb, "CoreModule", NULL, 0);
-			if (CoreModuleLen > 4)
-			{
-				// There is a core module, launch it now.
-				CoreModule = (char*)ILibMemory_Allocate(CoreModuleLen, 0, NULL, NULL);
-				ILibSimpleDataStore_Get(agentHost->masterDb, "CoreModule", CoreModule, CoreModuleLen);
-
-				if (ILibDuktape_ScriptContainer_CompileJavaScriptEx(agentHost->meshCoreCtx, CoreModule + 4, CoreModuleLen - 4, "CoreModule.js", 13) != 0 ||
-					ILibDuktape_ScriptContainer_ExecuteByteCode(agentHost->meshCoreCtx) != 0)
-				{
-					ILibRemoteLogging_printf(ILibChainGetLogger(agentHost->chain), ILibRemoteLogging_Modules_Microstack_Generic | ILibRemoteLogging_Modules_ConsolePrint,
-						ILibRemoteLogging_Flags_VerbosityLevel_1, "Error Executing MeshCore: %s", duk_safe_to_string(agentHost->meshCoreCtx, -1));
-				}
-				duk_pop(agentHost->meshCoreCtx);
-				free(CoreModule);
-			}
+			// There is a core module, launch it now, unless noUpdateCoreModule started it above
+			if (coreLaunched == 0) { MeshAgent_LaunchCachedCore(agentHost); }
 
 			duk_peval_string_noresult(agentHost->meshCoreCtx, "console.log('Agent running in Local Debug Mode');require('MeshAgent').emit('Connected',1);");
 		}
@@ -5759,6 +5741,11 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 
 		return 1;
 	}
+	// Reached with a command line the agent does not know
+	printf("Unrecognized command line, exiting:");
+	for (ri = 1; ri < fullParamLen; ++ri) { printf(" %s", param[ri]); }
+	printf("\n");
+	ILIBLOGMESSAGEX("Unrecognized command line, exiting: %s%s", fullParamLen > 1 ? param[1] : "", fullParamLen > 2 ? " ..." : "");
 	return 0;
 }
 
@@ -6019,6 +6006,9 @@ void MeshAgent_ScriptMode(MeshAgentHostContainer *agentHost, int argc, char **ar
 
 	if (agentHost->meshCoreCtx_embeddedScript == NULL)
 	{
+		// A script file was given on the command line, so it may load its own helper modules from the working directory. It still cannot replace a built-in one
+		if (ILibDuktape_ModSearch_ModuleDiskMode == 0) { ILibDuktape_ModSearch_ModuleDiskMode = 1; }
+
 		// Get the full path name of the JavaScript file
 #ifdef WIN32
 		WCHAR wjsPath[4096];
@@ -6376,6 +6366,23 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 
 
 	ILibCriticalLogFilename = ILibString_Copy(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".log"), 0);
+
+	// -allowDiskModules: lets disk files be loaded and replace built-in modules on a release build, is logged on the agent and the server
+	// Only through commandline, no msh or db option, to prevent misuse as those 2 can be modified
+	for (_pX = 1; _pX < paramLen; ++_pX)
+	{
+		if (strcasecmp(param[_pX], "-allowDiskModules") == 0)
+		{
+			if (ILibDuktape_ModSearch_ModuleDiskMode != 2)
+			{
+				ILibDuktape_ModSearch_ModuleDiskMode = 2;
+				ILIBLOGMESSAGEX("-allowDiskModules: loading module files in the working directory allowed");
+			}
+			// Taken out of the argument list here, so the command parsing later never sees it and the other switches keep working
+			memmove(&param[_pX], &param[_pX + 1], (paramLen - _pX - 1) * sizeof(char*));
+			--paramLen; --_pX;
+		}
+	}
 #ifndef MICROSTACK_NOTLS
 	util_openssl_init();
 #endif

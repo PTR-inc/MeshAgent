@@ -927,6 +927,7 @@ int wmain(int argc, char* wargv[])
 					printf("  -resetnodeid      Reset the NodeID next time the service is started.\r\n");
 					printf("  -fulluninstall    Stop agent and clean up the program files location.\r\n");
 					printf("  -fullinstall      Copy agent into program files, install and launch.\r\n");
+					printf("  -allowDiskModules Allow loading local module files, after run, connect or a script name.\r\n");
 					printf("\r\n");
 					printf("                    The following switches can be specified after -fullinstall:\r\n");
 					printf("\r\n");

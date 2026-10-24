@@ -1418,6 +1418,7 @@ void ILibDuktape_ScriptContainer_Process_Init(duk_context *ctx, char **argList)
 	ILibDuktape_CreateProperty_InstanceMethod(ctx, "exit", ILibDuktape_ScriptContainer_Process_Exit, DUK_VARARGS);
 	ILibDuktape_CreateProperty_InstanceMethod(ctx, "_exit", ILibDuktape_ScriptContainer_Process_ExitEx, DUK_VARARGS);
 	ILibDuktape_EventEmitter_CreateEventEx(emitter, "uncaughtException");
+	ILibDuktape_EventEmitter_CreateEventEx(emitter, "diskModule");		// A module was loaded from disk
 
 	for (i = 0; i < (int)ILib_SigMapLen; ++i)
 	{

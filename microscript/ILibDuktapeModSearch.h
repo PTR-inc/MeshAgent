@@ -29,7 +29,12 @@ int ILibDuktape_ModSearch_AddModuleEx(duk_context *ctx, char *id, char *module, 
 void ILibDuktape_ModSearch_AddModuleObject(duk_context *ctx, char *id, void *heapptr);
 duk_ret_t ILibDuktape_ModSearch_GetJSModule(duk_context *ctx, char *id);
 uint32_t ILibDuktape_ModSearch_GetJSModuleDate(duk_context *ctx, char *id);
-int ILibDuktape_ModSearch_IsRequired(duk_context *ctx, char *id, size_t idLen);
+int ILibDuktape_ModSearch_AddModuleChecked(duk_context *ctx, char *id, char *module, size_t moduleLen, char *mtime);
+int ILibDuktape_ModSearch_getJSModuleDiskMode();
+void ILibDuktape_ModSearch_BuiltinModulesDone(duk_context *ctx);
+void ILibDuktape_ModSearch_PushLoaded(duk_context *ctx);
+void ILibDuktape_ModSearch_PushModuleNames(duk_context *ctx, int includeNative);
+void ILibDuktape_ModSearch_PushInfo(duk_context *ctx, char *id);
 void ILibDuktape_ModSearch_Init(duk_context *ctx, void *chain, ILibSimpleDataStore mDB);
 
 #endif
