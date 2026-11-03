@@ -6979,11 +6979,22 @@ size_t ILibGetRawPacket(struct packetheader* packet, char **RetVal)
 	return(i);
 }
 
+int ILibSocket_AllowIPv4(SOCKET sock)
+{
+#ifdef _OPENBSD
+	// OpenBSD has no IPv4-mapped addresses and refuses IPV6_V6ONLY=0 with EINVAL, so its AF_INET6 sockets stay IPv6 only
+	UNREFERENCED_PARAMETER(sock);
+	return(0);
+#else
+	int off = 0;
+	return(setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&off, sizeof(off)));
+#endif
+}
+
 // TCP: SOCK_STREAM, IPPROTO_TCP
 // UDP: SOCK_DGRAM, IPPROTO_UDP
 SOCKET ILibGetSocket(struct sockaddr *localif, int type, int protocol)
 {
-	int off = 0;
 	SOCKET sock;
 	if (localif->sa_family == AF_INET6 && g_ILibDetectIPv6Support == 0) { ILIBMARKPOSITION(1); return -1; }
 	if ((sock = socket(localif->sa_family, type, protocol)) == -1) { ILIBMARKPOSITION(2); return -1; }
@@ -6995,9 +7006,9 @@ SOCKET ILibGetSocket(struct sockaddr *localif, int type, int protocol)
 	}
 #endif
 #ifdef NACL
-	if (localif->sa_family == AF_INET6) if (setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&off, sizeof(off)) != 0) return -1;
+	if (localif->sa_family == AF_INET6 && ILibSocket_AllowIPv4(sock) != 0) return -1;
 #else
-	if (localif->sa_family == AF_INET6) if (setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&off, sizeof(off)) != 0) ILIBCRITICALERREXIT(253);
+	if (localif->sa_family == AF_INET6 && ILibSocket_AllowIPv4(sock) != 0) ILIBCRITICALERREXIT(253);
 #endif
 #ifdef SO_NOSIGPIPE
 	{

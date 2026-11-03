@@ -471,7 +471,6 @@ void ILibAsyncServerSocket_ResumeListeningSink(void *chain, void* user)
 	ILibAsyncServerSocketModule *m = (ILibAsyncServerSocketModule*)user;
 
 	int ra = 1;
-	int off = 0;
 	int receivingAddressLength = sizeof(struct sockaddr_in6);
 	struct sockaddr_in6 localif;
 	struct sockaddr_in6 localAddress;
@@ -479,7 +478,13 @@ void ILibAsyncServerSocket_ResumeListeningSink(void *chain, void* user)
 	UNREFERENCED_PARAMETER(chain);
 
 	memset(&localif, 0, sizeof(struct sockaddr_in6));
-	if (m->loopbackFlag != 2 && ILibDetectIPv6Support())
+#ifdef _OPENBSD
+	// An OpenBSD AF_INET6 listener never sees IPv4, so bind the IPv4 wildcard like a host without IPv6
+	int useIPv6Any = 0;
+#else
+	int useIPv6Any = (m->loopbackFlag != 2 && ILibDetectIPv6Support());
+#endif
+	if (useIPv6Any)
 	{
 		// Setup the IPv6 any or loopback address, this socket will also work for IPv4 traffic on IPv6 stack
 		localif.sin6_family = AF_INET6;
@@ -502,7 +507,7 @@ void ILibAsyncServerSocket_ResumeListeningSink(void *chain, void* user)
 	if ((m->ListenSocket = socket(localif.sin6_family, SOCK_STREAM, IPPROTO_TCP)) == -1) { m->ListenSocket = (SOCKET)~0;  return; }
 
 	// Setup the IPv6 & IPv4 support on same socket
-	if (localif.sin6_family == AF_INET6) if (setsockopt(m->ListenSocket, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&off, sizeof(off)) != 0) ILIBCRITICALERREXIT(253);
+	if (localif.sin6_family == AF_INET6 && ILibSocket_AllowIPv4(m->ListenSocket) != 0) ILIBCRITICALERREXIT(253);
 
 #ifdef SO_NOSIGPIPE
 	setsockopt(m->ListenSocket, SOL_SOCKET, SO_NOSIGPIPE, (void*)&ra, sizeof(int));  // Turn off SIGPIPE if writing to disconnected socket
@@ -628,7 +633,6 @@ ILibAsyncServerSocket_ServerModule ILibCreateAsyncServerSocketModuleWithMemoryEx
 {
 	int i;
 	int ra = 1;
-	int off = 0;
 	int receivingAddressLength = sizeof(struct sockaddr_in6);
 	struct ILibAsyncServerSocketModule *RetVal;
 	struct sockaddr_in6 localAddress;
@@ -665,7 +669,7 @@ ILibAsyncServerSocket_ServerModule ILibCreateAsyncServerSocketModuleWithMemoryEx
 		if ((RetVal->ListenSocket = socket(((struct sockaddr_in6*)local)->sin6_family, SOCK_STREAM, IPPROTO_TCP)) == -1) { free(RetVal->AsyncSockets); free(RetVal); return 0; }
 
 		// Setup the IPv6 & IPv4 support on same socket
-		if (((struct sockaddr_in6*)local)->sin6_family == AF_INET6) if (setsockopt(RetVal->ListenSocket, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&off, sizeof(off)) != 0) ILIBCRITICALERREXIT(253);
+		if (((struct sockaddr_in6*)local)->sin6_family == AF_INET6 && ILibSocket_AllowIPv4(RetVal->ListenSocket) != 0) ILIBCRITICALERREXIT(253);
 	}
 
 	

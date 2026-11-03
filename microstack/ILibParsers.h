@@ -1589,6 +1589,8 @@ int ILibIsRunningOnChainThread(void* chain);
 #endif
 
 	SOCKET ILibGetSocket(struct sockaddr *localif, int type, int protocol);
+	// Lets an AF_INET6 socket carry IPv4 as well where the platform allows it, OpenBSD does not. Returns what setsockopt() returned, 0 on success
+	int ILibSocket_AllowIPv4(SOCKET sock);
 
 	//
 	// IPv6 helper methods

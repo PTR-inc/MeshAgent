@@ -106,7 +106,6 @@ void ILibAsyncUDPSocket_OnDisconnect(ILibAsyncSocket_SocketModule socketModule, 
 */
 ILibAsyncUDPSocket_SocketModule ILibAsyncUDPSocket_CreateEx(void *Chain, int BufferSize, struct sockaddr *localInterface, enum ILibAsyncUDPSocket_Reuse reuse, ILibAsyncUDPSocket_OnData OnData, ILibAsyncUDPSocket_OnSendOK OnSendOK, void *user)
 {
-	int off = 0;
 	SOCKET sock;
 	int ra = (int)reuse;
 	void *RetVal = NULL;
@@ -128,7 +127,7 @@ ILibAsyncUDPSocket_SocketModule ILibAsyncUDPSocket_CreateEx(void *Chain, int Buf
 #ifdef __APPLE__
 	if (reuse == ILibAsyncUDPSocket_Reuse_SHARED) if (setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, (char*)&ra, sizeof(ra)) != 0) ILIBCRITICALERREXIT(253);
 #endif
-	if (localInterface->sa_family == AF_INET6) if (setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&off, sizeof(off)) != 0) ILIBCRITICALERREXIT(253);
+	if (localInterface->sa_family == AF_INET6 && ILibSocket_AllowIPv4(sock) != 0) ILIBCRITICALERREXIT(253);
 
 	// Attempt to bind the UDP socket
 	#ifdef WIN32
