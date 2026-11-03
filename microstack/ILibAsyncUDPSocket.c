@@ -293,7 +293,14 @@ void ILibAsyncUDPSocket_SetMulticastTTL(ILibAsyncUDPSocket_SocketModule module, 
 	int s = *((int*)ILibAsyncSocket_GetSocket(module));
 #endif
 	ILibAsyncSocket_GetLocalInterface(module, (struct sockaddr*)&localAddress);
-	if (setsockopt(s, localAddress.sin6_family == PF_INET6 ? IPPROTO_IPV6 : IPPROTO_IP, localAddress.sin6_family == PF_INET6 ? IPV6_MULTICAST_HOPS : IP_MULTICAST_TTL, (char*)&TTL, sizeof(TTL)) != 0) ILIBCRITICALERREXIT(253);
+	if (localAddress.sin6_family == PF_INET6)
+	{
+		if (setsockopt(s, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, (char*)&TTL, sizeof(TTL)) != 0) ILIBCRITICALERREXIT(253);
+	}
+	else
+	{
+		if (ILibSocket_SetIPv4MulticastOption(s, IP_MULTICAST_TTL, TTL) != 0) ILIBCRITICALERREXIT(253);
+	}
 #endif
 }
 
@@ -307,5 +314,12 @@ void ILibAsyncUDPSocket_SetMulticastLoopback(ILibAsyncUDPSocket_SocketModule mod
 #endif
 
 	ILibAsyncSocket_GetLocalInterface(module, (struct sockaddr*)&localAddress);
-	if (setsockopt(s, localAddress.sin6_family == PF_INET6 ? IPPROTO_IPV6 : IPPROTO_IP, localAddress.sin6_family == PF_INET6 ? IPV6_MULTICAST_LOOP : IP_MULTICAST_LOOP, (char*)&loopback, sizeof(loopback)) != 0) ILIBCRITICALERREXIT(253);
+	if (localAddress.sin6_family == PF_INET6)
+	{
+		if (setsockopt(s, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, (char*)&loopback, sizeof(loopback)) != 0) ILIBCRITICALERREXIT(253);
+	}
+	else
+	{
+		if (ILibSocket_SetIPv4MulticastOption(s, IP_MULTICAST_LOOP, loopback) != 0) ILIBCRITICALERREXIT(253);
+	}
 }

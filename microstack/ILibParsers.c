@@ -6991,6 +6991,17 @@ int ILibSocket_AllowIPv4(SOCKET sock)
 #endif
 }
 
+int ILibSocket_SetIPv4MulticastOption(SOCKET sock, int option, int value)
+{
+#ifdef WIN32
+	return(setsockopt(sock, IPPROTO_IP, option, (const char*)&value, sizeof(value)));
+#else
+	// The BSDs take one byte for IP_MULTICAST_TTL and IP_MULTICAST_LOOP, OpenBSD refuses any other length with EINVAL, Linux takes either
+	unsigned char v = (unsigned char)value;
+	return(setsockopt(sock, IPPROTO_IP, option, (const char*)&v, sizeof(v)));
+#endif
+}
+
 // TCP: SOCK_STREAM, IPPROTO_TCP
 // UDP: SOCK_DGRAM, IPPROTO_UDP
 SOCKET ILibGetSocket(struct sockaddr *localif, int type, int protocol)

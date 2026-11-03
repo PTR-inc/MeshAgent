@@ -167,9 +167,8 @@ int ILibMulticastSocket_ResetMulticast(struct ILibMulticastSocket_StateModule *m
 					ILibAsyncUDPSocket_SetLocalInterface(module->UDPServers[i], (struct sockaddr*)&(module->AddressListV4[i]));
 					socket = ILibAsyncUDPSocket_GetSocket(module->UDPServers[i]);
 #if !defined(NACL)
-					if (setsockopt(socket, IPPROTO_IP, IP_MULTICAST_TTL, (const char*)&(module->TTL), sizeof(int)) != 0) ILIBCRITICALERREXIT(253);
-					if (setsockopt(socket, IPPROTO_IP, IP_MULTICAST_LOOP, (const char*)&(module->Loopback), sizeof(int)) != 0) ILIBCRITICALERREXIT(253);
-					if (setsockopt(socket, IPPROTO_IP, IP_MULTICAST_LOOP, (const char*)&(module->Loopback), sizeof(int)) != 0) ILIBCRITICALERREXIT(253);
+					if (ILibSocket_SetIPv4MulticastOption(socket, IP_MULTICAST_TTL, module->TTL) != 0) ILIBCRITICALERREXIT(253);
+					if (ILibSocket_SetIPv4MulticastOption(socket, IP_MULTICAST_LOOP, module->Loopback) != 0) ILIBCRITICALERREXIT(253);
 #endif
 					module->AddressListV4[i].sin_port = 0;
 
@@ -216,7 +215,7 @@ void ILibMulticastSocket_BroadcastUdpPacketV4(struct ILibMulticastSocket_StateMo
 			{
 				socket = ILibAsyncUDPSocket_GetSocket(module->UDPServer);
 				setsockopt(socket, IPPROTO_IP, IP_MULTICAST_IF, (const char*)&(module->AddressListV4[i].sin_addr), sizeof(struct in_addr));
-				setsockopt(socket, IPPROTO_IP, IP_MULTICAST_TTL, (const char*)&(module->TTL), sizeof(int));
+				ILibSocket_SetIPv4MulticastOption(socket, IP_MULTICAST_TTL, module->TTL);
 				for (j = 0; j < count; j++) sendto(socket, data, datalen, 0, (struct sockaddr*)addr, sizeof(struct sockaddr_in));
 			}
 			#endif			
@@ -318,8 +317,8 @@ struct ILibMulticastSocket_StateModule *ILibMulticastSocket_Create(void *Chain, 
 		ILibChain_Link_SetMetadata(module->UDPServer, "ILibMulticastSocketListener_v4");
 
 #ifndef NACL
-		if (setsockopt(ILibAsyncUDPSocket_GetSocket(module->UDPServer), IPPROTO_IP, IP_MULTICAST_TTL, (const char*)&(module->TTL), sizeof(int)) != 0) {ILIBCRITICALERREXIT(253);}
-		if (setsockopt(ILibAsyncUDPSocket_GetSocket(module->UDPServer), IPPROTO_IP, IP_MULTICAST_LOOP, (const char*)&(module->Loopback), sizeof(int)) != 0) {ILIBCRITICALERREXIT(253);}
+		if (ILibSocket_SetIPv4MulticastOption(ILibAsyncUDPSocket_GetSocket(module->UDPServer), IP_MULTICAST_TTL, module->TTL) != 0) {ILIBCRITICALERREXIT(253);}
+		if (ILibSocket_SetIPv4MulticastOption(ILibAsyncUDPSocket_GetSocket(module->UDPServer), IP_MULTICAST_LOOP, module->Loopback) != 0) {ILIBCRITICALERREXIT(253);}
 		
 		// Allow IPv4 Broadcast on this socket
 		//if (setsockopt(module->NOTIFY_SEND_socks, SOL_SOCKET, SO_BROADCAST, (char*)&optval, 4) != 0) ILIBCRITICALERREXIT(253);
@@ -363,7 +362,7 @@ void ILibSetTTL(void *vmodule, int ttl)
 #ifdef NACL
 
 #else
-	if (setsockopt(ILibAsyncUDPSocket_GetSocket(module->UDPServer), IPPROTO_IP, IP_MULTICAST_TTL, (const char*)&(module->TTL), sizeof(int)) != 0) ILIBCRITICALERREXIT(253);
+	if (ILibSocket_SetIPv4MulticastOption(ILibAsyncUDPSocket_GetSocket(module->UDPServer), IP_MULTICAST_TTL, module->TTL) != 0) ILIBCRITICALERREXIT(253);
 	if (setsockopt(ILibAsyncUDPSocket_GetSocket(module->UDPServer6), IPPROTO_IPV6, IPV6_MULTICAST_HOPS, (const char*)&(module->TTL), sizeof(int)) != 0) ILIBCRITICALERREXIT(253);
 #endif
 }
