@@ -30,6 +30,7 @@ limitations under the License.
 #include "microstack/ILibProcessPipe.h"
 #include "microstack/ILibRemoteLogging.h"
 #include <sas.h>
+#include <WtsApi32.h>
 
 #if defined(WIN32) && !defined(_WIN32_WCE) && !defined(_MINCORE)
 #define _CRTDBG_MAP_ALLOC
@@ -41,6 +42,8 @@ extern void KVM_WriteLog(ILibKVM_WriteHandler writeHandler, void *user, char *fo
 // #define KVMDEBUGENABLED 1
 ILibProcessPipe_SpawnTypes gProcessSpawnType = ILibProcessPipe_SpawnTypes_USER;
 int gProcessTSID = -1;
+static int gProcessTSIDWasConsole = 0;
+static void **gRelayUser = NULL; // what the last child was started with, kept for a start from the session change handler
 extern int gRemoteMouseRenderDefault;
 int gRemoteMouseMoved = 0;
 extern int gCurrentCursor;
@@ -1351,6 +1354,26 @@ void kvm_relay_StdErrHandler(ILibProcessPipe_Process sender, char *buffer, size_
 	ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Microstack_Generic, (ILibRemoteLogging_Flags)log->logFlags, "%s", log->logData);
 }
 
+// Returns the session's state, or WTSDown when it cannot be read, which is the case for a session that is gone
+static WTS_CONNECTSTATE_CLASS kvm_session_state(DWORD id)
+{
+	WTS_CONNECTSTATE_CLASS *state = NULL, ret = WTSDown;
+	DWORD len = 0;
+	if (WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, id, WTSConnectState, (LPWSTR *)&state, &len) != 0 && state != NULL)
+	{
+		ret = *state;
+		WTSFreeMemory(state);
+	}
+	return ret;
+}
+
+// For a session picked at the console: it has a display when a user is connected to it or when it is at the console
+static int kvm_session_alive(DWORD id)
+{
+	WTS_CONNECTSTATE_CLASS state = kvm_session_state(id);
+	return (state == WTSActive || (state != WTSDown && id == WTSGetActiveConsoleSessionId()));
+}
+
 int kvm_relay_restart(int paused, void *pipeMgr, char *exePath, ILibKVM_WriteHandler writeHandler, void *reserved)
 {
 	char *parms0[] = {" -kvm0", g_ILibCrashDump_path != NULL ? "-coredump" : NULL, NULL, NULL};
@@ -1372,12 +1395,15 @@ int kvm_relay_restart(int paused, void *pipeMgr, char *exePath, ILibKVM_WriteHan
 	user[1] = reserved;
 	user[2] = pipeMgr;
 	user[3] = exePath;
+	gRelayUser = user;
 
 	KVMDEBUG("kvm_relay_restart / start", paused);
 
 	// If we are re-launching the child process, wait a bit. The computer may be switching desktop, etc.
 	if (paused == 0)
 		Sleep(500);
+	// A logout or a user switch leaves the picked session without a display. A session picked at the console follows the console from here on
+	if (gProcessTSID > 0 && gProcessTSIDWasConsole != 0 && kvm_session_alive((DWORD)gProcessTSID) == 0) { gProcessTSID = -1; }
 	if (gProcessSpawnType == ILibProcessPipe_SpawnTypes_SPECIFIED_USER && gProcessTSID < 0)
 	{
 		gProcessSpawnType = ILibProcessPipe_SpawnTypes_USER;
@@ -1402,6 +1428,36 @@ int kvm_relay_restart(int paused, void *pipeMgr, char *exePath, ILibKVM_WriteHan
 
 	return 1;
 }
+
+// Runs on the chain thread after a session change
+void kvm_relay_sessionchange(void *chain, void *user)
+{
+	DWORD childSession = 0;
+	HANDLE child;
+	UNREFERENCED_PARAMETER(chain);
+	UNREFERENCED_PARAMETER(user);
+
+	if (g_shutdown != 0 || gRelayUser == NULL || (gProcessTSID > 0 && gProcessTSIDWasConsole == 0)) { return; }
+	if (g_slavekvm == 0)
+	{
+		// The last start failed, which happens while no session is attached to the console
+		kvm_relay_restart(1, gRelayUser[2], (char *)gRelayUser[3], (ILibKVM_WriteHandler)gRelayUser[0], gRelayUser[1]);
+	}
+	else if (gChildProcess != NULL && ProcessIdToSessionId((DWORD)g_slavekvm, &childSession) != 0 && kvm_session_alive(childSession) == 0)
+	{
+		// The child sits in a session without a display. Its exit handler starts the next one, which follows the console.
+		// It is ended with exit code 0, because this is a move to another session and not a failed child.
+		if ((child = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)g_slavekvm)) != NULL)
+		{
+			TerminateProcess(child, 0);
+			CloseHandle(child);
+		}
+		else
+		{
+			ILibProcessPipe_Process_SoftKill(gChildProcess);
+		}
+	}
+}
 #endif
 
 // Setup the KVM session. Return 1 if ok, 0 if it could not be setup.
@@ -1418,6 +1474,7 @@ int kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler wr
 		g_restartcount = 0;
 		gProcessSpawnType = ILibProcessPipe_SpawnTypes_SPECIFIED_USER;
 		gProcessTSID = tsid;
+		gProcessTSIDWasConsole = (tsid > 0 && (DWORD)tsid == WTSGetActiveConsoleSessionId());
 		KVMDEBUG("kvm_relay_setup() session starting", 0);
 		return kvm_relay_restart(1, processPipeMgr, exePath, writeHandler, reserved);
 #else
@@ -1464,6 +1521,7 @@ void kvm_cleanup()
 	// ILIBMESSAGE("KVMBREAK-CLEAN\r\n");
 	KVMDEBUG("kvm_cleanup", 0);
 	g_shutdown = 1;
+	gRelayUser = NULL;
 	if (gChildProcess != NULL)
 	{
 		ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM.c/kvm_cleanup: Attempting to kill child process");

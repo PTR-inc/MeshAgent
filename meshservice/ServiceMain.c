@@ -78,6 +78,7 @@ extern int g_ServiceConnectFlags;
 
 #if defined(_LINKVM)
 extern DWORD WINAPI kvm_server_mainloop(LPVOID Param);
+extern void kvm_relay_sessionchange(void *chain, void *user);
 #endif
 
 #include <Shlwapi.h>
@@ -237,6 +238,10 @@ DWORD WINAPI ServiceControlHandler(DWORD controlCode, DWORD eventType, void *eve
 		switch (eventType)
 		{
 		case WTS_CONSOLE_CONNECT:		// The session identified by lParam was connected to the console terminal or RemoteFX session.
+#if defined(_LINKVM)
+			// The KVM may have to move its child to the new console session, which it does on the chain thread
+			if (gILibChain != NULL) { ILibChain_RunOnMicrostackThreadEx(gILibChain, kvm_relay_sessionchange, NULL); }
+#endif
 			break;
 		case WTS_CONSOLE_DISCONNECT:	// The session identified by lParam was disconnected from the console terminal or RemoteFX session.
 			break;
@@ -246,6 +251,10 @@ DWORD WINAPI ServiceControlHandler(DWORD controlCode, DWORD eventType, void *eve
 			break;
 		case WTS_SESSION_LOGON:			// A user has logged on to the session identified by lParam.
 		case WTS_SESSION_LOGOFF:		// A user has logged off the session identified by lParam.					
+#if defined(_LINKVM)
+			// A second look once the logon or logoff is complete and the session states have settled
+			if (gILibChain != NULL) { ILibChain_RunOnMicrostackThreadEx(gILibChain, kvm_relay_sessionchange, NULL); }
+#endif
 			break;
 		case WTS_SESSION_LOCK:			// The session identified by lParam has been locked.
 			break;
